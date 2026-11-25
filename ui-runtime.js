@@ -93,7 +93,7 @@
     out.motionLevel = pickOf(out.motionLevel, 'off|subtle|standard|ultra', 'ultra');
     out.targetFps = pickOf(out.targetFps, '60|120|180|native', '180');
     for (const k of ['telemetryModule', 'effortSliderModule', 'hostLocalization']) out[k] = pickOf(out[k], 'on|off', 'auto');
-    out.effortSliderStyle = pickOf(out.effortSliderStyle, 'prism|ferrofluid|orbital|oscilloscope|plasma', 'classic');
+    out.effortSliderStyle = pickOf(out.effortSliderStyle, 'prism|ferrofluid|orbital|oscilloscope|plasma|supernova|swarm', 'classic');
     out.thoughtTranslate = pickOf(out.thoughtTranslate, 'machine|ai', 'off');
     out.thoughtTrigger = out.thoughtTrigger === 'expand' ? 'expand' : 'preload';
     out.homeLayout = out.homeMode = pickOf(out.homeLayout ?? out.homeMode, 'classic|off', 'studio');
@@ -357,7 +357,7 @@
   const getMinFrameGapMs = () => ({ native: 0, 60: 15.2, 120: 7.5 })[getTargetFps()] ?? 4.8;
   const getTelemetryMode = () => pickOf(cfg.telemetryModule, 'on|off', 'auto');
   const getEffortSliderMode = () => pickOf(cfg.effortSliderModule, 'on|off', 'auto');
-  const getEffortSliderStyle = () => pickOf(cfg.effortSliderStyle, 'prism|ferrofluid|orbital|oscilloscope|plasma', 'classic');
+  const getEffortSliderStyle = () => pickOf(cfg.effortSliderStyle, 'prism|ferrofluid|orbital|oscilloscope|plasma|supernova|swarm', 'classic');
   const getEffortMemoryMode = () => (cfg.effortMemory === 'off' || cfg.effortMemory === false ? 'off' : 'on');
   const getHostLocalizationMode = () => pickOf(cfg.hostLocalization, 'on|off', 'auto');
   const getThoughtTranslateMode = () => pickOf(cfg.thoughtTranslate, 'machine|ai', 'off');

@@ -140,7 +140,7 @@ try { var d = doc || (win && win.document) || (typeof document !== "undefined" ?
 function isPrismMotionOff(doc, win) { return getPrismRootAttr(doc, win, "data-ag-cs-motion") === "off" || prefersReducedMotion(win); }
 function isFxMotionOff(doc, win) { return getPrismRootAttr(doc, win, "data-ag-cs-motion") === "off"; }
 function resolvePrismAccentTone(doc, win) { var ac = getPrismRootAttr(doc, win, "data-ag-cs-accent"); return ac === "mono" || ac === "amber" || ac === "iris" || ac === "cobalt" ? ac : "follow"; }
-var FX_STYLES = { prism: 1, ferrofluid: 1, orbital: 1, oscilloscope: 1, plasma: 1 };
+var FX_STYLES = { prism: 1, ferrofluid: 1, orbital: 1, oscilloscope: 1, plasma: 1, supernova: 1, swarm: 1 };
 function normalizeSliderStyle(s) { return s && FX_STYLES[s] ? s : "classic"; }
 function resolveSliderStyle(doc, win, explicit) {
 if (explicit === "classic" || (explicit && FX_STYLES[explicit])) return explicit;
@@ -657,6 +657,59 @@ ctx.beginPath(); ctx.arc(sx2, cy, 4.4, 0, Math.PI * 2); ctx.fill(); ctx.stroke()
 ctx.save(); ctx.shadowColor = accent; ctx.shadowBlur = 12; ctx.fillStyle = "#181a24"; ctx.strokeStyle = accent; ctx.lineWidth = 2;
 ctx.beginPath(); ctx.arc(anodeX, cy, 7, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
 ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(anodeX, cy, 2.2, 0, Math.PI * 2); ctx.fill(); ctx.restore();
+} else if (style === "supernova") {
+var spPad = 14, spSpan = Math.max(18, w - spPad * 2), kx = spPad + spSpan * u;
+ctx.fillStyle = "#0e1016"; ctx.strokeStyle = "rgba(255,255,255,0.08)"; ctx.lineWidth = 1;
+ctx.beginPath(); _fxRR(ctx, spPad - 4, cy - 5, spSpan + 8, 10, 5); ctx.fill(); ctx.stroke();
+for (i = 0; i < n; i++) { ctx.fillStyle = "rgba(255,255,255,0.22)"; ctx.beginPath(); ctx.arc(spPad + spSpan * (i / (n - 1)), cy, 1.7, 0, Math.PI * 2); ctx.fill(); }
+var wg = ctx.createLinearGradient(spPad, cy, kx, cy);
+wg.addColorStop(0, pal[0]); wg.addColorStop(0.65, accent); wg.addColorStop(1, "#fff");
+ctx.save(); ctx.globalAlpha = 0.72; ctx.fillStyle = wg;
+ctx.beginPath(); _fxRR(ctx, spPad, cy - 3, Math.max(4, kx - spPad), 6, 3); ctx.fill(); ctx.restore();
+ctx.save(); ctx.globalCompositeOperation = "lighter";
+for (i = 0; i < 24; i++) {
+var spd = 0.55 + hash01(i, 1, 7) * 1.35, px0 = (hash01(i, 2, 11) - t * (0.75 + u * 1.45) * spd) % 1;
+if (px0 < 0) px0 += 1;
+var sx = spPad + px0 * Math.max(20, kx - spPad), sy = cy + (hash01(i, 3, 13) - 0.5) * (10 + u * 16), sl = 6 + spd * (8 + u * 16);
+var sg = ctx.createLinearGradient(sx, sy, sx + sl, sy);
+sg.addColorStop(0, "rgba(255,255,255,0)"); sg.addColorStop(1, i % 3 === 0 ? "#fff" : accent);
+ctx.strokeStyle = sg; ctx.lineWidth = i % 2 === 0 ? 1.5 : 1; ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(Math.min(kx, sx + sl), sy); ctx.stroke();
+}
+var pulseW = Math.min(1, Math.abs(vel || 0) * 0.45) + 0.16 * (0.5 + 0.5 * Math.sin(t * 4.2));
+if (pulseW > 0.12) { ctx.strokeStyle = accent; ctx.globalAlpha = 0.45 * pulseW; ctx.lineWidth = 1.6; ctx.beginPath(); ctx.arc(kx, cy, 8 + ((t * 2.2) % 1) * 12, 0, Math.PI * 2); ctx.stroke(); }
+ctx.globalAlpha = 1;
+var hg = ctx.createRadialGradient(kx, cy, 1, kx, cy, 16);
+hg.addColorStop(0, "#fff"); hg.addColorStop(0.32, accent); hg.addColorStop(1, "rgba(0,0,0,0)");
+ctx.fillStyle = hg; ctx.beginPath(); ctx.arc(kx, cy, 16, 0, Math.PI * 2); ctx.fill();
+var spk = 7.5 + Math.sin(t * 6.5) * 2 + u * 5;
+ctx.strokeStyle = "rgba(255,255,255,0.92)"; ctx.lineWidth = 1.4;
+ctx.beginPath(); ctx.moveTo(kx - spk, cy); ctx.lineTo(kx + spk, cy); ctx.moveTo(kx, cy - spk * 0.82); ctx.lineTo(kx, cy + spk * 0.82); ctx.stroke();
+ctx.restore();
+} else if (style === "swarm") {
+var swPad = 14, swSpan = Math.max(18, w - swPad * 2), qx = swPad + swSpan * u, cnt = Math.round(18 + u * 24);
+ctx.fillStyle = "#0e1016"; ctx.strokeStyle = "rgba(255,255,255,0.08)"; ctx.lineWidth = 1;
+ctx.beginPath(); _fxRR(ctx, swPad - 4, cy - 5, swSpan + 8, 10, 5); ctx.fill(); ctx.stroke();
+for (i = 0; i < n; i++) { ctx.fillStyle = "rgba(255,255,255,0.2)"; ctx.beginPath(); ctx.arc(swPad + swSpan * (i / (n - 1)), cy, 1.6, 0, Math.PI * 2); ctx.fill(); }
+ctx.save(); ctx.globalCompositeOperation = "lighter";
+for (i = 0; i < cnt; i++) {
+var ph = hash01(i, 4, 19) * 6.283, fSpd = 0.5 + hash01(i, 5, 23) * 1.2, bx, by, fCol = pal[i % 4];
+if (i % 3 === 0) {
+var ang = ph + t * (2.6 + u * 2.4) * fSpd;
+bx = qx + Math.cos(ang) * (7 + hash01(i, 6, 29) * 10); by = cy + Math.sin(ang * 1.4) * (6 + u * 5);
+} else {
+var sf = (hash01(i, 7, 31) + t * (0.3 + u * 0.45) * fSpd) % 1;
+bx = swPad + sf * Math.max(10, qx - swPad); by = cy + Math.sin(t * 4 * fSpd + ph) * (4.5 + (1 - sf) * 6.5);
+fCol = tierCol(Math.round(sf * (n - 1)));
+}
+var fr = 1.15 + Math.sin(t * 6 + ph) * 0.45;
+ctx.fillStyle = fCol; ctx.globalAlpha = 0.88; ctx.beginPath(); ctx.arc(bx, by, fr, 0, Math.PI * 2); ctx.fill();
+ctx.globalAlpha = 0.24; ctx.beginPath(); ctx.arc(bx, by, fr * 2.8, 0, Math.PI * 2); ctx.fill();
+}
+ctx.globalAlpha = 1;
+var qg = ctx.createRadialGradient(qx, cy, 1, qx, cy, 14);
+qg.addColorStop(0, "#fff"); qg.addColorStop(0.38, accent); qg.addColorStop(1, "rgba(0,0,0,0)");
+ctx.fillStyle = qg; ctx.beginPath(); ctx.arc(qx, cy, 14, 0, Math.PI * 2); ctx.fill();
+ctx.restore();
 }
 ctx.restore && ctx.restore();
 }

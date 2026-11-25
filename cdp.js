@@ -82,7 +82,7 @@ const VALIDATORS = {
   targetFps: ['60', '120', '180', 'native'],
   telemetryModule: ['auto', 'on', 'off'],
   effortSliderModule: ['auto', 'on', 'off'],
-  effortSliderStyle: ['classic', 'prism', 'ferrofluid', 'orbital', 'oscilloscope', 'plasma'],
+  effortSliderStyle: ['classic', 'prism', 'ferrofluid', 'orbital', 'oscilloscope', 'plasma', 'supernova', 'swarm'],
   effortMemory: ['on', 'off'],
   thoughtTranslate: ['off', 'machine', 'ai'],
   thoughtTrigger: ['preload', 'expand'],

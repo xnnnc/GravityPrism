@@ -16,7 +16,7 @@
   const SLIDER_STYLE_ID = 'ag-codex-effort-slider-styles';
   const HIDE_STYLE_ID = 'ag-prism-effort-slider-hide';
   const PRISM_OWNER_ATTR = 'data-ag-prism-slider';
-  const SLIDER_STYLES = new Set(['classic', 'prism', 'ferrofluid', 'orbital', 'oscilloscope', 'plasma']);
+  const SLIDER_STYLES = new Set(['classic', 'prism', 'ferrofluid', 'orbital', 'oscilloscope', 'plasma', 'supernova', 'swarm']);
   const THROTTLE_MS = 120;
   const MENU_THROTTLE_MS = 32;
 

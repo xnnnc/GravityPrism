@@ -389,7 +389,7 @@ test('settings-panel schema, scene presets, strict apiKey-stripping JSON export,
   const { PRISM_SETTINGS_SCHEMA, SCENE_PRESETS, buildSanitizedConfigExport, validateImportedConfigJson, getDefaultSettingsPatch } =
     settingsPanel;
   assert.equal(Object.keys(PRISM_SETTINGS_SCHEMA).length, 35);
-  assert.deepEqual(PRISM_SETTINGS_SCHEMA.effortSliderStyle.allowed, ['classic', 'prism', 'ferrofluid', 'orbital', 'oscilloscope', 'plasma']);
+  assert.deepEqual(PRISM_SETTINGS_SCHEMA.effortSliderStyle.allowed, ['classic', 'prism', 'ferrofluid', 'orbital', 'oscilloscope', 'plasma', 'supernova', 'swarm']);
   assert.equal(PRISM_SETTINGS_SCHEMA.effortSliderStyle.default, 'classic');
   assert.deepEqual(PRISM_SETTINGS_SCHEMA.effortMemory.allowed, ['on', 'off']);
   assert.equal(PRISM_SETTINGS_SCHEMA.effortMemory.default, 'on');
