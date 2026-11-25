@@ -16,6 +16,7 @@
   const SLIDER_STYLE_ID = 'ag-codex-effort-slider-styles';
   const HIDE_STYLE_ID = 'ag-prism-effort-slider-hide';
   const PRISM_OWNER_ATTR = 'data-ag-prism-slider';
+  const SLIDER_STYLES = new Set(['classic', 'prism', 'ferrofluid', 'orbital', 'oscilloscope', 'plasma']);
   const THROTTLE_MS = 120;
   const MENU_THROTTLE_MS = 32;
 
@@ -220,7 +221,7 @@
   function createEffortSliderController(envOpts) {
     const gW = () => (envOpts && envOpts.window) || (typeof window !== 'undefined' ? window : globalRoot);
     const gD = () => (envOpts && envOpts.document) || gW()?.document || null;
-    let mode = 'auto', rememberEffort = true, inst = null, memGuard = null, yielded = false;
+    let mode = 'auto', sliderStyle = 'classic', rememberEffort = true, inst = null, memGuard = null, yielded = false;
     const perfStats = { rawMutations: 0, executedScans: 0, skippedIrrelevant: 0 };
 
     function hasExtInst() {
@@ -313,6 +314,7 @@
         MutationObserver: mkThrottledMO(BaseMO, d, perfStats) || undefined,
         skipGenericMenuObserver: true,
         rememberEffort,
+        sliderStyle,
       });
       if (!next) return false;
       next.__prismOwned = true;
@@ -329,6 +331,12 @@
     function sync(cfg) {
       const raw = cfg && cfg.effortSliderModule;
       mode = raw === 'on' || raw === 'off' ? raw : 'auto';
+      const rawStyle = cfg && typeof cfg.effortSliderStyle === 'string' ? cfg.effortSliderStyle : '';
+      sliderStyle = SLIDER_STYLES.has(rawStyle) ? rawStyle : 'classic';
+      const rootEl = gD()?.documentElement;
+      if (rootEl && rootEl.getAttribute?.('data-ag-cs-effort-style') !== sliderStyle) {
+        sa(rootEl, 'data-ag-cs-effort-style', sliderStyle);
+      }
       rememberEffort = !(cfg && (cfg.effortMemory === 'off' || cfg.effortMemory === false));
       if (mode === 'off') {
         yielded = false;
@@ -359,6 +367,7 @@
         mountBuiltIn();
       } else {
         try { inst.setRememberEffort?.(rememberEffort); } catch {}
+        try { inst.setSliderStyle?.(sliderStyle); } catch {}
         try { inst.rescan?.(); } catch {}
       }
       markOwnedNoTr(gD());
@@ -375,6 +384,7 @@
     function getState() {
       return {
         mode,
+        sliderStyle,
         rememberEffort,
         mountedPrism: Boolean(inst),
         memoryGuardActive: Boolean(memGuard),

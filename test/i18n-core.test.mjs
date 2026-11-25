@@ -385,10 +385,12 @@ test('v1.0.1 i18n keys cover all 5 languages for scene presets, 6 new config key
 });
 
 test('settings-panel schema, scene presets, strict apiKey-stripping JSON export, and allowlist-validated JSON import', () => {
-  // Verify all 34 global config keys (including effortMemory, contextMenu, sidebarNavFold, scrollBottomMotion, hostLocalization, omniModule, linkTarget, sidebarStudio, autoUpdate & updateChannel) match exact contract
+  // Verify all 35 global config keys (including effortSliderStyle, effortMemory, contextMenu, sidebarNavFold, scrollBottomMotion, hostLocalization, omniModule, linkTarget, sidebarStudio, autoUpdate & updateChannel) match exact contract
   const { PRISM_SETTINGS_SCHEMA, SCENE_PRESETS, buildSanitizedConfigExport, validateImportedConfigJson, getDefaultSettingsPatch } =
     settingsPanel;
-  assert.equal(Object.keys(PRISM_SETTINGS_SCHEMA).length, 34);
+  assert.equal(Object.keys(PRISM_SETTINGS_SCHEMA).length, 35);
+  assert.deepEqual(PRISM_SETTINGS_SCHEMA.effortSliderStyle.allowed, ['classic', 'prism', 'ferrofluid', 'orbital', 'oscilloscope', 'plasma']);
+  assert.equal(PRISM_SETTINGS_SCHEMA.effortSliderStyle.default, 'classic');
   assert.deepEqual(PRISM_SETTINGS_SCHEMA.effortMemory.allowed, ['on', 'off']);
   assert.equal(PRISM_SETTINGS_SCHEMA.effortMemory.default, 'on');
   assert.deepEqual(PRISM_SETTINGS_SCHEMA.sidebarNavFold.allowed, ['off', 'on']);
@@ -492,7 +494,8 @@ test('settings-panel schema, scene presets, strict apiKey-stripping JSON export,
   assert.equal(validateImportedConfigJson('not-json').ok, false);
   assert.equal(validateImportedConfigJson('{"unknownOnly": 1}').ok, false);
   const defaultPatch = getDefaultSettingsPatch();
-  assert.equal(Object.keys(defaultPatch).length, 34);
+  assert.equal(Object.keys(defaultPatch).length, 35);
+  assert.equal(defaultPatch.effortSliderStyle, 'classic');
   assert.equal(defaultPatch.effortMemory, 'on');
   assert.equal(defaultPatch.sidebarNavFold, 'off');
   assert.equal(defaultPatch.scrollBottomMotion, 'smooth');

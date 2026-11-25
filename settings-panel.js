@@ -73,6 +73,7 @@
     thoughtView: mkSp(['immersive', 'bilingual']),
     telemetryModule: S_AUTO,
     effortSliderModule: S_AUTO,
+    effortSliderStyle: mkSp(['classic', 'prism', 'ferrofluid', 'orbital', 'oscilloscope', 'plasma']),
     effortMemory: S_ON,
     omniModule: S_ON,
     linkTarget: mkSp(['builtin', 'external']),
@@ -412,6 +413,7 @@
         ['thoughtTrigger', tmMode === 'off'],
         ['thoughtView', tmMode === 'off'],
         ['homeRipple', effVal('homeLayout', l) === 'off'],
+        ['effortSliderStyle', effVal('effortSliderModule', l) === 'off'],
         ['linkTarget', effVal('omniModule', l) === 'off'],
       ]) {
         const dr = qs(rootEl, `[data-ag-cs-row="${dk}"]`);
@@ -710,6 +712,14 @@
             RS('thoughtView', [['immersive', U('optThoughtImmersive')], ['bilingual', U('optThoughtBilingual')]]),
             RS('telemetryModule', autoOnOff, 'Telemetry'),
             RS('effortSliderModule', autoOnOff, 'EffortSlider'),
+            RS('effortSliderStyle', [
+              ['classic', U('optEffortStyleClassic', 'Classic')],
+              ['prism', U('optEffortStylePrism', 'Prism Beam')],
+              ['ferrofluid', U('optEffortStyleFerrofluid', 'Ferrofluid')],
+              ['orbital', U('optEffortStyleOrbital', 'Gravity Well')],
+              ['oscilloscope', U('optEffortStyleOscilloscope', 'Oscilloscope')],
+              ['plasma', U('optEffortStylePlasma', 'Plasma Arc')],
+            ], 'EffortStyle'),
             RS('effortMemory', onOffStr, 'EffortMemory'),
             RS('omniModule', onOffStr, 'Omni'),
             RS('linkTarget', [['builtin', U('optLinkBuiltin')], ['external', U('optLinkExternal')]]),
@@ -722,7 +732,7 @@
             { id: 'appearance', title: U('grpAppearance'), keys: ['palette', 'lightPreset', 'accentTone', 'cornerStyle', 'ambientIntensity', 'motionLevel', 'targetFps', 'homeLayout', 'homeRipple', 'logoInk', 'language', 'hostLocalization'] },
             { id: 'interaction', title: U('grpInteraction'), keys: ['composerRestyle', 'placeholderStyle', 'smoothCaret', 'scrollBottomMotion', 'contextMenu', 'codeFont', 'codeLigatures', 'mascot', 'sidebarRestyle', 'sidebarCompact', 'sidebarNavFold'] },
             { id: 'thought', title: U('grpThought'), keys: ['thoughtTranslate', 'thoughtTrigger', 'thoughtView'] },
-            { id: 'modules', title: U('groupModules'), keys: ['telemetryModule', 'effortSliderModule', 'effortMemory', 'omniModule', 'linkTarget'] },
+            { id: 'modules', title: U('groupModules'), keys: ['telemetryModule', 'effortSliderModule', 'effortSliderStyle', 'effortMemory', 'omniModule', 'linkTarget'] },
             { id: 'beta', title: U('grpBeta'), keys: ['sidebarStudio'] },
           ];
 

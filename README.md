@@ -56,6 +56,8 @@ Bu depo, [`RMvdesi/obsidian-prism`](https://github.com/RMvdesi/obsidian-prism) `
 5. **Tüm Adımlarda Çalışan Sohbet İçi (Inline) Diff ([`vendor/inline-diff/inline-diff-client.js`](./vendor/inline-diff/inline-diff-client.js)):**
    - Yalnızca Git deposu içindeki dosyalarla sınırlı kalmak yerine, adım etiketlerindeki `diffContext` (`cascadeId`, `stepIndex`) üzerinden Antigravity'nin dahili `getCodeActionDiff` servisiyle Git dışı ve `.gemini` dahil tüm adımların satır içi diff önizlemesi açılır.
    - Eğer bir adımın diff verisi gerçekten yoksa hata kutusu göstermek yerine otomatik olarak Antigravity'nin kendi **Sidebar** diff/dosya görünümüne devreder.
+6. **Seçilebilir Akıl Yürütme (Effort) Slider Stilleri ([`vendor/effort-slider/`](./vendor/effort-slider/upstream-client.js), [`settings-panel.js`](./settings-panel.js)):**
+   - **Settings → Appearance → Obsidian Prism → Modules** altında **Effort Slider Style** ayarı ile klasik kaydırıcıya ek olarak **5 özgün animasyonlu HTML5 Canvas stili** seçilebilir: `Classic`, `Prism Beam` (01), `Ferrofluid` (02), `Gravity Well` (03), `Oscilloscope` (05) ve `Plasma Arc` (06).
 
 ---
 

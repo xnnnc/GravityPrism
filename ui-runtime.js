@@ -93,6 +93,7 @@
     out.motionLevel = pickOf(out.motionLevel, 'off|subtle|standard|ultra', 'ultra');
     out.targetFps = pickOf(out.targetFps, '60|120|180|native', '180');
     for (const k of ['telemetryModule', 'effortSliderModule', 'hostLocalization']) out[k] = pickOf(out[k], 'on|off', 'auto');
+    out.effortSliderStyle = pickOf(out.effortSliderStyle, 'prism|ferrofluid|orbital|oscilloscope|plasma', 'classic');
     out.thoughtTranslate = pickOf(out.thoughtTranslate, 'machine|ai', 'off');
     out.thoughtTrigger = out.thoughtTrigger === 'expand' ? 'expand' : 'preload';
     out.homeLayout = out.homeMode = pickOf(out.homeLayout ?? out.homeMode, 'classic|off', 'studio');
@@ -356,6 +357,7 @@
   const getMinFrameGapMs = () => ({ native: 0, 60: 15.2, 120: 7.5 })[getTargetFps()] ?? 4.8;
   const getTelemetryMode = () => pickOf(cfg.telemetryModule, 'on|off', 'auto');
   const getEffortSliderMode = () => pickOf(cfg.effortSliderModule, 'on|off', 'auto');
+  const getEffortSliderStyle = () => pickOf(cfg.effortSliderStyle, 'prism|ferrofluid|orbital|oscilloscope|plasma', 'classic');
   const getEffortMemoryMode = () => (cfg.effortMemory === 'off' || cfg.effortMemory === false ? 'off' : 'on');
   const getHostLocalizationMode = () => pickOf(cfg.hostLocalization, 'on|off', 'auto');
   const getThoughtTranslateMode = () => pickOf(cfg.thoughtTranslate, 'machine|ai', 'off');
@@ -1012,6 +1014,7 @@
       motionLv,
       getTelemetryMode(),
       getEffortSliderMode(),
+      getEffortSliderStyle(),
       effMemMode,
       hiMode,
       getThoughtTranslateMode(),
@@ -1082,7 +1085,7 @@
     runGuardedMut(() => {
       const csA = {
         style: '1', theme: dark ? 'dark' : 'light', palette, 'light-preset': lightPreset, motion: motionLv,
-        'target-fps': targetFps, telemetry: telemetryMod, 'effort-slider': effortSliderMod,
+        'target-fps': targetFps, telemetry: telemetryMod, 'effort-slider': effortSliderMod, 'effort-style': getEffortSliderStyle(),
         'thought-translate': getThoughtTranslateMode(), accent: getAccentTone(), corners: getCornerStyle(),
         'scroll-bottom': cfg.scrollBottomMotion === 'instant' ? 'instant' : 'smooth', 'code-font': getCodeFont(),
         ligatures: isCodeLigaturesEnabled() ? '1' : '0', ambient: getAmbientCssValue(),
@@ -1611,6 +1614,7 @@
     if (key === 'lightPreset') return getLightPreset();
     if (key === 'telemetryModule') return getTelemetryMode();
     if (key === 'effortSliderModule') return getEffortSliderMode();
+    if (key === 'effortSliderStyle') return getEffortSliderStyle();
     if (key === 'effortMemory') return getEffortMemoryMode();
     if (key === 'hostLocalization') return getHostLocalizationMode();
     if (key === 'omniModule') return getOmniMode();
@@ -2985,6 +2989,7 @@
           targetFps: getTargetFps(),
           telemetryModule: getTelemetryMode(),
           effortSliderModule: getEffortSliderMode(),
+          effortSliderStyle: getEffortSliderStyle(),
           effortMemory: getEffortMemoryMode(),
           hostLocalization: getHostLocalizationMode(),
           thoughtTranslate: getThoughtTranslateMode(),

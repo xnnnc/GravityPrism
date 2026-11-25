@@ -362,13 +362,13 @@ test('mountOrSyncSettingsSection mounts all 27 settings (including omniModule, l
     assert.equal(sec.getAttribute('data-agy-no-translate'), 'true');
     assert.equal(sec.getAttribute('data-antigravity-zh-skip'), '1');
     const allRows = sec.querySelectorAll('[data-ag-cs-row]');
-    assert.equal(allRows.length, 34, 'Must render all 34 setting rows');
+    assert.equal(allRows.length, 35, 'Must render all 35 setting rows');
     const interactionGrp = sec.querySelector('[data-ag-cs-group="interaction"]');
     const interactionRowKeys = interactionGrp.querySelectorAll('[data-ag-cs-row]').map((r) => r.getAttribute('data-ag-cs-row'));
     assert.ok(interactionRowKeys.includes('sidebarNavFold'), 'interaction group must include sidebarNavFold');
     const modulesGrp = sec.querySelector('[data-ag-cs-group="modules"]');
     const moduleRowKeys = modulesGrp.querySelectorAll('[data-ag-cs-row]').map((r) => r.getAttribute('data-ag-cs-row'));
-    assert.deepEqual(moduleRowKeys, ['telemetryModule', 'effortSliderModule', 'effortMemory', 'omniModule', 'linkTarget']);
+    assert.deepEqual(moduleRowKeys, ['telemetryModule', 'effortSliderModule', 'effortSliderStyle', 'effortMemory', 'omniModule', 'linkTarget']);
     const betaGrp = sec.querySelector('[data-ag-cs-group="beta"]');
     assert.ok(betaGrp, 'Beta features group must mount');
     const betaRowKeys = betaGrp.querySelectorAll('[data-ag-cs-row]').map((r) => r.getAttribute('data-ag-cs-row'));
@@ -433,7 +433,8 @@ test('mountOrSyncSettingsSection mounts all 27 settings (including omniModule, l
     await new Promise((r) => setTimeout(r, 25));
     assert.equal(clipboardWrites.length, 1);
     const exportedObj = JSON.parse(clipboardWrites[0]);
-    assert.equal(Object.keys(exportedObj.settings).length, 34);
+    assert.equal(Object.keys(exportedObj.settings).length, 35);
+    assert.equal(exportedObj.settings.effortSliderStyle, 'classic');
     assert.equal(exportedObj.settings.effortMemory, 'on');
     assert.equal(exportedObj.settings.sidebarNavFold, 'off');
     assert.equal(exportedObj.settings.scrollBottomMotion, 'smooth');
@@ -686,7 +687,7 @@ test('settings-panel lazy foldBody deferral on collapsed mount, memoized syncRoo
     foldHead.click();
     assert.equal(sec.getAttribute('data-open'), '1');
     assert.equal(sec.getAttribute('data-body-built'), '1');
-    assert.equal(sec.querySelectorAll('[data-ag-cs-row]').length, 34);
+    assert.equal(sec.querySelectorAll('[data-ag-cs-row]').length, 35);
     assert.equal(sec.querySelectorAll('.ag-cs-settings-group').length, 6);
     const callsAfterExpand = matchCalls;
     assert.ok(callsAfterExpand > 0);

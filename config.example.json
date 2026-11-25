@@ -7,6 +7,7 @@
   "targetFps": "180",
   "telemetryModule": "auto",
   "effortSliderModule": "auto",
+  "effortSliderStyle": "classic",
   "effortMemory": "on",
   "thoughtTranslate": "off",
   "thoughtTrigger": "preload",
