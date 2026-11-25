@@ -138,6 +138,7 @@ function getPrismRootAttr(doc, win, attr) {
 try { var d = doc || (win && win.document) || (typeof document !== "undefined" ? document : null), r = d && d.documentElement; return (r && r.getAttribute && r.getAttribute(attr)) || ""; } catch (e) { return ""; }
 }
 function isPrismMotionOff(doc, win) { return getPrismRootAttr(doc, win, "data-ag-cs-motion") === "off" || prefersReducedMotion(win); }
+function isFxMotionOff(doc, win) { return getPrismRootAttr(doc, win, "data-ag-cs-motion") === "off"; }
 function resolvePrismAccentTone(doc, win) { var ac = getPrismRootAttr(doc, win, "data-ag-cs-accent"); return ac === "mono" || ac === "amber" || ac === "iris" || ac === "cobalt" ? ac : "follow"; }
 var FX_STYLES = { prism: 1, ferrofluid: 1, orbital: 1, oscilloscope: 1, plasma: 1 };
 function normalizeSliderStyle(s) { return s && FX_STYLES[s] ? s : "classic"; }
@@ -1381,12 +1382,9 @@ if (claudeRafId !== null || _clTm !== null) return;
 claudeRafId = _rAF(stepClaudeCanvas);
 if (claudeRafId === null) stepClaudeCanvas(nowMs());
 }
+function _fxPaused() { return destroyed || curStyle === "classic" || Boolean(doc && doc.hidden) || (!dragging && _isBgWin()); }
 function _stopFxRaf() { _cAF(fxRafId); if (_fxTm !== null) { _ct(_fxTm); _fxTm = null; } fxRafId = null; lastFxPaintAt = 0; }
-function _schedFx(ms) {
-if (_fxTm === null && fxRafId === null && !destroyed && curStyle !== "classic" && !_isBgWin()) {
-_fxTm = _st(function () { _fxTm = null; _startFxRaf(); }, ms);
-}
-}
+function onFxResume() { if (!destroyed && curStyle !== "classic") _startFxRaf(); }
 function paintFxNow(nowTs) {
 if (destroyed || curStyle === "classic") return;
 var fxCv = ensureFxCanvas();
@@ -1405,26 +1403,17 @@ paintFxSlider(fctx, curStyle, fw, fh, p, motionState ? motionState.v : 0, snap.c
 }
 function stepFxCanvas(nowTs) {
 fxRafId = null;
-if (destroyed || curStyle === "classic" || _isBgWin()) { _stopFxRaf(); return; }
+if (_fxPaused()) { _stopFxRaf(); return; }
 var now = typeof nowTs === "number" && nowTs > 0 ? nowTs : nowMs();
-var motOff = isPrismMotionOff(doc, win), iq = motionMode(win, null, doc) === "quick";
-if (motOff || (iq && !dragging)) { paintFxNow(now); _stopFxRaf(); return; }
-var gap = dragging ? 15.5 : 33;
-if (lastFxPaintAt > 0 && now - lastFxPaintAt < gap) {
-if (!dragging) _schedFx(Math.max(1, Math.ceil(gap - (now - lastFxPaintAt))));
-else fxRafId = _rAF(stepFxCanvas);
-return;
-}
+if (isFxMotionOff(doc, win)) { paintFxNow(now); _stopFxRaf(); return; }
 lastFxPaintAt = now;
 paintFxNow(now);
-if (!dragging) _schedFx(gap);
-else fxRafId = _rAF(stepFxCanvas);
+fxRafId = _rAF(stepFxCanvas);
 }
 function _startFxRaf() {
-if (destroyed || curStyle === "classic" || _isBgWin()) { _stopFxRaf(); return; }
-if (isPrismMotionOff(doc, win)) { paintFxNow(nowMs()); _stopFxRaf(); return; }
-if (dragging && _fxTm !== null) { _ct(_fxTm); _fxTm = null; }
-if (fxRafId !== null || _fxTm !== null) return;
+if (_fxPaused()) { _stopFxRaf(); return; }
+if (isFxMotionOff(doc, win)) { paintFxNow(nowMs()); _stopFxRaf(); return; }
+if (fxRafId !== null) return;
 fxRafId = _rAF(stepFxCanvas);
 if (fxRafId === null) paintFxNow(nowMs());
 }
@@ -1677,11 +1666,14 @@ commitAtIndex(nextIdx, "key");
 _settle(readSeatSnapshot(), nextIdx, motionMode(win, null, doc) === "quick");
 }
 function onBlockMenuClose(ev) { swallowEvent(ev); }
-var _trkEvs = [["pointerdown", onPointerDown], ["pointermove", onPointerMove], ["pointerup", onPointerUp], ["pointercancel", onPointerCancel], ["lostpointercapture", onPointerCancel], ["click", onBlockMenuClose], ["mouseup", onBlockMenuClose]];
+var _trkEvs = [["pointerdown", onPointerDown], ["pointermove", onPointerMove], ["pointerup", onPointerUp], ["pointercancel", onPointerCancel], ["lostpointercapture", onPointerCancel], ["pointerenter", onFxResume], ["click", onBlockMenuClose], ["mouseup", onBlockMenuClose]];
 for (var _ei = 0; _ei < _trkEvs.length; _ei += 1) trackEl.addEventListener(_trkEvs[_ei][0], _trkEvs[_ei][1]);
 rootEl.addEventListener("keydown", onKeyDown);
 function onWinResize() { dragTrackRect = cachedTrackRect = null; _dLW = cachedTrackRectAt = 0; }
-function _wEv(m) { if (win && win[m]) { win[m]("resize", onWinResize); win[m]("blur", onPointerCancel); } }
+function _wEv(m) {
+if (win && win[m]) { win[m]("resize", onWinResize); win[m]("blur", onPointerCancel); win[m]("focus", onFxResume); }
+if (doc && doc[m]) doc[m]("visibilitychange", onFxResume);
+}
 _wEv("addEventListener");
 function syncFromExternal() {
 if (destroyed || dragging) return;
