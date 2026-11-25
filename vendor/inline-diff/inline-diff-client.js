@@ -378,7 +378,8 @@
         fileName = '',
         additions = 0,
         deletions = 0,
-        lines = [];
+        lines = [],
+        stepCtx = null;
       const uAttr = ga(badgeEl, 'data-ag-diff-uri') || ga(rowEl, 'data-ag-diff-uri');
       if (typeof uAttr === 'string' && uAttr.trim()) {
         uri = uAttr.trim();
@@ -397,6 +398,7 @@
             if (!fileName && uri) fileName = basenameFromUri(uri);
             if (typeof p.additions === 'number') additions = p.additions;
             if (typeof p.deletions === 'number') deletions = p.deletions;
+            if (p.diffContext && !stepCtx) stepCtx = p.diffContext;
             if (Array.isArray(p.lines)) {
               lines = normalizeLinesArray(p.lines);
             } else if (typeof p.unified === 'string') {
@@ -407,10 +409,9 @@
           }
         } catch {}
       }
-      if ((!lines.length || !uri) && badgeEl) {
+      if ((!lines.length || !uri || !stepCtx) && badgeEl) {
         try {
           const fk = Object.keys(badgeEl).find((k) => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
-          let stepCtx = null;
           for (let d = 0, f = fk ? badgeEl[fk] : null; d < 24 && f; d++, f = f.return) {
             const p = f.memoizedProps || {},
               fd = p.fileDiff;
@@ -469,7 +470,7 @@
           .match(/([A-Za-z0-9._-]+\.[A-Za-z0-9]{1,8})/);
         if (fm) fileName = fm[1];
       }
-      return { uri, fileName: fileName || 'Diff Preview', additions, deletions, lines };
+      return { uri, fileName: fileName || 'Diff Preview', additions, deletions, lines, diffContext: stepCtx };
     }
 
     function findInlineDiffHostRow(badgeEl) {
@@ -609,6 +610,134 @@
           resolve({ ok: false, error: 'rpc-error' });
         }
       });
+      if (inlineDiffInflight.size < 16) inlineDiffInflight.set(key, promise);
+      return { reqId, promise };
+    }
+
+    function findRendererLs() {
+      try {
+        const ref = win?.__agPrismLsRef;
+        const cached = ref && typeof ref.deref === 'function' ? ref.deref() : ref;
+        if (cached && typeof cached.getCodeActionDiff === 'function') return cached;
+      } catch {}
+      try {
+        const root = doc?.getElementById?.('root') || doc?.body;
+        if (!root) return null;
+        const fk = Object.keys(root).find((k) => k.startsWith('__reactContainer$') || k.startsWith('__reactFiber$'));
+        if (!fk || !root[fk]) return null;
+        const q = [root[fk]];
+        const seen = new Set();
+        let visited = 0;
+        while (q.length && visited < 4000) {
+          const f = q.shift();
+          if (!f || seen.has(f)) continue;
+          seen.add(f);
+          visited++;
+          const v = f.memoizedProps?.value;
+          if (v && typeof v === 'object' && typeof v.getCodeActionDiff === 'function') {
+            try {
+              const box = typeof WeakRef === 'function' ? new WeakRef(v) : v;
+              Object.defineProperty(win, '__agPrismLsRef', { value: box, configurable: true, writable: true, enumerable: false });
+            } catch {}
+            return v;
+          }
+          if (f.child) q.push(f.child);
+          if (f.sibling) q.push(f.sibling);
+        }
+      } catch {}
+      return null;
+    }
+
+    function extractCodeActionDiffHunks(diffObj, maxLines = 160, ctxRadius = 2) {
+      const raw = diffObj?.unifiedDiff?.lines;
+      if (!Array.isArray(raw) || raw.length === 0) return { ok: false, error: 'no_changes', lines: [] };
+      let oldLn = (Number(diffObj?.startLine) || 0) + 1;
+      let newLn = oldLn;
+      const all = [];
+      const chgIdx = [];
+      let additions = 0;
+      let deletions = 0;
+      for (let i = 0; i < raw.length; i++) {
+        const it = raw[i];
+        const t = typeof it?.type === 'bigint' ? Number(it.type) : Number(it?.type);
+        const text = truncateDiffLine(it?.text ?? '');
+        if (t === 1) {
+          chgIdx.push(all.length);
+          all.push({ kind: 'add', ln: String(newLn++), sign: '+', text });
+          additions++;
+        } else if (t === 2) {
+          chgIdx.push(all.length);
+          all.push({ kind: 'del', ln: String(oldLn++), sign: '-', text });
+          deletions++;
+        } else {
+          all.push({ kind: 'ctx', ln: String(newLn++), sign: ' ', text });
+          oldLn++;
+        }
+      }
+      if (!chgIdx.length) return { ok: false, error: 'no_changes', lines: [] };
+      const ranges = [];
+      for (let k = 0; k < chgIdx.length; k++) {
+        const s0 = Math.max(0, chgIdx[k] - ctxRadius);
+        const e0 = Math.min(all.length - 1, chgIdx[k] + ctxRadius);
+        if (ranges.length && s0 <= ranges[ranges.length - 1][1] + 1) {
+          ranges[ranges.length - 1][1] = Math.max(ranges[ranges.length - 1][1], e0);
+        } else {
+          ranges.push([s0, e0]);
+        }
+      }
+      const lines = [];
+      let totalRows = 0;
+      for (let r = 0; r < ranges.length; r++) {
+        if (r > 0) {
+          totalRows++;
+          if (lines.length < maxLines) lines.push({ kind: 'hunk', ln: '', sign: '@@', text: '' });
+        }
+        for (let j = ranges[r][0]; j <= ranges[r][1]; j++) {
+          totalRows++;
+          if (lines.length < maxLines) lines.push(all[j]);
+        }
+      }
+      return { ok: true, mode: 'step-diff', lines, additions, deletions, truncated: totalRows > lines.length };
+    }
+
+    function requestInlineDiffForStep(payload, hints) {
+      if (isDead() || !payload) return null;
+      const dc = payload.diffContext;
+      const cid = typeof dc?.cascadeId === 'string' ? dc.cascadeId.trim() : '';
+      const idx = Number(dc?.stepIndex);
+      const hasStep = Boolean(cid && Number.isInteger(idx) && idx >= 0);
+      const ls = hasStep ? findRendererLs() : null;
+      if (!hasStep || !ls) {
+        return requestInlineDiffFromDaemon(payload.uri, hints);
+      }
+      const key = `step:${cid}:${idx}:${payload.uri || ''}`;
+      const cached = getCachedInlineDiff(key);
+      if (cached) return { reqId: inlineDiffReqSeq++, cached, promise: Promise.resolve(cached) };
+      const existing = inlineDiffInflight.get(key);
+      if (existing) return { reqId: inlineDiffReqSeq++, promise: existing };
+      const reqId = inlineDiffReqSeq++;
+      const promise = Promise.resolve()
+        .then(() => ls.getCodeActionDiff({ cascadeId: cid, stepIndex: idx }))
+        .then((res) => extractCodeActionDiffHunks(res?.diff))
+        .catch(() => null)
+        .then((resp) => {
+          if (resp && resp.ok && Array.isArray(resp.lines) && resp.lines.length > 0) {
+            inlineDiffInflight.delete(key);
+            putCachedInlineDiff(key, resp);
+            return resp;
+          }
+          if (payload.uri && typeof win?.__agPrismInlineDiffCall === 'function') {
+            const dReq = requestInlineDiffFromDaemon(payload.uri, hints);
+            if (dReq) {
+              return dReq.promise.then((dResp) => {
+                inlineDiffInflight.delete(key);
+                return dResp;
+              });
+            }
+          }
+          inlineDiffInflight.delete(key);
+          return resp || { ok: false, error: 'no_changes', lines: [] };
+        });
       if (inlineDiffInflight.size < 16) inlineDiffInflight.set(key, promise);
       return { reqId, promise };
     }
@@ -949,12 +1078,22 @@
       if (opts && opts.closeOnly) return false;
 
       const payload = extractInlineDiffPayload(badgeEl, rowEl);
-      // Graceful fallback when neither local diff lines nor Daemon RPC is available: yield to native host Sidebar click
-      if (!payload.lines.length && !(payload.uri && typeof win?.__agPrismInlineDiffCall === 'function')) {
+      const hasStepCtx = Boolean(payload.diffContext?.cascadeId && Number.isInteger(Number(payload.diffContext?.stepIndex)));
+      // Graceful fallback when neither local diff lines, step context, nor Daemon RPC is available: yield to native host Sidebar click
+      if (!payload.lines.length && !hasStepCtx && !(payload.uri && typeof win?.__agPrismInlineDiffCall === 'function')) {
         return false;
       }
 
       const stepStats = { additions: payload.additions || 0, deletions: payload.deletions || 0 };
+      let pendingRpc = null;
+      if (!payload.lines.length) {
+        pendingRpc = requestInlineDiffForStep(payload, stepStats);
+        if (!pendingRpc) return false;
+        if (pendingRpc.cached && !(pendingRpc.cached.ok && Array.isArray(pendingRpc.cached.lines) && pendingRpc.cached.lines.length > 0)) {
+          return false;
+        }
+      }
+
       const body = mk('div', 'ag-cs-inline-diff-body'),
         box = markNoTrOwned(mk('div', BC, null, mk('div', 'ag-cs-inline-diff-card', null, body)));
       sa(box, 'data-ag-cs-inline-diff', '1');
@@ -971,22 +1110,24 @@
       const applyResp = (resp) => {
         if (resp?.ok && Array.isArray(resp.lines) && resp.lines.length > 0) {
           renderInlineDiffBody(body, resp.lines, 'lines', resp.mode, stepStats, resp, openSb);
-        } else {
-          renderInlineDiffBody(body, [], resp?.mode === 'binary' ? 'binary' : 'empty');
+          return true;
         }
+        clearBoxAnimTimers(box);
+        box._agDiffReqId = 0;
+        if (box.parentNode) box.remove();
+        ra(badgeEl, AO);
+        if (chipEl) ra(chipEl, AO);
+        if (!rowEl.nextElementSibling?.classList?.contains(BC)) ra(rowEl, AH);
+        return false;
       };
-      let pendingRpc = null;
       if (payload.lines.length) {
         renderInlineDiffBody(body, payload.lines, 'lines', null, stepStats, null, openSb);
+      } else if (pendingRpc?.cached) {
+        applyResp(pendingRpc.cached);
+        pendingRpc = null;
       } else {
-        pendingRpc = requestInlineDiffFromDaemon(payload.uri, stepStats);
-        if (pendingRpc?.cached) {
-          applyResp(pendingRpc.cached);
-          pendingRpc = null;
-        } else {
-          renderInlineDiffBody(body, [], 'loading');
-          if (pendingRpc) box._agDiffReqId = pendingRpc.reqId;
-        }
+        renderInlineDiffBody(body, [], 'loading');
+        if (pendingRpc) box._agDiffReqId = pendingRpc.reqId;
       }
 
       sa(box, AS, 'open');
@@ -1006,7 +1147,13 @@
       if (pendingRpc) {
         const expId = pendingRpc.reqId;
         pendingRpc.promise.then((resp) => {
-          if (!isDead() && box.isConnected !== false && box._agDiffReqId === expId) mut(() => applyResp(resp));
+          if (!isDead() && box.isConnected !== false && box._agDiffReqId === expId) {
+            let rendered = false;
+            mut(() => {
+              rendered = applyResp(resp);
+            });
+            if (!rendered) openSb();
+          }
         });
       }
       stats.inlineDiffToggleCount++;
@@ -1111,7 +1258,7 @@
       try {
         const t = ev?.target;
         if (isDead() || !t?.closest) return;
-        if (typeof win?.__agPrismInlineDiffCall !== 'function' || cl(t, '.ag-cs-inline-diff-box')) {
+        if (cl(t, '.ag-cs-inline-diff-box')) {
           clearHoverPrefetchTimer();
           return;
         }
@@ -1125,8 +1272,8 @@
           inlineDiffHoverTimer = 0;
           if (isDead() || db.isConnected === false) return;
           const p = extractInlineDiffPayload(db, null);
-          if (p.uri && !p.lines.length) {
-            requestInlineDiffFromDaemon(p.uri, { additions: p.additions || 0, deletions: p.deletions || 0 });
+          if (!p.lines.length && (p.diffContext?.cascadeId || (p.uri && typeof win?.__agPrismInlineDiffCall === 'function'))) {
+            requestInlineDiffForStep(p, { additions: p.additions || 0, deletions: p.deletions || 0 });
           }
         }, 110);
       } catch {}
