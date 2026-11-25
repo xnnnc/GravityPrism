@@ -1,6 +1,6 @@
 {
-  "language": "zh-CN",
-  "lang": "zh-CN",
+  "language": "en",
+  "lang": "en",
   "palette": "obsidian",
   "lightPreset": "crystal",
   "motionLevel": "ultra",
@@ -36,7 +36,7 @@
   "omniModule": "on",
   "linkTarget": "builtin",
   "sidebarStudio": "off",
-  "hostLocalization": "auto",
+  "hostLocalization": "off",
   "autoUpdate": "off",
   "updateChannel": "stable"
 }
