@@ -197,6 +197,11 @@
     const isEffortSliderOff = () =>
       ga(getRootHtml(), 'data-ag-cs-effort-slider') === 'off' || getCfg?.()?.effortSliderModule === 'off';
 
+    const isCustomEffortStyle = () => {
+      const st = ga(getRootHtml(), 'data-ag-cs-effort-style') || getCfg?.()?.effortSliderStyle || 'classic';
+      return Boolean(st && st !== 'classic');
+    };
+
     const readRootAmbientFloat = () => {
       const raw = ga(getRootHtml(), 'data-ag-cs-ambient');
       if (G.__agPrismRipple?.parseAmbientScale) return G.__agPrismRipple.parseAmbientScale(raw);
@@ -622,8 +627,11 @@
 
       const sRow = qs(panel, EFF_ROW_SEL);
       const sTrk = sRow && qs(sRow, '.ces-track');
-      const useSP = !!(isOrch && isOrchTunable && sRow && sTrk);
-      const useAuto = !!(isOrch && !useSP);
+      const customStyle = isCustomEffortStyle();
+      const canTuneOrch = !!(isOrch && isOrchTunable && sRow && sTrk);
+      const useSP = !!(canTuneOrch && !customStyle);
+      const useAuto = !!(isOrch && !canTuneOrch);
+      const runCrystal = useSP || useAuto;
 
       let tTrk = qs(bar, '.ag-cs-orch-track');
       let tCv = qs(bar, ORCH_CV_SEL);
@@ -680,12 +688,12 @@
         setAttrIfChanged(row, 'aria-hidden', String(useAuto));
       });
 
-      const switchedIn = isOrch && !mWasOrch;
-      mWasOrch = isOrch;
+      const switchedIn = runCrystal && !mWasOrch;
+      mWasOrch = runCrystal;
       setAttrIfChanged(bar, 'data-row-hidden', String(!useAuto));
       setAttrIfChanged(bar, 'aria-hidden', String(!useAuto));
 
-      if (isOrch) {
+      if (runCrystal) {
         const kickCrystal = () => {
           if (isDestroyed() || isEffortSliderOff() || !mWasOrch || mPanel !== panel || !panel[K_IC] || !mCv) return;
           const reducedNow = motionReduced();
@@ -748,6 +756,10 @@
       } else {
         cancelMountRaf();
         cancelStepRaf();
+        if (mInst) {
+          try { mInst.dispose?.(); } catch {}
+          mInst = null;
+        }
       }
     };
 

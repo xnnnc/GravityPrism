@@ -271,7 +271,7 @@
     dirtyFlags.g = true;
     const any = (s) => s.split('|').some((k) => prevCfg[k] !== nextCfg[k] || O.hasOwn(patch, k));
     if (any('palette|lightPreset|accentTone|ambientIntensity|cornerStyle|codeFont|codeLigatures')) dirtyFlags.t = true;
-    if (any('accentTone|composerRestyle|placeholderStyle|mascot|smoothCaret|telemetryModule|motionLevel|language')) dirtyFlags.c = true;
+    if (any('accentTone|composerRestyle|placeholderStyle|mascot|smoothCaret|telemetryModule|effortSliderStyle|motionLevel|language')) dirtyFlags.c = true;
     if (any('homeLayout|homeRipple|language')) dirtyFlags.r = true;
     if (any('sidebarRestyle|sidebarCompact|sidebarNavFold')) dirtyFlags.s = true;
     if (any('thoughtTranslate|thoughtTrigger|thoughtView')) dirtyFlags.l = dirtyFlags.tk = true;
