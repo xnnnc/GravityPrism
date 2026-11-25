@@ -147,7 +147,8 @@
         unmountRipple();
         return;
       }
-      const home = document.querySelector('.agy-home');
+      const rawSeat = document.querySelector('[data-ag-cs-conv-seat="1"]');
+      const home = document.querySelector('.agy-home') || (rawSeat && rawSeat.getAttribute?.('data-has-browser-hole') !== 'true' ? rawSeat : null);
       if (!home) {
         if (rippleMount && !rippleMount.parked) parkRipple();
         return;
@@ -525,6 +526,7 @@
       };
 
       state.onPress = (ev) => {
+        if (state.root?.getAttribute?.('data-ag-cs-conv-seat') === '1') return;
         if (ev.button !== 0 || motionReduced() || resolveAmbientScale() <= 0.001) return;
         const rect = canvas.getBoundingClientRect();
         cachedCanvasRect = rect;

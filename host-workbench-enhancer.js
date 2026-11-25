@@ -304,6 +304,11 @@
     const preSyncCache = new WeakMap();
     let cachedConvView = null;
     let lastOutlineStreamSyncAt = 0;
+    const openScrollTimers = [];
+    let openScrollClean = null;
+    const stickyState = new WeakMap();
+    const stickyUnsubs = [];
+    let stickyRaf = 0;
 
     const boundNavRails = new WeakSet();
     const navRailUnsubscribers = [];
@@ -914,6 +919,7 @@
 
     function scrollElementToTopInViewport(target) {
       if (!target) return;
+      unpinStickyVp();
       const vp = findScrollViewport(target),
         tr = target.getBoundingClientRect?.(),
         vr = vp?.getBoundingClientRect?.();
@@ -935,6 +941,8 @@
 
     function jumpUserTurn(delta) {
       if (isDead() || !delta) return false;
+      cancelOpenScroll();
+      unpinStickyVp();
       const conv = findPrimaryConvView(),
         turns = getMountedUserTurns(conv);
       if (!turns.length) return false;
@@ -1210,6 +1218,7 @@
       outlineFilterText = '';
       if (outlineSearchInput?.value) outlineSearchInput.value = '';
       if (closeIfOpen && outlineOpen) closeNavOutline();
+      if (nextCid) scheduleOpenScrollToBottom();
       return true;
     }
 
@@ -1535,6 +1544,138 @@
       }
     }
 
+    function cancelOpenScroll() {
+      while (openScrollTimers.length) clearTimeout(openScrollTimers.pop());
+      if (typeof openScrollClean === 'function') {
+        try { openScrollClean(); } catch {}
+        openScrollClean = null;
+      }
+    }
+
+    function scheduleOpenScrollToBottom() {
+      cancelOpenScroll();
+      if (isDead() || !doc || !win) return;
+      const evTarget = qs(doc, S_VP) || doc;
+      const stop = () => cancelOpenScroll();
+      for (const ev of ['wheel', 'pointerdown', 'touchstart']) evTarget.addEventListener?.(ev, stop, { passive: true, once: true });
+      win.addEventListener?.('keydown', stop, { passive: true, once: true });
+      openScrollClean = () => {
+        for (const ev of ['wheel', 'pointerdown', 'touchstart']) evTarget.removeEventListener?.(ev, stop);
+        win.removeEventListener?.('keydown', stop);
+      };
+      for (const ms of [40, 160, 380, 750]) {
+        openScrollTimers.push(setTimeout(() => {
+          if (isDead()) return cancelOpenScroll();
+          const vp = qs(doc, S_VP);
+          if (vp && (vp.scrollHeight || 0) > (vp.clientHeight || 0)) {
+            const st = stickyState.get(vp);
+            if (st) st.pinned = true;
+            vp.scrollTop = Math.max(0, vp.scrollHeight - vp.clientHeight);
+          }
+        }, ms));
+      }
+    }
+
+    function bindStickyEl(el) {
+      if (!el || stickyState.has(el)) return stickyState.get(el) || null;
+      const st = { pinned: true, lastTop: el.scrollTop || 0, lastSh: el.scrollHeight || 0, prog: false };
+      stickyState.set(el, st);
+      const onWheel = (ev) => {
+        if (!ev) return;
+        if (ev.deltaY < 0) st.pinned = false;
+        else if (ev.deltaY > 0 && (el.scrollHeight || 0) - (el.clientHeight || 0) - (el.scrollTop || 0) <= 32) st.pinned = true;
+      };
+      const onScroll = () => {
+        const cur = el.scrollTop || 0;
+        if (!st.prog) {
+          const gap = Math.max(0, (el.scrollHeight || 0) - (el.clientHeight || 0) - cur);
+          if (gap <= 28) st.pinned = true;
+          else if (cur < st.lastTop - 6) st.pinned = false;
+        }
+        st.lastTop = cur;
+      };
+      const onPtr = (ev) => {
+        try {
+          const r = el.getBoundingClientRect?.();
+          if (r && ev.clientX > r.right - 22) st.lastTop = el.scrollTop || 0;
+        } catch {}
+      };
+      el.addEventListener?.('wheel', onWheel, { passive: true });
+      el.addEventListener?.('scroll', onScroll, { passive: true });
+      el.addEventListener?.('pointerdown', onPtr, { passive: true });
+      stickyUnsubs.push({
+        el,
+        unsub: () => {
+          el.removeEventListener?.('wheel', onWheel);
+          el.removeEventListener?.('scroll', onScroll);
+          el.removeEventListener?.('pointerdown', onPtr);
+          stickyState.delete(el);
+        },
+      });
+      return st;
+    }
+
+    function pinStickyBottom(el, force = false) {
+      const st = bindStickyEl(el);
+      if (!st) return;
+      const sh = el.scrollHeight || 0,
+        ch = el.clientHeight || 0,
+        maxS = Math.max(0, sh - ch);
+      if (force) st.pinned = true;
+      if (st.pinned && maxS > 0 && (force || sh > st.lastSh)) {
+        if (maxS - (el.scrollTop || 0) > 1) {
+          st.prog = true;
+          el.scrollTop = maxS;
+          st.lastTop = el.scrollTop || maxS;
+          Promise.resolve().then(() => { st.prog = false; });
+        }
+      }
+      st.lastSh = sh;
+    }
+
+    function unpinStickyVp() {
+      const vp = doc ? qs(doc, S_VP) : null;
+      const st = vp && stickyState.get(vp);
+      if (st) st.pinned = false;
+    }
+
+    function syncStickyStreamScroll() {
+      if (isDead() || !doc || stickyRaf) return;
+      const run = () => {
+        stickyRaf = 0;
+        if (isDead() || !doc) return;
+        pruneUnsubs(stickyUnsubs, false);
+        const vp = qs(doc, S_VP);
+        if (vp) pinStickyBottom(vp, false);
+        const btns = qa(doc, '[data-testid="worked-for-collapsible"][aria-expanded="true"]');
+        let lastInner = null;
+        for (let i = btns.length - 1; i >= 0; i--) {
+          const nxt = btns[i].nextElementSibling;
+          if (!nxt) continue;
+          const cls = String(nxt.className || '');
+          let isOv = cls.includes('overflow-y-auto');
+          if (!isOv && win?.getComputedStyle) {
+            try {
+              const oy = win.getComputedStyle(nxt).overflowY;
+              isOv = oy === 'auto' || oy === 'scroll';
+            } catch {}
+          }
+          if (isOv) { lastInner = nxt; break; }
+        }
+        if (lastInner) pinStickyBottom(lastInner, false);
+      };
+      if (typeof win?.requestAnimationFrame === 'function') stickyRaf = win.requestAnimationFrame(run);
+      else run();
+    }
+
+    function cleanupStickyScroll() {
+      if (stickyRaf && win?.cancelAnimationFrame) {
+        try { win.cancelAnimationFrame(stickyRaf); } catch {}
+      }
+      stickyRaf = 0;
+      pruneUnsubs(stickyUnsubs, true);
+    }
+
     function runFastScrollToBottom(btnEl) {
       if (isDead() || !doc || !win) return false;
       const cfg = getConfig() || {};
@@ -1543,6 +1684,8 @@
       }
       const vp = qs(cl(btnEl, S_CV) || doc, S_VP) || qs(doc, S_VP);
       if (!vp) return false;
+      const stPin = stickyState.get(vp);
+      if (stPin) stPin.pinned = true;
       const maxS = Math.max(0, (vp.scrollHeight || 0) - (vp.clientHeight || 0)),
         start = vp.scrollTop || 0,
         dist = maxS - start;
@@ -1911,6 +2054,7 @@
         syncCodeBlocks();
         syncNavRails();
         syncSubagentRunningAmbient();
+        syncStickyStreamScroll();
       }
       if (isFull || flags.s || flags.r || flags.t || langChanged) {
         syncSidebarOverflowTools();
@@ -1943,6 +2087,8 @@
       cancelFoldRaf();
       cancelHideOutlineTimer();
       cancelScrollGlide();
+      cancelOpenScroll();
+      cleanupStickyScroll();
       if (foldFeedbackTimer) {
         clearTimeout(foldFeedbackTimer);
         foldFeedbackTimer = 0;

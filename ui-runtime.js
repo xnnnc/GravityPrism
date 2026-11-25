@@ -385,10 +385,7 @@
 
   const isMascotEnabled = () => cfg.mascot !== 'off';
 
-  const motionReduced = () => {
-    if (cfg.motionLevel === 'off') return true;
-    return typeof matchMedia === 'function' && Boolean(matchMedia('(prefers-reduced-motion: reduce)')?.matches);
-  };
+  const motionReduced = () => cfg.motionLevel === 'off';
 
   const isMotionStandardOrUltra = () => {
     if (motionReduced()) return false;
@@ -2212,11 +2209,9 @@
         }
       }
 
-      if (flags.f || flags.r || flags.t) {
-        rippleCtl.sync();
-      }
       if (flags.f || flags.r || flags.c || flags.t) {
         convAuraCtl.sync(true);
+        rippleCtl.sync();
       }
       const modelPanelNow = measured.modelPanelNow;
       const modelOverlayChanged = measured.modelOverlayChanged;
