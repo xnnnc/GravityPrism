@@ -2312,6 +2312,20 @@ delete panel.__cesAgUnbindPanel;
 delete panel.__cesAgBound;
 };
 }
+var _blurTms = [];
+function _clrBlurTms() { var ct = win?.clearTimeout || clearTimeout; while (_blurTms.length) { try { ct(_blurTms.pop()); } catch {} } }
+function blurTriggerIfNotHovered() {
+try {
+var tr = findAntigravityTrigger(doc);
+if (tr && doc.activeElement === tr && !(tr.matches && tr.matches(":hover"))) tr.blur?.();
+} catch {}
+}
+function onTrigLeave(ev) {
+try {
+var tr = ev?.target?.closest?.('[data-testid="model-selector-trigger"],button[aria-label^="Select model"]');
+if (tr && doc.activeElement === tr && (!ev.relatedTarget || !tr.contains(ev.relatedTarget))) tr.blur?.();
+} catch {}
+}
 function _unmntSec() {
 _setReady(false);
 _boundSubs.forEach(_ubSub);
@@ -2325,6 +2339,12 @@ try { if (typeof activePanel.__cesAgUnbindPanel === "function") activePanel.__ce
 if (doc && doc.activeElement && activeSection && activeSection.contains(doc.activeElement)) {
 try { doc.activeElement.blur(); } catch (e) {}
 }
+_clrBlurTms();
+if (!memOnly) {
+doc.documentElement?.removeAttribute?.("data-ag-cs-model-menu");
+var stFn = win?.setTimeout || setTimeout;
+_blurTms.push(stFn(blurTriggerIfNotHovered, 0), stFn(blurTriggerIfNotHovered, 60));
+}
 if (activeValueEl) { delete activeValueEl.__cesLastLabel; delete activeValueEl.__cesLastKey; }
 _clrSibs(activePanel);
 if (activeMount) { activeMount.unmount(); activeMount = null; }
@@ -2332,6 +2352,8 @@ if (activeSection && activeSection.parentNode) activeSection.parentNode.removeCh
 activeSection = activeRow = activeValueEl = activeHostEl = activePanel = activeBaseOverride = _actOptOvr = _orchPlanOvr = null;
 }
 function _mntSec(panel, ctx) {
+doc.documentElement?.setAttribute?.("data-ag-cs-model-menu", "1");
+try { var trM = findAntigravityTrigger(doc); if (trM && doc.activeElement === trM) trM.blur?.(); } catch {}
 panel.classList.add("ces-ag-panel-enhanced");
 _bindPnl(panel);
 var mk = function (t, c, p) { var e = doc.createElement(t); e.className = c; if (p) e.setAttribute("data-ces-part", p); return markNoTranslate(e); };
@@ -2448,6 +2470,7 @@ _syncAgDom(ctx, liveProf); _sySubs(panel, ctx, liveProf); notifySeatListeners();
 });
 }
 var onMemCk = null;
+if (!memOnly) doc.addEventListener?.("pointerout", onTrigLeave, true);
 if (memOnly) {
 var qOrch = (c, ob) => {
 var or = ob ? _orchEffMap.get(ob) : "", oi = c ? (c.orchIdx instanceof Map && c.orchIdx.size ? c.orchIdx : c.effortIndex) : null, oby = oi && or ? _luEff(oi, ob) : null, ot = oby?.get(or);
@@ -2514,6 +2537,8 @@ observer.observe(doc.body, { childList: true, subtree: true, characterData: true
 return {
 stop: () => {
 observer?.disconnect(); observer = null;
+_clrBlurTms();
+if (!memOnly) doc.removeEventListener?.("pointerout", onTrigLeave, true);
 if (memOnly) { if (onMemCk) doc.removeEventListener?.("click", onMemCk, true); lk = null; _clrSibs(doc); }
 else { _unmntSec(); _clrAgDom(doc); }
 },

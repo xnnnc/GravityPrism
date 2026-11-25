@@ -346,6 +346,7 @@
         try { rootEl.__prismMountThoughtUi(); } catch {}
       }
       try { rootEl.__prismMountWp?.(l); } catch {}
+      try { rootEl.__prismSyncEffortPreview?.(l); } catch {}
 
       const de = doc.documentElement;
       const themeAttr = de?.getAttribute?.('data-ag-cs-theme') || '';
@@ -490,6 +491,7 @@
           return;
         }
         try { qs(existing, `[data-testid="${K_WP}"]`)?.__agPrismWpUiHandle?.destroy?.(); } catch {}
+        try { existing.__prismDestroyEffortPreview?.(); } catch {}
         existing.remove();
       }
 
@@ -821,7 +823,168 @@
               });
               ap(group, b);
             }
-            return ap(row, ap(mkEl('div', 'py-2'), textCol, ap(mkEl('div', 'shrink-0'), group)));
+            const rowBody = ap(row, ap(mkEl('div', 'py-2'), textCol, ap(mkEl('div', 'shrink-0'), group)));
+            if (r.key === 'effortSliderStyle') {
+              const pBox = mkEl('div', 'ag-cs-effort-preview');
+              sa(pBox, 'data-testid', 'prism-effort-style-preview');
+              const pHead = mkEl('div', 'ag-cs-ep-head');
+              const pStyleLbl = mkEl('span', 'ag-cs-ep-style');
+              const pTierLbl = mkEl('span', 'ag-cs-ep-tier', 'High');
+              ap(pHead, pStyleLbl, pTierLbl);
+
+              const pTrk = mkEl('div', 'ag-cs-ep-track');
+              const pCv = mkEl('canvas', 'ag-cs-ep-cv');
+              pCv.width = 320;
+              pCv.height = 34;
+              const pClassic = mkEl('div', 'ag-cs-ep-classic');
+              const pFill = mkEl('div', 'ag-cs-ep-fill');
+              const pKnob = mkEl('div', 'ag-cs-ep-knob');
+              ap(pClassic, pFill, pKnob);
+              ap(pTrk, pCv, pClassic);
+
+              const pTiers = mkEl('div', 'ag-cs-ep-tiers');
+              const epLabels = ['Low', 'Medium', 'High', 'Extra'];
+              const epColors = ['#7dd3fc', '#60a5fa', '#a855f7', '#f59e0b'];
+              let epTier = 2, epPos = 2 / 3, epTgt = 2 / 3, epVel = 0, epHover = null, epRaf = 0, epLast = 0, epDrag = false, epCtx = null;
+              const tierBtns = epLabels.map((lbl, idx) => {
+                const tb = mkB('ag-cs-ep-btn', lbl);
+                on(tb, 'click', (ev) => {
+                  ev?.stopPropagation?.();
+                  epTier = idx;
+                  epTgt = idx / 3;
+                  syncPreview();
+                });
+                ap(pTiers, tb);
+                return tb;
+              });
+
+              const styleNames = new Map(r.opts);
+              const paintPreviewFrame = (nowMs) => {
+                const lCur = getLang();
+                const curSt = epHover || effVal('effortSliderStyle', lCur) || 'classic';
+                const isClassic = curSt === 'classic';
+                pStyleLbl[K_TC] = styleNames.get(curSt) || curSt;
+                pTierLbl[K_TC] = epLabels[epTier];
+                if (pTierLbl.style) pTierLbl.style.color = epColors[epTier];
+                tierBtns.forEach((tb, idx) => sa(tb, 'data-active', idx === epTier ? '1' : '0'));
+
+                if (pClassic.style) pClassic.style.display = isClassic ? 'block' : 'none';
+                if (pCv.style) pCv.style.display = isClassic ? 'none' : 'block';
+                const pct = Math.max(0, Math.min(1, epPos));
+                if (isClassic) {
+                  const pctStr = `${(10 + pct * 80).toFixed(1)}%`;
+                  if (pFill.style) pFill.style.width = pctStr;
+                  if (pKnob.style) pKnob.style.left = pctStr;
+                } else {
+                  const w = pTrk.clientWidth || 320, h = pTrk.clientHeight || 34;
+                  const win = getWin();
+                  const dpr = Math.max(1, Math.min(2, Number(win?.devicePixelRatio) || 1));
+                  const bw = Math.round(w * dpr), bh = Math.round(h * dpr);
+                  if (pCv.width !== bw) pCv.width = bw;
+                  if (pCv.height !== bh) pCv.height = bh;
+                  const ctx = epCtx || (typeof pCv.getContext === 'function' ? (epCtx = pCv.getContext('2d')) : null);
+                  const paintFn = win?.AntigravityCodexEffortSlider?.paintFxSlider || G.AntigravityCodexEffortSlider?.paintFxSlider;
+                  if (ctx && typeof ctx.beginPath === 'function' && typeof paintFn === 'function') {
+                    ctx.setTransform?.(dpr, 0, 0, dpr, 0, 0);
+                    paintFn(ctx, curSt, w, h, pct, epVel, 4, effVal('effortSliderModule', lCur) === 'off', (nowMs || Date.now()) * 0.001, effVal('accentTone', lCur) || 'follow');
+                  }
+                }
+              };
+
+              const shouldAnimate = () => {
+                const win = getWin();
+                if (!pBox[K_IC] || ga(sec, 'data-open') !== '1' || doc.hidden) return false;
+                if (typeof pBox.closest === 'function' && pBox.closest('[hidden]')) return false;
+                const lCur = getLang();
+                const curSt = epHover || effVal('effortSliderStyle', lCur) || 'classic';
+                if (effVal('effortSliderModule', lCur) === 'off') return false;
+                if (effVal('motionLevel', lCur) === 'off') return Math.abs(epTgt - epPos) > 0.002;
+                return curSt !== 'classic' || Math.abs(epTgt - epPos) > 0.002;
+              };
+
+              const stopPreviewRaf = () => {
+                const win = getWin();
+                if (epRaf && typeof win?.cancelAnimationFrame === 'function') win.cancelAnimationFrame(epRaf);
+                epRaf = 0;
+                epLast = 0;
+              };
+
+              const stepPreview = (now) => {
+                epRaf = 0;
+                if (!pBox[K_IC]) return;
+                const dt = epLast > 0 ? Math.min(0.05, Math.max(0.001, (now - epLast) / 1000)) : 0.016;
+                epLast = now;
+                if (!epDrag) {
+                  const diff = epTgt - epPos;
+                  epVel = (epVel + diff * 180 * dt) * Math.exp(-12 * dt);
+                  epPos += epVel * dt;
+                  if (Math.abs(diff) < 0.002 && Math.abs(epVel) < 0.005) { epPos = epTgt; epVel = 0; }
+                }
+                paintPreviewFrame(now);
+                if (shouldAnimate()) {
+                  const win = getWin();
+                  if (typeof win?.requestAnimationFrame === 'function') epRaf = win.requestAnimationFrame(stepPreview);
+                }
+              };
+
+              const syncPreview = () => {
+                paintPreviewFrame(typeof performance !== 'undefined' ? performance.now() : Date.now());
+                const win = getWin();
+                if (shouldAnimate() && !epRaf && typeof win?.requestAnimationFrame === 'function') {
+                  epRaf = win.requestAnimationFrame(stepPreview);
+                } else if (!shouldAnimate()) {
+                  stopPreviewRaf();
+                }
+              };
+
+              const setFromX = (clientX) => {
+                const rct = rc(pTrk);
+                const left = rct?.left || 0, w = rct?.width || 320;
+                const curSt = epHover || effVal('effortSliderStyle', getLang()) || 'classic';
+                const u = curSt === 'orbital'
+                  ? Math.max(0, Math.min(1, (clientX - left - 48) / Math.max(20, w - 62)))
+                  : Math.max(0, Math.min(1, (clientX - left - 16) / Math.max(20, w - 32)));
+                epVel = (u - epPos) * 14;
+                epPos = u;
+                epTgt = u;
+                epTier = Math.round(u * 3);
+                syncPreview();
+              };
+
+              on(pTrk, 'pointerdown', (ev) => {
+                ev?.stopPropagation?.();
+                epDrag = true;
+                try { pTrk.setPointerCapture?.(ev.pointerId); } catch {}
+                setFromX(ev.clientX || 0);
+              });
+              on(pTrk, 'pointermove', (ev) => { if (epDrag) setFromX(ev.clientX || 0); });
+              const endTrkDrag = () => {
+                if (!epDrag) return;
+                epDrag = false;
+                epTier = Math.round(epPos * 3);
+                epTgt = epTier / 3;
+                syncPreview();
+              };
+              on(pTrk, 'pointerup', endTrkDrag);
+              on(pTrk, 'pointercancel', endTrkDrag);
+
+              for (const segBtn of group.children) {
+                if (segBtn.tagName !== 'BUTTON') continue;
+                on(segBtn, 'pointerenter', () => {
+                  try { epHover = JSON.parse(ga(segBtn, 'data-ag-cs-val')); } catch {}
+                  syncPreview();
+                });
+              }
+              on(group, 'pointerleave', () => {
+                if (epHover !== null) { epHover = null; syncPreview(); }
+              });
+
+              sec.__prismSyncEffortPreview = syncPreview;
+              sec.__prismDestroyEffortPreview = stopPreviewRaf;
+              ap(pBox, pHead, pTrk, pTiers);
+              ap(rowBody, pBox);
+            }
+            return rowBody;
           };
 
           const topDeck = mkEl('div', 'ag-cs-settings-topdeck');
@@ -847,6 +1010,7 @@
             writeStore(STORAGE_SETTINGS_SUBTAB_KEY, sid);
             for (const sb of subTabBtns) sa(sb, 'aria-selected', ga(sb, 'data-ag-cs-subtab') === sid);
             for (const [gid, gel] of groupElsById.entries()) setVis(gel, sid === 'all' || sid === gid);
+            try { sec.__prismSyncEffortPreview?.(); } catch {}
           };
           for (const [sid, slbl] of [
             ['appearance', U('subTabAppearance', 'Appearance')],
@@ -1331,6 +1495,7 @@
           sa(foldBody, 'aria-hidden', !nextOpen);
           foldBody[K_CL]?.[clOp]?.('is-open');
         });
+        try { sec.__prismSyncEffortPreview?.(); } catch {}
         if (nextOpen && probeRepoRef) probeRepoRef();
       });
 
