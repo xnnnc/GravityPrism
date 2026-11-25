@@ -8,7 +8,7 @@
 
 Four dark & daylight themes · A living 512K context vial · Reasoning effort slider · Pixel companions · Custom Static / Video Wallpaper (Beta) · Chat Mode (Beta)
 
-[**简体中文**](./README.md) · [**English**](./README.en.md) · [**Changelog**](./CHANGELOG.md) · [**Releases**](https://github.com/RMvdesi/obsidian-prism/releases) · [**Issues**](https://github.com/RMvdesi/obsidian-prism/issues)
+[**Türkçe**](./README.md) · [**English**](./README.en.md) · [**简体中文**](./README.zh-CN.md) · [**Changelog**](./CHANGELOG.md) · [**Upstream Releases**](https://github.com/RMvdesi/obsidian-prism/releases)
 
 <p>
   <a href="https://github.com/RMvdesi/obsidian-prism/releases"><img src="https://img.shields.io/github/v/release/RMvdesi/obsidian-prism?style=flat-square&color=3186ff&label=Release" alt="Latest Release" /></a>
