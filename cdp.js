@@ -8199,13 +8199,16 @@ function getInjectWrapperTemplate() {
       cleanOld();
       let st = D.getElementById(SID);
       if (!st) { st = D.createElement('style'); st.id = SID; }
-      const fk = __AG_INJ_CSSHASH__, flatOk = st.getAttribute?.('data-ag-cs-flat') === fk + ':' + (st.textContent || '').length;
-      const rawOk = st.getAttribute?.('data-ag-cs-css-hash') === fk && (st.textContent || '').length > 0 && typeof CSS !== 'undefined' && CSS.supports?.('selector(&)');
+      const fk = __AG_INJ_CSSHASH__, canNest = typeof CSS !== 'undefined' && Boolean(CSS.supports?.('selector(&)'));
+      const curLen = (st.textContent || '').length;
+      const flatOk = !canNest && st.getAttribute?.('data-ag-cs-flat') === fk + ':' + curLen;
+      const rawOk = canNest && !st.hasAttribute?.('data-ag-cs-flat') && st.getAttribute?.('data-ag-cs-css-hash') === fk && curLen > 0 && st.getAttribute?.('data-ag-cs-css-len') === String(curLen);
       if (!flatOk && !rawOk) {
         const c = getCss();
         if (st.textContent !== c) st.textContent = c;
         st.removeAttribute?.('data-ag-cs-flat');
         st.setAttribute?.('data-ag-cs-css-hash', fk);
+        st.setAttribute?.('data-ag-cs-css-len', String(c.length));
       }
       if (st.parentNode !== p || p.lastElementChild !== st) p.appendChild(st);
       try { W.__agPrism?.flattenCss?.(); } catch {}

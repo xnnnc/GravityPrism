@@ -143,6 +143,18 @@
     '[data-omni-aux-file]',
   ].join(', ');
 
+  const AUX_EXCLUDED_CONTAINER_SELECTOR = [
+    '[data-testid="conversation-view"]',
+    '[data-testid="subagent-tab-conversation"]',
+    '[data-testid="autoscroll-viewport"]',
+    '[data-testid="changed-files-card"]',
+    '[data-testid="agent-input-box"]',
+    '[data-testid="overview-panel"]',
+    'aside',
+    '.agy-home',
+    '.ag-omni-menu',
+  ].join(', ');
+
   const HOST_AUX_ERROR_RE =
     /exceeds the \d+\s*MB display limit|Failed to read file content|Preview is not available for this file type|Unable to display/i;
 
@@ -2345,12 +2357,26 @@
         '';
       if (directAttr) return directAttr;
 
-      const subNode = viewEl.querySelector?.('[data-active-file-uri], [data-file-uri], [data-uri]');
-      if (subNode) {
+      const activeSubNodes = viewEl.querySelectorAll?.('[data-active-file-uri], [data-omni-aux-file]') || [];
+      for (const subNode of activeSubNodes) {
+        if (findClosest(subNode, AUX_EXCLUDED_CONTAINER_SELECTOR)) continue;
         const subAttr =
-          subNode.getAttribute('data-active-file-uri') ||
-          subNode.getAttribute('data-file-uri') ||
-          subNode.getAttribute('data-uri') ||
+          subNode.getAttribute?.('data-active-file-uri') ||
+          subNode.getAttribute?.('data-omni-aux-file') ||
+          '';
+        if (subAttr) return subAttr;
+      }
+
+      const uriNodes = viewEl.querySelectorAll?.('[data-file-uri], [data-uri]') || [];
+      for (const subNode of uriNodes) {
+        const tag = String(subNode.tagName || '').toUpperCase();
+        if (tag === 'BUTTON' || tag === 'A') continue;
+        if (findClosest(subNode, `${AUX_EXCLUDED_CONTAINER_SELECTOR}, [data-testid="entity-pill"], .inline-pill`)) {
+          continue;
+        }
+        const subAttr =
+          subNode.getAttribute?.('data-file-uri') ||
+          subNode.getAttribute?.('data-uri') ||
           '';
         if (subAttr) return subAttr;
       }
@@ -2372,10 +2398,18 @@
     function isValidAuxShell(shell) {
       if (!shell || shell === D?.body || shell === D?.documentElement) return false;
       const shellTid = String(shell.getAttribute?.('data-testid') || '');
-      if (shellTid.includes('split') || shellTid === 'overview-panel-host' || shellTid === 'conversation-view') {
+      if (
+        shellTid.includes('split') ||
+        shellTid === 'overview-panel-host' ||
+        shellTid === 'conversation-view' ||
+        shellTid === 'subagent-tab-conversation' ||
+        shellTid === 'changed-files-card' ||
+        shellTid === 'overview-panel' ||
+        shellTid === 'autoscroll-viewport'
+      ) {
         return false;
       }
-      if (findClosest(shell, '[data-testid="conversation-view"], aside, .agy-home, .ag-omni-menu')) {
+      if (findClosest(shell, AUX_EXCLUDED_CONTAINER_SELECTOR)) {
         return false;
       }
       return true;
@@ -2458,7 +2492,7 @@
       if (!isValidAuxShell(shell)) return false;
       if (!findClosest(shell, '[data-testid="aux-pane-split"]')) return false;
       if (findClosest(shell, '[data-testid="csv-file-viewer"], video')) return false;
-      if (shell.querySelector?.('[data-testid="conversation-view"], aside, .agy-home, [data-testid="csv-file-viewer"], video')) {
+      if (shell.querySelector?.(`${AUX_EXCLUDED_CONTAINER_SELECTOR}, [data-testid="csv-file-viewer"], video`)) {
         return false;
       }
       const rawRef = extractAuxFileRef(shell);
@@ -2510,12 +2544,12 @@
     function reconcileMountedAuxSwitches() {
       if (!mountedAuxSwitches.size) return;
       for (const rec of Array.from(mountedAuxSwitches)) {
-        if (!rec.hostEl || !rec.hostEl.isConnected) {
+        if (!rec.hostEl || !rec.hostEl.isConnected || !isValidAuxShell(rec.hostEl)) {
           unmountSingleAuxSwitch(rec);
           continue;
         }
         const hostUnsupported = hasHostUnsupportedState(rec.viewEl, rec.hostEl);
-        if (!hostUnsupported && rec.hostEl.querySelector?.('[data-testid="csv-file-viewer"], video')) {
+        if (!hostUnsupported && rec.hostEl.querySelector?.(`${AUX_EXCLUDED_CONTAINER_SELECTOR}, [data-testid="csv-file-viewer"], video`)) {
           unmountSingleAuxSwitch(rec);
           continue;
         }
@@ -2866,7 +2900,7 @@
             }
           }
           decorateMermaidContainers(r);
-          if (!findClosest(r, '[data-testid="conversation-view"]')) {
+          if (!findClosest(r, '[data-testid="conversation-view"], [data-testid="subagent-tab-conversation"]')) {
             const auxRoot = !scannedAuxSplit && (findClosest(r, '[data-testid="aux-pane-split"]') || r.querySelector?.('[data-testid="aux-pane-split"]'));
             if (auxRoot) {
               scannedAuxSplit = true;

@@ -1059,6 +1059,7 @@
         () => toggleInlineDiffPreview(badgeEl)
       );
       addItem('external', getUiText('inlineDiffOpenSidebar'), () => {
+        try { win?.__agPrismPreserveScroll?.(badgeEl); } catch {}
         allowNativeDiffClick = true;
         try {
           badgeEl.click?.();
@@ -1230,6 +1231,7 @@
       box._agDiffBadge = badgeEl;
       box._agDiffReqId = 0;
       const openSb = () => {
+        try { win?.__agPrismPreserveScroll?.(badgeEl); } catch {}
         allowNativeDiffClick = true;
         try {
           badgeEl.click?.();

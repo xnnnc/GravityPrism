@@ -2222,3 +2222,81 @@ test('Horizontal overlay/diff scrollbars stay slim (no 28px min-height) and coll
     'Channel 6 must clear collapsible fade mask and max-height while inline diff is open'
   );
 });
+
+test('Preserves and restores side-panel subagent scrollTop across unmount/remount and guards Open in Sidebar jumps', async () => {
+  const env = createMockEnv();
+  const makeSubagentTab = (cascadeId, initTop = 0) => {
+    const sub = env.createElement('div', { 'data-testid': 'subagent-tab-conversation', 'data-cascade-id': cascadeId });
+    const vp = env.createElement('div', { 'data-testid': 'autoscroll-viewport' });
+    vp.scrollHeight = 2000;
+    vp.clientHeight = 500;
+    vp.scrollTop = initTop;
+    const fileLink = env.createElement('button', { 'data-uri': 'file:///tmp/demo.ts' });
+    fileLink.textContent = 'demo.ts';
+    vp.appendChild(fileLink);
+    sub.appendChild(vp);
+    return { sub, vp, fileLink };
+  };
+
+  const ctl = enhancerMod.createHostEnhancerController({
+    doc: env.doc,
+    win: env.win,
+    getConfig: () => ({}),
+    getLang: () => 'en',
+  });
+
+  try {
+    // 1) Scroll subagent viewport to 640 and click file inside it -> unmount -> remount at scrollTop 0 -> restores 640
+    const first = makeSubagentTab('sub-cid-1', 640);
+    env.body.appendChild(first.sub);
+    ctl.sync();
+    env.win.dispatchEvent({ type: 'click', target: first.fileLink });
+    first.sub.remove();
+
+    const remounted = makeSubagentTab('sub-cid-1', 0);
+    env.body.appendChild(remounted.sub);
+    ctl.sync();
+    assert.equal(remounted.vp.scrollTop, 640, 'Remounted subagent viewport must immediately restore saved scrollTop');
+
+    await new Promise((r) => setTimeout(r, 500));
+    assert.equal(remounted.vp.scrollTop, 640, 'Settled subagent viewport must keep mid-scroll 640 instead of pinning to bottom');
+
+    // 2) User wheel event cancels any pending restore immediately
+    const second = makeSubagentTab('sub-cid-2', 720);
+    env.body.appendChild(second.sub);
+    ctl.sync();
+    env.win.dispatchEvent({ type: 'click', target: second.fileLink });
+    second.sub.remove();
+
+    const secondRemount = makeSubagentTab('sub-cid-2', 0);
+    // Simulate async layout starting small (clientHeight=0), then expanding after user wheels
+    secondRemount.vp.clientHeight = 0;
+    env.body.appendChild(secondRemount.sub);
+    ctl.sync();
+    secondRemount.vp.dispatchEvent({ type: 'wheel', deltaY: -40 });
+    secondRemount.vp.clientHeight = 500;
+    secondRemount.vp.scrollTop = 120;
+    await new Promise((r) => setTimeout(r, 150));
+    assert.equal(secondRemount.vp.scrollTop, 120, 'User wheel event must cancel pending scroll restore');
+
+    // 3) __agPrismPreserveScroll guards against synchronous/async jump to scrollTop = 0 ("Open in Sidebar")
+    const mainConv = env.createElement('div', { 'data-testid': 'conversation-view', 'data-cascade-id': 'main-cid-1' });
+    const mainVp = env.createElement('div', { 'data-testid': 'autoscroll-viewport' });
+    mainVp.scrollHeight = 2400;
+    mainVp.clientHeight = 600;
+    mainVp.scrollTop = 880;
+    const badge = env.createElement('span', { 'data-testid': 'diff-line-count' });
+    mainVp.appendChild(badge);
+    mainConv.appendChild(mainVp);
+    env.body.appendChild(mainConv);
+
+    assert.equal(typeof env.win.__agPrismPreserveScroll, 'function', 'Must expose __agPrismPreserveScroll hook');
+    env.win.__agPrismPreserveScroll(badge);
+    mainVp.scrollTop = 0;
+    await new Promise((r) => setTimeout(r, 60));
+    assert.equal(mainVp.scrollTop, 880, '__agPrismPreserveScroll must restore scrollTop after host jump to 0');
+  } finally {
+    ctl.destroy();
+    assert.equal(env.win.__agPrismPreserveScroll, undefined, 'destroy() must clean up __agPrismPreserveScroll');
+  }
+});

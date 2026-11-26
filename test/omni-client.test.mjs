@@ -1566,3 +1566,71 @@ test('omni-client.js has zero persist:ag-prism-omni or custom dock creation, ali
     env.window.__agPrismOmni.destroy();
   }
 });
+
+// ── 8. Subagent changed-files-card .html button must NEVER hijack aux preview ─
+test('expanding changed-files-card with .html button inside subagent-tab-conversation never triggers omni auto-preview hijack while normal .html File Pane still auto-previews', async () => {
+  const env = createFakeDomEnvironment();
+  const { window, document } = env;
+  mountMockHostRoot(document, { withBrowserCtx: true, withV2: true });
+
+  const auxSplit = document.createElement('div');
+  auxSplit.setAttribute('data-testid', 'aux-pane-split');
+  const mainPane = document.createElement('div');
+  const rightPane = document.createElement('div');
+  auxSplit.appendChild(mainPane);
+  auxSplit.appendChild(rightPane);
+  document.body.appendChild(auxSplit);
+
+  // Side-panel subagent conversation shell containing a changed-files-card
+  const subShell = document.createElement('div');
+  subShell.className = 'relative h-full w-full';
+  const subTab = document.createElement('div');
+  subTab.setAttribute('data-testid', 'subagent-tab-conversation');
+  const subVp = document.createElement('div');
+  subVp.setAttribute('data-testid', 'autoscroll-viewport');
+  const changedCard = document.createElement('div');
+  changedCard.setAttribute('data-testid', 'changed-files-card');
+  subVp.appendChild(changedCard);
+  subTab.appendChild(subVp);
+  subShell.appendChild(subTab);
+  rightPane.appendChild(subShell);
+
+  // Sibling normal .html File Pane shell in aux-pane-split
+  const fileShell = document.createElement('div');
+  fileShell.className = 'relative h-full w-full';
+  fileShell.__reactFiber$host = {
+    return: {
+      memoizedProps: {
+        fileUri: 'file:///projects/demo/preview-me.html',
+        tabId: 'file__html_keep',
+      },
+    },
+  };
+  const editorBox = document.createElement('div');
+  editorBox.textContent = '<h1>Normal File Preview</h1>';
+  fileShell.appendChild(editorBox);
+  rightPane.appendChild(fileShell);
+
+  const client = omniMod.createOmniClient({ window, document });
+  client.sync({ omniModule: 'on' }, { baseUrl: 'http://127.0.0.1:46700', token: 'tok_sub' });
+  await flushMicrotasks();
+
+  // Simulate user clicking "27 files changed": dynamically appends <button data-uri="...index.html">
+  const fileBtn = document.createElement('button');
+  fileBtn.setAttribute('data-uri', 'file:///projects/demo/index.html');
+  fileBtn.textContent = 'index.html +100 -0';
+  changedCard.appendChild(fileBtn);
+  await new Promise((r) => setTimeout(r, 95));
+
+  assert.equal(subShell.querySelector('[data-testid="ag-omni-aux-switcher"]'), null, 'Subagent shell must never get Omni switcher');
+  assert.equal(subShell.querySelector('[data-testid="ag-omni-aux-iframe"]'), null, 'Subagent shell must never be replaced by HTML iframe');
+  assert.notEqual(subTab.style.display, 'none', 'Subagent conversation container must remain visible');
+  assert.notEqual(changedCard.style.display, 'none', 'changed-files-card must remain visible');
+
+  assert.ok(fileShell.querySelector('[data-testid="ag-omni-aux-switcher"]'), 'Sibling normal .html File Pane must still mount aux switcher');
+  const fileIframe = fileShell.querySelector('[data-testid="ag-omni-aux-iframe"]');
+  assert.ok(fileIframe && fileIframe.hidden === false, 'Sibling normal .html File Pane must still auto-preview');
+  assert.match(fileIframe.src, /preview-me\.html/);
+
+  client.destroy();
+});

@@ -28,6 +28,7 @@
     '--background,--content,--shell,--body-background,--sidebar,--sidebar-muted,--sidebar-secondary,--card,--card-border,--border,--secondary,--secondary-foreground,--muted,--muted-foreground,--foreground,--placeholder,--primary,--primary-foreground,--accent,--link,--error,--warning,--success,--scrim,--ag-cs-tonal-0,--ag-cs-tonal-1,--ag-cs-tonal-2,--ag-cs-tonal-3,--ag-cs-tonal-4,--font-sans'.split(',');
   const S_VP = '[data-testid="autoscroll-viewport"]';
   const S_CV = '[data-testid="conversation-view"]';
+  const S_SUB = '[data-testid="subagent-tab-conversation"]';
   const S_NT = '[data-testid="conversation-navigator-turn"]';
   const S_NG = '[data-testid="conversation-navigator-group"]';
   const S_TRIG = '.ag-cs-nav-outline-trigger';
@@ -322,6 +323,9 @@
     let openScrollClean = null;
     const stickyState = new WeakMap();
     const stickyUnsubs = [];
+    const auxScrollMemory = new Map();
+    const auxScrollRestoreCleanups = new Set();
+    const auxScrollActiveRestore = new WeakMap();
 
     const boundNavRails = new WeakSet();
     const navRailUnsubscribers = [];
@@ -1642,7 +1646,13 @@
           const vps = qa(doc, S_VP);
           const list = vps.length ? vps : [qs(doc, S_VP)].filter(Boolean);
           for (const vp of list) {
-            if (vp && (vp.scrollHeight || 0) > (vp.clientHeight || 0)) {
+            if (!vp) continue;
+            const subKey = resolveAuxScrollKey(vp);
+            if (subKey) {
+              const saved = auxScrollMemory.get(subKey);
+              if (saved && saved.atBottom === false) continue;
+            }
+            if ((vp.scrollHeight || 0) > (vp.clientHeight || 0)) {
               const st = stickyState.get(vp);
               if (st) st.pinned = true;
               vp.scrollTop = Math.max(0, vp.scrollHeight - vp.clientHeight);
@@ -1652,9 +1662,223 @@
       }
     }
 
+    function resolveAuxScrollKey(vp) {
+      if (!vp) return '';
+      const subRoot = cl(vp, S_SUB);
+      if (!subRoot) return '';
+      const attrCid =
+        ga(subRoot, 'data-cascade-id') ||
+        ga(cl(vp, '[data-cascade-id]'), 'data-cascade-id') ||
+        ga(qs(subRoot, '[data-cascade-id]'), 'data-cascade-id') ||
+        '';
+      if (attrCid && String(attrCid).trim()) return `sub:${String(attrCid).trim()}`;
+      try {
+        const fk = Object.keys(subRoot).find((k) => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
+        for (let d = 0, f = fk ? subRoot[fk] : null; d < 14 && f; d++, f = f.return) {
+          const p = f.memoizedProps;
+          if (!p || typeof p !== 'object') continue;
+          const id =
+            (typeof p.cascadeId === 'string' && p.cascadeId) ||
+            (typeof p.subagentCascadeId === 'string' && p.subagentCascadeId) ||
+            (typeof p.conversationId === 'string' && p.conversationId) ||
+            (typeof p.tabId === 'string' && p.tabId) ||
+            (typeof p.tab?.id === 'string' && p.tab.id) ||
+            '';
+          if (id && id.trim()) return `sub:${id.trim()}`;
+        }
+      } catch {}
+      const parentPrefix = lastCascadeId || String(win?.location?.pathname || '');
+      const hdrCandidates = qa(subRoot, '[data-testid*="header"], h1, h2, h3, header, span');
+      for (let i = 0; i < hdrCandidates.length; i++) {
+        const h = hdrCandidates[i];
+        if (!h || h === vp || vp.contains?.(h)) continue;
+        const txt = String(h.textContent || '').replace(/\s+/g, ' ').trim();
+        if (txt.length >= 2 && txt.length <= 80) {
+          return `sub:${parentPrefix}:${txt}`;
+        }
+      }
+      return `sub:${parentPrefix}:default`;
+    }
+
+    function saveAuxScroll(vp, force = false) {
+      if (!vp) return;
+      const key = resolveAuxScrollKey(vp);
+      if (!key) return;
+      const sh = vp.scrollHeight || 0;
+      const ch = vp.clientHeight || 0;
+      const top = vp.scrollTop || 0;
+      const maxS = Math.max(0, sh - ch);
+      if (!(ch > 0 && sh > ch)) return;
+      const st = stickyState.get(vp);
+      if (!force && top === 0 && auxScrollMemory.has(key) && st?.restoring) return;
+      const entry = { scrollTop: top, scrollHeight: sh, atBottom: maxS - top <= 28, savedAt: Date.now() };
+      if (auxScrollMemory.has(key)) auxScrollMemory.delete(key);
+      else if (auxScrollMemory.size >= 32) {
+        const oldest = auxScrollMemory.keys().next().value;
+        if (oldest !== undefined) auxScrollMemory.delete(oldest);
+      }
+      auxScrollMemory.set(key, entry);
+    }
+
+    function cancelViewportRestore(vp) {
+      const prev = vp ? auxScrollActiveRestore.get(vp) : null;
+      if (typeof prev === 'function') {
+        auxScrollActiveRestore.delete(vp);
+        try { prev(); } catch {}
+      }
+    }
+
+    function scheduleViewportScrollRestore(vp, targetTop, atBottom = false, targetSh = 0) {
+      if (isDead() || !vp) return;
+      cancelViewportRestore(vp);
+      const st = stickyState.get(vp);
+      if (st) st.restoring = true;
+      let stopped = false;
+      const timers = [];
+      let rafId = 0;
+      let settledTicks = 0;
+
+      const cleanup = () => {
+        if (stopped) return;
+        stopped = true;
+        while (timers.length) clearTimeout(timers.pop());
+        if (rafId && win?.cancelAnimationFrame) {
+          try { win.cancelAnimationFrame(rafId); } catch {}
+          rafId = 0;
+        }
+        for (const ev of ['wheel', 'pointerdown', 'touchstart']) vp.removeEventListener?.(ev, onUserCancel);
+        win?.removeEventListener?.('keydown', onUserCancel);
+        auxScrollRestoreCleanups.delete(cleanup);
+        if (auxScrollActiveRestore.get(vp) === cleanup) auxScrollActiveRestore.delete(vp);
+        const curSt = stickyState.get(vp);
+        if (curSt) curSt.restoring = false;
+      };
+      const onUserCancel = () => cleanup();
+
+      auxScrollActiveRestore.set(vp, cleanup);
+      auxScrollRestoreCleanups.add(cleanup);
+      for (const ev of ['wheel', 'pointerdown', 'touchstart']) vp.addEventListener?.(ev, onUserCancel, { passive: true, once: true });
+      win?.addEventListener?.('keydown', onUserCancel, { passive: true, once: true });
+
+      const applyTick = (isSettledTick) => {
+        if (stopped || isDead() || vp.isConnected === false) {
+          cleanup();
+          return;
+        }
+        const sh = vp.scrollHeight || 0;
+        const ch = vp.clientHeight || 0;
+        const maxS = Math.max(0, sh - ch);
+        if (ch <= 0 || maxS <= 0) return;
+        const nextTop = atBottom ? maxS : Math.min(targetTop, maxS);
+        const curSt = stickyState.get(vp);
+        if (curSt) {
+          curSt.prog = true;
+          curSt.pinned = Boolean(atBottom);
+        }
+        vp.scrollTop = nextTop;
+        if (curSt) {
+          curSt.lastTop = vp.scrollTop || nextTop;
+          curSt.lastSh = sh;
+          Promise.resolve().then(() => {
+            if (curSt) curSt.prog = false;
+          });
+        }
+        if (isSettledTick) settledTicks++;
+        if (
+          settledTicks >= 1 &&
+          !atBottom &&
+          targetSh > 0 &&
+          sh >= targetSh - 32 &&
+          Math.abs((vp.scrollTop || 0) - targetTop) <= 2
+        ) {
+          cleanup();
+        }
+      };
+
+      applyTick(false);
+      if (!stopped && typeof win?.requestAnimationFrame === 'function') {
+        rafId = win.requestAnimationFrame(() => {
+          rafId = 0;
+          applyTick(true);
+        });
+      }
+      const delays = [30, 110, 240, 460];
+      for (let i = 0; i < delays.length; i++) {
+        const isLast = i === delays.length - 1;
+        timers.push(setTimeout(() => {
+          applyTick(true);
+          if (isLast) cleanup();
+        }, delays[i]));
+      }
+    }
+
+    function snapshotAndGuardScroll(targetEl) {
+      if (isDead() || !doc) return false;
+      const vp = cl(targetEl, S_VP) || (targetEl && qs(cl(targetEl, S_SUB) || cl(targetEl, S_CV), S_VP)) || findScrollViewport(targetEl);
+      if (!vp) return false;
+      if (cl(vp, S_SUB)) saveAuxScroll(vp, true);
+      const origTop = vp.scrollTop || 0;
+      const origSh = vp.scrollHeight || 0;
+      const origCh = vp.clientHeight || 0;
+      if (origTop <= 20) return true;
+      const origAtBottom = Math.max(0, origSh - origCh) - origTop <= 28;
+      let stopped = false;
+      const timers = [];
+      const stopGuard = () => {
+        if (stopped) return;
+        stopped = true;
+        while (timers.length) clearTimeout(timers.pop());
+        for (const ev of ['wheel', 'pointerdown', 'touchstart']) vp.removeEventListener?.(ev, stopGuard);
+        win?.removeEventListener?.('keydown', stopGuard);
+        auxScrollRestoreCleanups.delete(stopGuard);
+      };
+      auxScrollRestoreCleanups.add(stopGuard);
+      for (const ev of ['wheel', 'pointerdown', 'touchstart']) vp.addEventListener?.(ev, stopGuard, { passive: true, once: true });
+      win?.addEventListener?.('keydown', stopGuard, { passive: true, once: true });
+
+      const checkGuard = (isLast) => {
+        if (stopped || isDead()) {
+          stopGuard();
+          return;
+        }
+        if (vp.isConnected !== false && (vp.clientHeight || 0) > 0 && (vp.scrollTop || 0) === 0 && (vp.scrollHeight || 0) > (vp.clientHeight || 0)) {
+          const maxS = Math.max(0, (vp.scrollHeight || 0) - (vp.clientHeight || 0));
+          const st = stickyState.get(vp);
+          if (st) st.prog = true;
+          vp.scrollTop = origAtBottom ? maxS : Math.min(origTop, maxS);
+          if (st) {
+            st.lastTop = vp.scrollTop;
+            st.pinned = origAtBottom;
+            Promise.resolve().then(() => { st.prog = false; });
+          }
+        }
+        if (isLast) stopGuard();
+      };
+      const guardDelays = [0, 40, 140, 320, 450];
+      for (let i = 0; i < guardDelays.length; i++) {
+        const isLast = i === guardDelays.length - 1;
+        timers.push(setTimeout(() => checkGuard(isLast), guardDelays[i]));
+      }
+      return true;
+    }
+
+    if (win) {
+      try { win.__agPrismPreserveScroll = snapshotAndGuardScroll; } catch {}
+    }
+
     function bindStickyEl(el) {
       if (!el || stickyState.has(el)) return stickyState.get(el) || null;
-      const st = { pinned: true, lastTop: el.scrollTop || 0, lastSh: el.scrollHeight || 0, prog: false };
+      const subKey = resolveAuxScrollKey(el);
+      const saved = subKey ? auxScrollMemory.get(subKey) : null;
+      const st = {
+        pinned: saved ? Boolean(saved.atBottom) : true,
+        lastTop: el.scrollTop || 0,
+        lastSh: el.scrollHeight || 0,
+        lastCh: el.clientHeight || 0,
+        prog: false,
+        restoring: false,
+        subKey,
+      };
       stickyState.set(el, st);
       const onWheel = (ev) => {
         if (!ev) return;
@@ -1663,10 +1887,11 @@
       };
       const onScroll = () => {
         const cur = el.scrollTop || 0;
-        if (!st.prog) {
+        if (!st.prog && !st.restoring) {
           const gap = Math.max(0, (el.scrollHeight || 0) - (el.clientHeight || 0) - cur);
           if (gap <= 28) st.pinned = true;
           else if (cur < st.lastTop - 6) st.pinned = false;
+          if (st.subKey) saveAuxScroll(el, false);
         }
         st.lastTop = cur;
       };
@@ -1682,18 +1907,24 @@
       stickyUnsubs.push({
         el,
         unsub: () => {
+          cancelViewportRestore(el);
           el.removeEventListener?.('wheel', onWheel);
           el.removeEventListener?.('scroll', onScroll);
           el.removeEventListener?.('pointerdown', onPtr);
           stickyState.delete(el);
         },
       });
+      if (saved && (saved.scrollTop > 0 || saved.atBottom) && (el.scrollTop || 0) === 0) {
+        scheduleViewportScrollRestore(el, saved.scrollTop, saved.atBottom, saved.scrollHeight);
+      } else if (subKey && (el.clientHeight || 0) > 0 && (el.scrollHeight || 0) > (el.clientHeight || 0) && (el.scrollTop || 0) > 0) {
+        saveAuxScroll(el, false);
+      }
       return st;
     }
 
     function pinStickyBottom(el, force = false) {
       const st = bindStickyEl(el);
-      if (!st) return;
+      if (!st || st.restoring) return;
       const sh = el.scrollHeight || 0,
         ch = el.clientHeight || 0,
         maxS = Math.max(0, sh - ch);
@@ -1723,11 +1954,25 @@
       if (isDead() || !doc) return;
       pruneUnsubs(stickyUnsubs, false);
       const vps = qa(doc, S_VP);
-      if (vps.length) {
-        for (const vp of vps) pinStickyBottom(vp, false);
-      } else {
-        const vp = qs(doc, S_VP);
-        if (vp) pinStickyBottom(vp, false);
+      const vpList = vps.length ? vps : [qs(doc, S_VP)].filter(Boolean);
+      for (const vp of vpList) {
+        const st = bindStickyEl(vp);
+        if (!st) continue;
+        const ch = vp.clientHeight || 0;
+        const subKey = st.subKey || resolveAuxScrollKey(vp);
+        if (subKey && !st.subKey) st.subKey = subKey;
+        if (subKey && st.lastCh === 0 && ch > 0 && (vp.scrollTop || 0) === 0) {
+          const saved = auxScrollMemory.get(subKey);
+          if (saved && (saved.scrollTop > 0 || saved.atBottom)) {
+            scheduleViewportScrollRestore(vp, saved.scrollTop, saved.atBottom, saved.scrollHeight);
+          }
+        }
+        st.lastCh = ch;
+        if (st.restoring) continue;
+        if (subKey && ch > 0 && (vp.scrollHeight || 0) > ch && (vp.scrollTop || 0) > 0) {
+          saveAuxScroll(vp, false);
+        }
+        pinStickyBottom(vp, false);
       }
       const btns = qa(doc, '[data-testid="worked-for-collapsible"][aria-expanded="true"]');
       let lastInner = null;
@@ -2057,6 +2302,11 @@
       try {
         const t = ev?.target;
         if (isDead() || !t?.closest) return;
+        const subRoot = cl(t, S_SUB);
+        if (subRoot) {
+          const subVp = cl(t, S_VP) || qs(subRoot, S_VP);
+          if (subVp) saveAuxScroll(subVp, true);
+        }
         const clickedCv = cl(t, S_CV);
         if (isFormalConv(clickedCv)) cachedConvView = clickedCv;
         const pt = cl(t, '[data-testid="permissions-selector-trigger"]');
@@ -2170,6 +2420,14 @@
       cancelHideOutlineTimer();
       cancelScrollGlide();
       cancelOpenScroll();
+      for (const fn of Array.from(auxScrollRestoreCleanups)) {
+        try { fn(); } catch {}
+      }
+      auxScrollRestoreCleanups.clear();
+      auxScrollMemory.clear();
+      if (win && win.__agPrismPreserveScroll === snapshotAndGuardScroll) {
+        try { delete win.__agPrismPreserveScroll; } catch { try { win.__agPrismPreserveScroll = undefined; } catch {} }
+      }
       cleanupStickyScroll();
       if (foldFeedbackTimer) {
         clearTimeout(foldFeedbackTimer);
