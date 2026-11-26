@@ -70,14 +70,14 @@ Bu depo, [`RMvdesi/obsidian-prism`](https://github.com/RMvdesi/obsidian-prism) `
 
 ### Tek Tık Windows Kurulum Uygulaması (Önerilen)
 
-- [Releases](https://github.com/xnnnc/GravityPrism/releases) sayfasından **`gravity-prism-installer.exe`** dosyasını indirip çalıştırabilirsiniz (kendi `.exe` paketinizi derlemek için `npm run build:installer` komutunu kullanabilirsiniz).
+- [Releases](https://github.com/hypsunk/GravityPrism/releases) sayfasından **`gravity-prism-installer.exe`** dosyasını indirip çalıştırabilirsiniz (kendi `.exe` paketinizi derlemek için `npm run build:installer` komutunu kullanabilirsiniz).
 
 ### Kaynaktan Kurulum
 
 > Ön koşul: Sistemde **Node.js `>= 22.0.0`** kurulu olmalıdır.
 
 ```bash
-git clone https://github.com/xnnnc/GravityPrism.git
+git clone https://github.com/hypsunk/GravityPrism.git
 cd GravityPrism
 
 # Eklentiyi ~/.gemini/config/plugins/obsidian-prism konumuna kur ve arka plan servisini başlat

@@ -26,7 +26,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: windows-installer
-          path: dist/obsidian-prism-installer.exe
+          path: dist/gravity-prism-installer.exe
 
   build-macos:
     if: github.event.repository.private == false
@@ -79,7 +79,7 @@ jobs:
             fi
             cat <<'EOF'
           ### Standalone Installers / 独立安装包
-          - **Windows (`x64`)**: `obsidian-prism-installer.exe`
+          - **Windows (`x64`)**: `gravity-prism-installer.exe`
           - **macOS (`Universal: Apple Silicon + Intel`)**: `Obsidian-Prism-macOS-universal.dmg`
           EOF
             printf '\n**Full Changelog**: [CHANGELOG.md](https://github.com/%s/blob/%s/CHANGELOG.md) · [Commits (%s)](https://github.com/%s/commits/%s)\n' \

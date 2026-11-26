@@ -35,7 +35,7 @@
     "install:plugin": "node tools/install-plugin.cjs --install",
     "archive:conversations": "node sidecars/daemon/conversation-archive.mjs",
     "clean:legacy": "node tools/patch-asar.cjs --clean-legacy",
-    "build:installer": "node scripts/build-installer.mjs --out dist/obsidian-prism-installer.exe",
+    "build:installer": "node scripts/build-installer.mjs --out dist/gravity-prism-installer.exe",
     "build:macos": "node scripts/build-macos.mjs"
   }
 }
