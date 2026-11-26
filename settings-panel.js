@@ -1146,7 +1146,7 @@
           ap(aboutBox, updNote, ap(mkEl('div', CARD_CLS), buildRow(rowDefs.autoUpdate), buildRow(rowDefs.updateChannel)));
 
           let updBusy = false;
-          const isSafeGhUrl = (u) => typeof u === 'string' && /^https:\/\/github\.com\/RMvdesi\/obsidian-prism(?:\/|$)/i.test(u.trim());
+          const isSafeGhUrl = (u) => typeof u === 'string' && /^https:\/\/github\.com\/xnnnc\/GravityPrism(?:\/|$)/i.test(u.trim());
           const applyUpdateView = (st) => {
             if (!updChip[K_IC] || !st || st.offline || st.timeout) return;
             const u = uiText(getLang()) || ui;

@@ -7,7 +7,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 
-export const GITHUB_REPO = 'RMvdesi/obsidian-prism';
+export const GITHUB_REPO = 'xnnnc/GravityPrism';
 export const LATEST_RELEASE_API = `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`;
 export const RELEASES_LIST_API = `https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=15`;
 export const RELEASES_PAGE_URL = `https://github.com/${GITHUB_REPO}/releases`;
@@ -294,7 +294,7 @@ export class UpdateService {
   _selectReleaseAssets(rel) {
     const assets = Array.isArray(rel?.assets) ? rel.assets : [];
     const winAsset =
-      assets.find((a) => String(a?.name || '').toLowerCase() === 'obsidian-prism-installer.exe') || null;
+      assets.find((a) => String(a?.name || '').toLowerCase() === 'gravity-prism-installer.exe') || null;
     const macAsset =
       assets.find((a) => String(a?.name || '') === 'Obsidian-Prism-macOS-universal.dmg') ||
       assets.find((a) => /\.dmg$/i.test(String(a?.name || ''))) ||
@@ -729,7 +729,7 @@ export class UpdateService {
           throw new Error('refused_symlink_tmpdir');
         }
 
-        const exePath = path.join(tmpDir, 'obsidian-prism-installer.exe');
+        const exePath = path.join(tmpDir, 'gravity-prism-installer.exe');
         const fd = fs.openSync(exePath, 'wx', 0o700);
         try {
           fs.writeFileSync(fd, buf);
