@@ -15,10 +15,6 @@ const cdp = require(path.join(ROOT_DIR, 'cdp.js'));
 const VALIDATORS = { ...cdp.VALIDATORS };
 
 function getEffectiveRuntimeParts() {
-  const brandMarkRel = 'assets/brand-mark-svg.js';
-  if (fs.existsSync(path.join(ROOT_DIR, brandMarkRel))) {
-    return [brandMarkRel, ...cdp.RUNTIME_PARTS];
-  }
   return [...cdp.RUNTIME_PARTS];
 }
 
@@ -30,10 +26,12 @@ function createManifest() {
     sidebarBinding: cdp.SIDEBAR_BINDING,
     inlineDiffBinding: cdp.INLINE_DIFF_BINDING,
     wallpaperBinding: cdp.WALLPAPER_BINDING,
+    suggesterBinding: cdp.SUGGESTER_BINDING,
     parts: getEffectiveRuntimeParts(),
     defaultConfig: cdp.DEFAULT_CONFIG,
     validators: VALIDATORS,
     removeExpression: cdp.REMOVE_EXPRESSION,
+    swarmI18nRemoveExpression: cdp.SWARM_I18N_REMOVE_EXPRESSION,
   };
 }
 
@@ -210,6 +208,24 @@ function collectOptionalWallpaperTopEntries() {
   return entries;
 }
 
+function collectOptionalSuggesterTopEntries() {
+  const entries = [];
+  for (const rel of [
+    'vendor/prompt-suggester/suggester-client.js',
+    'vendor/prompt-suggester/suggester-settings-ui.js',
+  ]) {
+    const abs = path.join(ROOT_DIR, ...rel.split('/'));
+    if (!fs.existsSync(abs)) continue;
+    try {
+      entries.push({
+        name: rel,
+        data: Buffer.from(cdp.minifyJs(fs.readFileSync(abs, 'utf8')), 'utf8'),
+      });
+    } catch {}
+  }
+  return entries;
+}
+
 function collectOptionalOmniTopEntries() {
   const entries = [];
   const omniClientRel = 'vendor/omni-viewer/omni-client.js';
@@ -226,6 +242,7 @@ function collectOptionalOmniTopEntries() {
   entries.push(...collectOptionalThoughtTopEntries());
   entries.push(...collectOptionalInlineDiffTopEntries());
   entries.push(...collectOptionalWallpaperTopEntries());
+  entries.push(...collectOptionalSuggesterTopEntries());
   return entries;
 }
 
@@ -427,6 +444,7 @@ export {
   collectOptionalThoughtTopEntries,
   collectOptionalInlineDiffTopEntries,
   collectOptionalWallpaperTopEntries,
+  collectOptionalSuggesterTopEntries,
   collectNativePluginEntries,
   renderPrismIconPng,
   buildMultiResIco,

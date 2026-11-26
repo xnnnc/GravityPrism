@@ -371,7 +371,7 @@ function mountRippleBackdrop() {
     canvas.width = Math.max(1, Math.round(columns * RIPPLE.cellWidth));
     canvas.height = Math.max(1, Math.round(rows * RIPPLE.cellHeight));
     if (glow) glow.resize(rect.width, rect.height, Math.min(window.devicePixelRatio || 1, 1.5));
-    if (field) field.dispose();
+    if (field) field.dispose(true);
     waves = createWaveField(columns, rows);
     field = createGlyphField(canvas, columns, rows, waves);
     waves.disturb(Math.floor(columns * 0.24), Math.floor(rows * 0.34));

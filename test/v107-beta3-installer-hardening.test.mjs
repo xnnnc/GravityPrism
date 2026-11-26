@@ -867,7 +867,6 @@ test(
           '/r:System.Drawing.dll',
           '/r:System.IO.Compression.dll',
           '/r:System.IO.Compression.FileSystem.dll',
-          '/r:System.Management.dll',
           '/r:System.Net.Http.dll',
           '/r:System.Windows.Forms.dll',
           path.join(ROOT_DIR, 'installer', 'common', 'MiniJson.cs'),

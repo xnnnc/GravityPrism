@@ -827,6 +827,8 @@ final class WatcherApp {
         var lastPort: Int?
         var lastLoggedStalePort: Int?
         var yieldingToDaemon = false
+        var hadLiveHost = false
+        var exitArchiveInFlight = false
         var lastDaemonSpawnAttempt = Date.distantPast
         while !isExiting() {
             var nativeAlive = !pluginDir.isEmpty && CdpHelper.isNativeDaemonAlive(pluginDir: pluginDir)
@@ -854,6 +856,11 @@ final class WatcherApp {
                 }
             }
             if nativeAlive {
+                if !hadLiveHost,
+                   let rp = CdpHelper.readPort(overridePort: overridePort),
+                   (try? CdpHelper.listPages(port: rp)) != nil {
+                    hadLiveHost = true
+                }
                 syncNewerPluginConfigToBase()
                 stateLock.lock()
                 let hasAttached = !attached.isEmpty
@@ -910,6 +917,26 @@ final class WatcherApp {
                 lastLoggedStalePort = nil
             }
 
+            if livePort == nil && hadLiveHost {
+                hadLiveHost = false
+                if overridePort == nil && self.isAutoArchiveOnExitAllowed() && self.isAutoArchiveOnExitEnabled() {
+                    stateLock.lock()
+                    let shouldLaunch = !exitArchiveInFlight
+                    if shouldLaunch { exitArchiveInFlight = true }
+                    stateLock.unlock()
+                    if shouldLaunch {
+                        DispatchQueue.global(qos: .utility).async {
+                            defer {
+                                stateLock.lock()
+                                exitArchiveInFlight = false
+                                stateLock.unlock()
+                            }
+                            self.runAutoArchiveOnExitFallback(overridePort: overridePort, isExiting: isExiting)
+                        }
+                    }
+                }
+            }
+
             if livePort == nil && overridePort == nil {
                 let env = ProcessInfo.processInfo.environment
                 let mockDec = env["AG_PRISM_MOCK_RELAUNCH_DECISION"] ?? ""
@@ -951,6 +978,7 @@ final class WatcherApp {
 
             if let port = livePort,
                let pages = livePages {
+                hadLiveHost = true
                 if lastPort != port {
                     stateLock.lock()
                     let oldEntries = Array(attached.values)
@@ -1016,6 +1044,263 @@ final class WatcherApp {
             }
         }
         return false
+    }
+
+    private func sleepInterruptible(seconds: Double, isExiting: () -> Bool) -> Bool {
+        let deadline = Date().addingTimeInterval(seconds)
+        while Date() < deadline {
+            if isExiting() { return true }
+            let rem = deadline.timeIntervalSinceNow
+            if rem <= 0 { break }
+            Thread.sleep(forTimeInterval: min(0.25, rem))
+        }
+        return isExiting()
+    }
+
+    private func isAutoArchiveOnExitAllowed() -> Bool {
+        let env = ProcessInfo.processInfo.environment
+        if (env["NODE_ENV"] ?? "").caseInsensitiveCompare("test") == .orderedSame { return false }
+        if !(env["NODE_TEST_CONTEXT"] ?? "").isEmpty { return false }
+        if env["AG_PRISM_NO_AUTO_ARCHIVE_ON_EXIT"] == "1" { return false }
+        if isTempSandboxDir(self.baseDir) { return false }
+        return true
+    }
+
+    private func isAutoArchiveOnExitEnabled() -> Bool {
+        let fm = FileManager.default
+        var dirs: [String] = []
+        if !self.pluginDir.isEmpty { dirs.append(self.pluginDir) }
+        if !self.baseDir.isEmpty && self.baseDir != self.pluginDir { dirs.append(self.baseDir) }
+        for dir in dirs {
+            let cfgPath = (dir as NSString).appendingPathComponent("config.json")
+            guard fm.fileExists(atPath: cfgPath),
+                  !CdpHelper.isSymbolicLinkOrUnsafePath(cfgPath),
+                  let raw = try? String(contentsOfFile: cfgPath, encoding: .utf8) else {
+                continue
+            }
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, let obj = try? MiniJson.parseObject(trimmed) else { continue }
+            if let val = obj["autoArchiveOnExit"] {
+                if let b = val.boolValue { return b }
+                if let s = val.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+                    return s == "true" || s == "on"
+                }
+                return false
+            }
+            continue
+        }
+        return false
+    }
+
+    private func resolveConversationArchiveScriptPath() -> String? {
+        let fm = FileManager.default
+        var dirs: [String] = []
+        if !self.pluginDir.isEmpty { dirs.append(self.pluginDir) }
+        if !self.baseDir.isEmpty && self.baseDir != self.pluginDir { dirs.append(self.baseDir) }
+        for dir in dirs {
+            let scriptPath = (dir as NSString).appendingPathComponent("sidecars/daemon/conversation-archive.mjs")
+            if fm.fileExists(atPath: scriptPath) && !CdpHelper.isSymbolicLinkOrUnsafePath(scriptPath) {
+                return scriptPath
+            }
+        }
+        return nil
+    }
+
+    private func isAntigravityOrLanguageServerRunning() -> Bool {
+        let selfPid = getpid()
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/bin/ps")
+        proc.arguments = ["-ax", "-o", "pid=,command="]
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        proc.standardError = FileHandle.nullDevice
+        do {
+            try proc.run()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            proc.waitUntilExit()
+            guard proc.terminationStatus == 0,
+                  let out = String(data: data, encoding: .utf8) else {
+                return true
+            }
+            var parsedRows = 0
+            for rawLine in out.components(separatedBy: CharacterSet.newlines) {
+                let line = rawLine.trimmingCharacters(in: .whitespaces)
+                if line.isEmpty { continue }
+                let cols = line.split(maxSplits: 1, omittingEmptySubsequences: true, whereSeparator: { $0.isWhitespace })
+                guard cols.count == 2, let pid = Int32(cols[0]), pid > 0 else { continue }
+                parsedRows += 1
+                if pid == selfPid { continue }
+                let lowerCmd = String(cols[1]).lowercased()
+                if lowerCmd.contains("conversation-archive.mjs") { continue }
+                if lowerCmd.contains("language_server") ||
+                   lowerCmd.contains(".app/contents/macos/antigravity") {
+                    return true
+                }
+            }
+            return parsedRows == 0
+        } catch {
+            // 进程查询失败一律 fail-closed，绝不冒险移动文件
+            return true
+        }
+    }
+
+    private func isProcessIdAlive(_ pid: Int64) -> Bool {
+        guard pid > 0, pid <= Int64(Int32.max) else { return false }
+        if kill(pid_t(pid), 0) == 0 { return true }
+        return errno == EPERM
+    }
+
+    private func parseIsoDate(_ str: String) -> Date? {
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = iso.date(from: str) { return d }
+        let isoBasic = ISO8601DateFormatter()
+        return isoBasic.date(from: str)
+    }
+
+    private func hasActiveArchiveLockOrRecentRestore() -> Bool {
+        let fm = FileManager.default
+        let envHome = ProcessInfo.processInfo.environment["HOME"] ?? ""
+        let home = envHome.isEmpty ? fm.homeDirectoryForCurrentUser.path : envHome
+        let archiveDir = (home as NSString).appendingPathComponent(".gemini/antigravity/conversations_archive")
+        guard fm.fileExists(atPath: archiveDir) else {
+            return false
+        }
+        // 归档目录若为符号链接或不安全路径，一律 fail-closed 拦截
+        if CdpHelper.isSymbolicLinkOrUnsafePath(archiveDir) {
+            return true
+        }
+        let lockPath = (archiveDir as NSString).appendingPathComponent(".archive.lock")
+        if fm.fileExists(atPath: lockPath) {
+            if CdpHelper.isSymbolicLinkOrUnsafePath(lockPath) { return true }
+            if let attrs = try? fm.attributesOfItem(atPath: lockPath),
+               let mtime = attrs[.modificationDate] as? Date,
+               Date().timeIntervalSince(mtime) < 300.0 {
+                return true
+            }
+        }
+        // 协调正在静置/等待退出的脱离归档或还原任务（消除 4s vs 5.5s 抢跑竞态）；
+        // 若记录的 auto-exit-archive PID 已死则不让步，立即由 Watcher 接棒兜底
+        let activePath = (archiveDir as NSString).appendingPathComponent(".archive-task-active.json")
+        if fm.fileExists(atPath: activePath) {
+            if CdpHelper.isSymbolicLinkOrUnsafePath(activePath) { return true }
+            if let activeRaw = try? String(contentsOfFile: activePath, encoding: .utf8),
+               let activeObj = try? MiniJson.parseObject(activeRaw) {
+                let startedDate: Date?
+                if let startStr = activeObj["startedAt"]?.stringValue, let parsed = parseIsoDate(startStr) {
+                    startedDate = parsed
+                } else if let attrs = try? fm.attributesOfItem(atPath: activePath),
+                          let mtime = attrs[.modificationDate] as? Date {
+                    startedDate = mtime
+                } else {
+                    startedDate = nil
+                }
+                if let sd = startedDate {
+                    let ageSec = Date().timeIntervalSince(sd)
+                    if ageSec >= -10.0 && ageSec < 180.0 {
+                        if let taskPid = activeObj["pid"]?.int64Value, taskPid > 0, isProcessIdAlive(taskPid) {
+                            return true
+                        }
+                        let activeAct = activeObj["action"]?.stringValue ?? ""
+                        if (activeAct == "restore-and-restart" || activeAct == "restore") && ageSec < 30.0 {
+                            return true
+                        }
+                    }
+                }
+            }
+        }
+        let resPath = (archiveDir as NSString).appendingPathComponent(".last-archive-result.json")
+        if fm.fileExists(atPath: resPath) {
+            if CdpHelper.isSymbolicLinkOrUnsafePath(resPath) { return true }
+            if let raw = try? String(contentsOfFile: resPath, encoding: .utf8),
+               let obj = try? MiniJson.parseObject(raw),
+               let act = obj["action"]?.stringValue,
+               let tsStr = obj["recordedAt"]?.stringValue ?? obj["updatedAt"]?.stringValue,
+               let ts = parseIsoDate(tsStr),
+               abs(Date().timeIntervalSince(ts)) < 90.0 {
+                if act == "restore-and-restart" || act == "restore" {
+                    return true
+                }
+                if obj["ok"]?.boolValue == true &&
+                   (act == "archive-and-restart" || act == "auto-exit-archive" || act == "archive") {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    private func runAutoArchiveOnExitFallback(overridePort: Int?, isExiting: () -> Bool) {
+        // 1) 等待 Antigravity 与 language_server 彻底退出（绝不强杀宿主）
+        for _ in 0..<15 {
+            if !isAntigravityOrLanguageServerRunning() { break }
+            if sleepInterruptible(seconds: 1.0, isExiting: isExiting) { return }
+            if !self.pluginDir.isEmpty && CdpHelper.isNativeDaemonAlive(pluginDir: self.pluginDir) { return }
+            if let pWait = CdpHelper.readPort(overridePort: overridePort),
+               (try? CdpHelper.listPages(port: pWait)) != nil {
+                return
+            }
+        }
+        if isAntigravityOrLanguageServerRunning() { return }
+
+        // 2) 静置 4 秒等待 SQLite WAL/SHM 完全释放
+        if sleepInterruptible(seconds: 4.0, isExiting: isExiting) { return }
+
+        // 3) 二次 fail-closed 确认：配置仍开启、无活跃 CDP 端口、原生 Daemon 未运行、宿主与 language_server 均未运行、无锁冲突/刚还原记录
+        guard isAutoArchiveOnExitEnabled() else { return }
+        if !self.pluginDir.isEmpty && CdpHelper.isNativeDaemonAlive(pluginDir: self.pluginDir) { return }
+        if let portRecheck = CdpHelper.readPort(overridePort: overridePort),
+           (try? CdpHelper.listPages(port: portRecheck)) != nil {
+            return
+        }
+        if isAntigravityOrLanguageServerRunning() { return }
+        if hasActiveArchiveLockOrRecentRestore() { return }
+
+        guard let scriptPath = resolveConversationArchiveScriptPath() else { return }
+        let runtime: (executable: String, runAsNode: Bool)?
+        if let nodeBin = CdpHelper.findFallbackNodeExecutable() {
+            runtime = (nodeBin, false)
+        } else if let electronRt = CdpHelper.findAntigravityNodeRuntime() {
+            runtime = electronRt
+        } else {
+            runtime = nil
+        }
+        guard let rt = runtime else { return }
+
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: rt.executable)
+        proc.arguments = [scriptPath, "--archive", "--subagent-hours=2"]
+        proc.currentDirectoryURL = URL(fileURLWithPath: (scriptPath as NSString).deletingLastPathComponent)
+        var env = ProcessInfo.processInfo.environment
+        if rt.runAsNode {
+            env["ELECTRON_RUN_AS_NODE"] = "1"
+        } else {
+            env.removeValue(forKey: "ELECTRON_RUN_AS_NODE")
+        }
+        proc.environment = env
+        proc.standardInput = FileHandle.nullDevice
+        proc.standardOutput = FileHandle.nullDevice
+        proc.standardError = FileHandle.nullDevice
+
+        do {
+            try proc.run()
+            let deadline = Date().addingTimeInterval(60.0)
+            while proc.isRunning && Date() < deadline {
+                if isExiting() { break }
+                Thread.sleep(forTimeInterval: 0.25)
+            }
+            if !proc.isRunning {
+                log(InstallerI18n.tr(
+                    "[storage-guard] Watcher 退出兜底自动归档已执行 (exitCode=\(proc.terminationStatus))",
+                    "[storage-guard] Watcher auto-archive on exit finished (exitCode=\(proc.terminationStatus))"
+                ))
+            }
+        } catch {
+            log(InstallerI18n.tr(
+                "[storage-guard] Watcher 退出兜底自动归档异常: \(error.localizedDescription)",
+                "[storage-guard] Watcher auto-archive on exit error: \(error.localizedDescription)"
+            ))
+        }
     }
 
     private func readHostAppVersion(appPath: String) -> String {

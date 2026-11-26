@@ -2,6 +2,7 @@
   if (typeof module === 'object' && module.exports) module.exports = factory();
   else root.__agCsRippleCore = factory();
 })(typeof globalThis !== 'undefined' ? globalThis : window, function () {
+  const M = Math;
   const RIPPLE = {
     fontSize: 10,
     cellWidth: 7,
@@ -55,7 +56,7 @@
     prismThreshold: 0.20,
     nebulaTint: 0.58,
     nebulaLift: 1.08,
-    nebulaFrameMs: 40,
+    nebulaFrameMs: 28,
     nebulaPeriods: [8.4, 10.8, 12.8],
   };
   const WAVE_STEP = 1 / 600;
@@ -66,7 +67,7 @@
   const GLYPHS = DIGITS + LETTERS;
   const COVERAGE_TO_THRESHOLD = 0.39;
   const INVISIBLE_ALPHA = 0.01;
-  const TAU = Math.PI * 2;
+  const TAU = M.PI * 2;
   const SPECTRUM = [
     [66, 133, 244],
     [155, 114, 203],
@@ -84,12 +85,12 @@
   const HUE_LEVELS = 32;
   function hash(a, b) {
     let h = (a * 374761393 + b * 668265263) | 0;
-    h = Math.imul(h ^ (h >>> 13), 1274126177) | 0;
+    h = M.imul(h ^ (h >>> 13), 1274126177) | 0;
     return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
   }
   function valueNoise(x, y) {
-    const x0 = Math.floor(x);
-    const y0 = Math.floor(y);
+    const x0 = M.floor(x);
+    const y0 = M.floor(y);
     const fx = x - x0;
     const fy = y - y0;
     const sx = fx * fx * (3 - 2 * fx);
@@ -104,10 +105,10 @@
   function glyphIndex(column, row, tick) {
     const digit = hash(column * 7 + tick * 13, row * 11 + tick * 3) < RIPPLE.digitRatio;
     const pick = hash(column * 131 + tick, row * 197 + tick * 7);
-    return digit ? Math.floor(pick * DIGITS.length) : DIGITS.length + Math.floor(pick * LETTERS.length);
+    return digit ? M.floor(pick * DIGITS.length) : DIGITS.length + M.floor(pick * LETTERS.length);
   }
   function smooth(value) {
-    const clamped = Math.max(0, Math.min(1, value));
+    const clamped = M.max(0, M.min(1, value));
     return clamped * clamped * (3 - 2 * clamped);
   }
   function cloudClear(x, y) {
@@ -189,8 +190,8 @@
   function spectrumRgb(t, out, dark = true, spectrumCode = 0) {
     const bank = dark === false ? GLYPH_SPECTRA_LIGHT : GLYPH_SPECTRA_DARK;
     const stops = bank[spectrumCode] || (dark === false ? SPECTRUM_LIGHT : SPECTRUM);
-    let f = (t - Math.floor(t)) * 4;
-    const i = Math.min(3, Math.floor(f));
+    let f = (t - M.floor(t)) * 4;
+    const i = M.min(3, M.floor(f));
     f -= i;
     const a = stops[i];
     const b = stops[(i + 1) & 3];
@@ -210,29 +211,32 @@
   const NEBULA_HUES = [0.04, 0.54, 0.80];
   function computeNebulaLobes(seconds, width, height, still, out) {
     const t = still ? 2.4 : seconds;
-    const w = Math.max(1, width);
-    const h = Math.max(1, height);
-    const diag = Math.sqrt(w * w + h * h);
+    const w = M.max(1, width);
+    const h = M.max(1, height);
+    const diag = M.sqrt(w * w + h * h);
     const periods = RIPPLE.nebulaPeriods || [8.4, 10.8, 12.8];
     for (let i = 0; i < 3; i++) {
-      const period = Math.max(1, Number(periods[i]) || 10);
-      const rawSin = 0.5 + 0.5 * Math.sin((TAU * t) / period + NEBULA_PHASES[i]);
+      const period = M.max(1, Number(periods[i]) || 10);
+      const rawSin = 0.5 + 0.5 * M.sin((TAU * t) / period + NEBULA_PHASES[i]);
       const env = rawSin * rawSin * (3 - 2 * rawSin);
-      const strength = still ? 0.28 : 0.04 + 0.96 * Math.pow(env, 1.3);
+      const strength = still ? 0.28 : 0.04 + 0.96 * M.pow(env, 1.3);
       const dir = i === 1 ? -1 : 1;
-      const ang = NEBULA_ANGLES[i] + 0.52 * Math.sin(t * (0.13 + i * 0.023) + i * 1.7) + dir * t * (0.045 + i * 0.006);
-      const ringR = 0.34 + 0.045 * Math.cos(t * (0.11 + i * 0.019) + i * 1.1);
+      const ang = NEBULA_ANGLES[i] + 0.52 * M.sin(t * (0.13 + i * 0.023) + i * 1.7) + dir * t * (0.045 + i * 0.006);
+      const ringR = 0.34 + 0.045 * M.cos(t * (0.11 + i * 0.019) + i * 1.1);
       const lobe = out[i];
-      lobe.x = (0.5 + ringR * 1.06 * Math.cos(ang)) * w;
-      lobe.y = (0.5 + ringR * 0.92 * Math.sin(ang)) * h;
+      lobe.x = (0.5 + ringR * 1.06 * M.cos(ang)) * w;
+      lobe.y = (0.5 + ringR * 0.92 * M.sin(ang)) * h;
       lobe.radius = diag * (0.29 + 0.06 * strength);
       lobe.strength = strength;
-      const hue = NEBULA_HUES[i] + 0.14 * Math.sin(t * 0.09 + i * 2.1);
-      lobe.hue = hue - Math.floor(hue);
+      const hue = NEBULA_HUES[i] + 0.14 * M.sin(t * 0.09 + i * 2.1);
+      lobe.hue = hue - M.floor(hue);
     }
     return out;
   }
-  function createWaveField(columns, rows, random = Math.random) {
+  function clampDim(n) { return n > 0 && Number.isFinite(n) ? M.floor(n) : 0; }
+  function createWaveField(columns, rows, random = M.random) {
+    columns = clampDim(columns);
+    rows = clampDim(rows);
     const cells = columns * rows;
     const height = new Float32Array(cells);
     const velocity = new Float32Array(cells);
@@ -245,10 +249,10 @@
     const heightSquared = cellHeight * cellHeight;
     const invW2 = 1 / widthSquared;
     const invH2 = 1 / heightSquared;
-    const loadDecay = Math.exp(-WAVE_STEP / RIPPLE.injectLoadDecay);
-    const wakeLoadDecay = Math.exp(-WAVE_STEP / 0.2);
+    const loadDecay = M.exp(-WAVE_STEP / RIPPLE.injectLoadDecay);
+    const wakeLoadDecay = M.exp(-WAVE_STEP / 0.2);
     const knee = RIPPLE.heightKnee;
-    const span = Math.max(0.01, RIPPLE.heightCap - RIPPLE.heightKnee);
+    const span = M.max(0.01, RIPPLE.heightCap - RIPPLE.heightKnee);
     const sources = [];
     let moving = false;
     let behind = 0;
@@ -260,14 +264,14 @@
     let actR0 = rows;
     let actR1 = -1;
     if (columns >= 32 && rows >= 16) {
-      const gCols = Math.ceil(columns / 2) + 1;
-      const gRows = Math.ceil(rows / 2) + 1;
+      const gCols = M.ceil(columns / 2) + 1;
+      const gRows = M.ceil(rows / 2) + 1;
       const coarse = new Float32Array(gCols * gRows);
       for (let gr = 0; gr < gRows; gr++) {
-        const r = Math.min(rows - 1, gr * 2);
+        const r = M.min(rows - 1, gr * 2);
         const ny = (r * cellHeight) / RIPPLE.turbulenceScale + seed;
         for (let gc = 0; gc < gCols; gc++) {
-          const c = Math.min(columns - 1, gc * 2);
+          const c = M.min(columns - 1, gc * 2);
           coarse[gr * gCols + gc] = fractalNoise((c * cellWidth) / RIPPLE.turbulenceScale + seed, ny);
         }
       }
@@ -275,18 +279,18 @@
         const gr = row >> 1;
         const ty = (row & 1) * 0.5;
         const rowOff0 = gr * gCols;
-        const rowOff1 = Math.min(gRows - 1, gr + 1) * gCols;
+        const rowOff1 = M.min(gRows - 1, gr + 1) * gCols;
         for (let column = 0; column < columns; column++) {
           const cell = row * columns + column;
           const gc = column >> 1;
-          const gc1 = Math.min(gCols - 1, gc + 1);
+          const gc1 = M.min(gCols - 1, gc + 1);
           const tx = (column & 1) * 0.5;
           const n0 = coarse[rowOff0 + gc] + (coarse[rowOff0 + gc1] - coarse[rowOff0 + gc]) * tx;
           const n1 = coarse[rowOff1 + gc] + (coarse[rowOff1 + gc1] - coarse[rowOff1 + gc]) * tx;
           const noise = n0 + (n1 - n0) * ty;
-          speedFactor[cell] = Math.min(1.4, Math.max(0.3, 1 + RIPPLE.turbulence * (noise - 0.5) * 3.2));
-          const edge = Math.min(column, row, columns - 1 - column, rows - 1 - row);
-          const border = Math.max(0, 1 - edge / RIPPLE.borderCells) ** 2;
+          speedFactor[cell] = M.min(1.4, M.max(0.3, 1 + RIPPLE.turbulence * (noise - 0.5) * 3.2));
+          const edge = M.min(column, row, columns - 1 - column, rows - 1 - row);
+          const border = M.max(0, 1 - edge / RIPPLE.borderCells) ** 2;
           damping[cell] = RIPPLE.damping + border * 12;
         }
       }
@@ -295,9 +299,9 @@
         for (let column = 0; column < columns; column++) {
           const cell = row * columns + column;
           const noise = fractalNoise((column * cellWidth) / RIPPLE.turbulenceScale + seed, (row * cellHeight) / RIPPLE.turbulenceScale + seed);
-          speedFactor[cell] = Math.min(1.4, Math.max(0.3, 1 + RIPPLE.turbulence * (noise - 0.5) * 3.2));
-          const edge = Math.min(column, row, columns - 1 - column, rows - 1 - row);
-          const border = Math.max(0, 1 - edge / RIPPLE.borderCells) ** 2;
+          speedFactor[cell] = M.min(1.4, M.max(0.3, 1 + RIPPLE.turbulence * (noise - 0.5) * 3.2));
+          const edge = M.min(column, row, columns - 1 - column, rows - 1 - row);
+          const border = M.max(0, 1 - edge / RIPPLE.borderCells) ** 2;
           damping[cell] = RIPPLE.damping + border * 12;
         }
       }
@@ -317,12 +321,12 @@
       const nearMinusFar = RIPPLE.speedNear - RIPPLE.speedFar;
       const maxReachPx = RIPPLE.speedFalloff * 4.6;
       const maxReachSq = maxReachPx * maxReachPx;
-      const reachCols = Math.ceil(maxReachPx / cellWidth);
-      const reachRows = Math.ceil(maxReachPx / cellHeight);
-      const r0 = Math.max(0, row - reachRows);
-      const r1 = Math.min(rows - 1, row + reachRows);
-      const c0 = Math.max(0, column - reachCols);
-      const c1 = Math.min(columns - 1, column + reachCols);
+      const reachCols = M.ceil(maxReachPx / cellWidth);
+      const reachRows = M.ceil(maxReachPx / cellHeight);
+      const r0 = M.max(0, row - reachRows);
+      const r1 = M.min(rows - 1, row + reachRows);
+      const c0 = M.max(0, column - reachCols);
+      const c1 = M.min(columns - 1, column + reachCols);
       for (let r = r0; r <= r1; r++) {
         const dy = (r - row) * cellHeight;
         const dy2 = dy * dy;
@@ -332,7 +336,7 @@
           const d2 = dx * dx + dy2;
           if (d2 > maxReachSq) continue;
           const cell = rowBase + c;
-          const speed = (RIPPLE.speedFar + nearMinusFar * Math.exp(-Math.sqrt(d2) / RIPPLE.speedFalloff)) * speedFactor[cell];
+          const speed = (RIPPLE.speedFar + nearMinusFar * M.exp(-M.sqrt(d2) / RIPPLE.speedFalloff)) * speedFactor[cell];
           const squared = speed * speed;
           if (squared > speedSquared[cell]) speedSquared[cell] = squared;
         }
@@ -342,21 +346,21 @@
       primeFarBaseline();
       const wakeBoost = (RIPPLE.speedNear - RIPPLE.speedFar) * (0.14 + 0.14 * speedNorm);
       const reachPx = RIPPLE.speedFalloff * 0.65;
-      const reachCols = Math.ceil(reachPx / cellWidth);
-      const reachRows = Math.ceil(reachPx / cellHeight);
-      const r0 = Math.max(0, row - reachRows);
-      const r1 = Math.min(rows - 1, row + reachRows);
-      const c0 = Math.max(0, column - reachCols);
-      const c1 = Math.min(columns - 1, column + reachCols);
+      const reachCols = M.ceil(reachPx / cellWidth);
+      const reachRows = M.ceil(reachPx / cellHeight);
+      const r0 = M.max(0, row - reachRows);
+      const r1 = M.min(rows - 1, row + reachRows);
+      const c0 = M.max(0, column - reachCols);
+      const c1 = M.min(columns - 1, column + reachCols);
       for (let r = r0; r <= r1; r++) {
         const dy = (r - row) * cellHeight;
         const dy2 = dy * dy;
         for (let c = c0; c <= c1; c++) {
           const dx = (c - column) * cellWidth;
-          const dist = Math.sqrt(dx * dx + dy2);
+          const dist = M.sqrt(dx * dx + dy2);
           if (dist > reachPx) continue;
           const cell = r * columns + c;
-          const speed = (RIPPLE.speedFar + wakeBoost * Math.exp(-dist / (RIPPLE.speedFalloff * 0.55))) * speedFactor[cell];
+          const speed = (RIPPLE.speedFar + wakeBoost * M.exp(-dist / (RIPPLE.speedFalloff * 0.55))) * speedFactor[cell];
           const squared = speed * speed;
           if (squared > speedSquared[cell]) speedSquared[cell] = squared;
         }
@@ -365,12 +369,12 @@
     function injectGain() {
       const k = RIPPLE.injectSoftness;
       const n = 1 + load;
-      return Math.tanh(k * n) / (Math.tanh(k) * n);
+      return M.tanh(k * n) / (M.tanh(k) * n);
     }
     function skimmerGain() {
       const k = 0.85;
       const n = 1 + wakeLoad;
-      return Math.tanh(k * n) / (Math.tanh(k) * n);
+      return M.tanh(k * n) / (M.tanh(k) * n);
     }
     function drive() {
       let keep = 0;
@@ -382,17 +386,17 @@
           continue;
         }
         const freq = source.frequency || RIPPLE.sourceFrequency;
-        const envelope = Math.sin((Math.PI * source.time) / source.duration);
-        const rate = Math.cos(TAU * freq * source.time) * TAU * RIPPLE.sourceFrequency;
+        const envelope = M.sin((M.PI * source.time) / source.duration);
+        const rate = M.cos(TAU * freq * source.time) * TAU * RIPPLE.sourceFrequency;
         const radius = RIPPLE.sourceRadius * source.radiusScale;
         const inv2r2 = 1 / (2 * radius * radius);
         const gain = RIPPLE.sourceAmplitude * source.amplitudeScale * envelope * rate * WAVE_STEP;
-        const reachColumns = Math.ceil((radius * 3) / cellWidth);
-        const reachRows = Math.ceil((radius * 3) / cellHeight);
-        const r0 = Math.max(0, source.row - reachRows);
-        const r1 = Math.min(rows - 1, source.row + reachRows);
-        const c0 = Math.max(0, source.column - reachColumns);
-        const c1 = Math.min(columns - 1, source.column + reachColumns);
+        const reachColumns = M.ceil((radius * 3) / cellWidth);
+        const reachRows = M.ceil((radius * 3) / cellHeight);
+        const r0 = M.max(0, source.row - reachRows);
+        const r1 = M.min(rows - 1, source.row + reachRows);
+        const c0 = M.max(0, source.column - reachColumns);
+        const c1 = M.min(columns - 1, source.column + reachColumns);
         if (r0 < actR0) actR0 = r0;
         if (r1 > actR1) actR1 = r1;
         if (c0 < actC0) actC0 = c0;
@@ -404,9 +408,9 @@
           for (let c = c0; c <= c1; c++) {
             const dx = (c - source.column) * cellWidth;
             const i = rowBase + c;
-            let v = height[i] + gain * Math.exp(-(dx * dx + dy2) * inv2r2);
+            let v = height[i] + gain * M.exp(-(dx * dx + dy2) * inv2r2);
             const av = v < 0 ? -v : v;
-            if (av > knee) v = (v < 0 ? -1 : 1) * (knee + span * Math.tanh((av - knee) / span));
+            if (av > knee) v = (v < 0 ? -1 : 1) * (knee + span * M.tanh((av - knee) / span));
             height[i] = v;
           }
         }
@@ -418,10 +422,10 @@
     function step() {
       let peak = 0;
       if (actC0 <= actC1 && actR0 <= actR1) {
-        const rStart = Math.max(0, actR0 - 1);
-        const rEnd = Math.min(rows - 1, actR1 + 1);
-        const cStart = Math.max(0, actC0 - 1);
-        const cEnd = Math.min(columns - 1, actC1 + 1);
+        const rStart = M.max(0, actR0 - 1);
+        const rEnd = M.min(rows - 1, actR1 + 1);
+        const cStart = M.max(0, actC0 - 1);
+        const cEnd = M.min(columns - 1, actC1 + 1);
         const decayMul = 1 - 0.35 * WAVE_STEP;
         for (let r = rStart; r <= rEnd; r++) {
           const rowBase = r * columns;
@@ -473,7 +477,7 @@
         for (let r = actR0; r <= actR1; r++) {
           const rowBase = r * columns;
           for (let c = actC0; c <= actC1; c++) {
-            const a = Math.abs(height[rowBase + c]);
+            const a = M.abs(height[rowBase + c]);
             if (a > peak) peak = a;
           }
         }
@@ -509,28 +513,28 @@
       disturb(column, row, opts) {
         if (columns <= 0 || rows <= 0) return;
         if (!Number.isFinite(column) || !Number.isFinite(row)) return;
-        const c = Math.max(0, Math.min(columns - 1, Math.floor(column)));
-        const r = Math.max(0, Math.min(rows - 1, Math.floor(row)));
+        const c = M.max(0, M.min(columns - 1, M.floor(column)));
+        const r = M.max(0, M.min(rows - 1, M.floor(row)));
         const hasOpts = opts && typeof opts === 'object';
         if (hasOpts && opts.wake) {
-          raiseWakeSpeeds(c, r, Number.isFinite(opts.speedNorm) ? Math.max(0, Math.min(1, opts.speedNorm)) : 0.5);
+          raiseWakeSpeeds(c, r, Number.isFinite(opts.speedNorm) ? M.max(0, M.min(1, opts.speedNorm)) : 0.5);
         } else {
           raiseSpeeds(c, r);
         }
         const duration = hasOpts && Number.isFinite(opts.duration) && opts.duration > 0
           ? opts.duration
-          : (2 + Math.floor(random() * 2)) / RIPPLE.sourceFrequency;
+          : (2 + M.floor(random() * 2)) / RIPPLE.sourceFrequency;
         const radiusScale = hasOpts && Number.isFinite(opts.radiusScale) && opts.radiusScale > 0
           ? opts.radiusScale
           : 0.78 + random() * 0.92;
         const baseAmp = hasOpts && Number.isFinite(opts.amplitudeScale)
-          ? Math.max(0, opts.amplitudeScale)
+          ? M.max(0, opts.amplitudeScale)
           : 0.78 + random() * 0.72;
         const frequency = hasOpts && Number.isFinite(opts.frequency) && opts.frequency > 0
           ? opts.frequency
           : RIPPLE.sourceFrequency;
         const loadWeight = hasOpts && Number.isFinite(opts.loadWeight)
-          ? Math.max(0, opts.loadWeight)
+          ? M.max(0, opts.loadWeight)
           : 1;
         const delay = hasOpts && Number.isFinite(opts.delay) && opts.delay > 0
           ? opts.delay
@@ -552,16 +556,16 @@
       skimmer(column, row, speedNorm = 0.5) {
         if (columns <= 0 || rows <= 0) return;
         if (!Number.isFinite(column) || !Number.isFinite(row)) return;
-        const c = Math.max(0, Math.min(columns - 1, Math.floor(column)));
-        const r = Math.max(0, Math.min(rows - 1, Math.floor(row)));
-        const s = Number.isFinite(Number(speedNorm)) ? Math.max(0, Math.min(1, Number(speedNorm))) : 0.5;
+        const c = M.max(0, M.min(columns - 1, M.floor(column)));
+        const r = M.max(0, M.min(rows - 1, M.floor(row)));
+        const s = Number.isFinite(Number(speedNorm)) ? M.max(0, M.min(1, Number(speedNorm))) : 0.5;
         raiseWakeSpeeds(c, r, s);
         const amp = (0.048 + 0.088 * s) * skimmerGain();
         const last = sources.length > 0 ? sources[sources.length - 1] : null;
-        if (last && last.skimmer && Math.abs(last.column - c) <= 2 && Math.abs(last.row - r) <= 2 && last.time < 0.036) {
+        if (last && last.skimmer && M.abs(last.column - c) <= 2 && M.abs(last.row - r) <= 2 && last.time < 0.036) {
           last.column = c;
           last.row = r;
-          last.amplitudeScale = Math.min(0.145, Math.max(last.amplitudeScale, amp));
+          last.amplitudeScale = M.min(0.145, M.max(last.amplitudeScale, amp));
           moving = true;
           return;
         }
@@ -580,11 +584,11 @@
           frequency: 1.5 / duration,
           skimmer: true,
         });
-        wakeLoad = Math.min(2.4, wakeLoad + 0.28);
+        wakeLoad = M.min(2.4, wakeLoad + 0.28);
         moving = true;
       },
       advance(seconds) {
-        behind += Math.min(seconds, MAX_ADVANCE);
+        behind += M.min(seconds, MAX_ADVANCE);
         while (behind >= WAVE_STEP) {
           step();
           behind -= WAVE_STEP;
@@ -605,7 +609,7 @@
       }
     }
     const m = /rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)/i.exec(s);
-    if (m) return [Math.round(Number(m[1])), Math.round(Number(m[2])), Math.round(Number(m[3]))];
+    if (m) return [M.round(Number(m[1])), M.round(Number(m[2])), M.round(Number(m[3]))];
     return null;
   }
   const VERTEX_SHADER = `#version 300 es
@@ -753,13 +757,13 @@ color = vec4(rgb * a, a);
     return {
       x: cfg ? Number(cfg.x || 0) : 0,
       y: cfg ? Number(cfg.y || 0) : 0,
-      radius: cfg ? Math.max(1, Number(cfg.radius || 230)) : 230,
-      strength: cfg ? Math.max(0, Math.min(1, Number(cfg.strength ?? 1))) : 0,
+      radius: cfg ? M.max(1, Number(cfg.radius || 230)) : 230,
+      strength: cfg ? M.max(0, M.min(1, Number(cfg.strength ?? 1))) : 0,
     };
   }
   function createWebGL2Renderer(canvas, columns, rows) {
     const gl = canvas.getContext('webgl2', { alpha: true, premultipliedAlpha: true, antialias: false, preserveDrawingBuffer: false });
-    if (!gl) return null;
+    if (!gl || gl.isContextLost?.()) return null;
     const atlasCanvas = canvas.ownerDocument.createElement('canvas');
     const atlasContext = atlasCanvas.getContext('2d');
     if (!atlasContext) return null;
@@ -782,7 +786,14 @@ color = vec4(rgb * a, a);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
       return tex;
     }
+    function free() {
+      if (program) gl.deleteProgram(program);
+      if (cellTexture) gl.deleteTexture(cellTexture);
+      if (atlasTexture) gl.deleteTexture(atlasTexture);
+      program = cellTexture = atlasTexture = null;
+    }
     function build() {
+      free();
       program = gl.createProgram();
       const vs = compile(gl.VERTEX_SHADER, VERTEX_SHADER);
       const fs = compile(gl.FRAGMENT_SHADER, FRAGMENT_SHADER);
@@ -809,8 +820,8 @@ color = vec4(rgb * a, a);
     function buildAtlas(font, dpr) {
       const key = font + '|' + dpr;
       if (key === atlasKey) return;
-      const width = Math.ceil(RIPPLE.cellWidth * dpr);
-      const height = Math.ceil(RIPPLE.cellHeight * dpr);
+      const width = M.ceil(RIPPLE.cellWidth * dpr);
+      const height = M.ceil(RIPPLE.cellHeight * dpr);
       atlasCanvas.width = width * GLYPHS.length;
       atlasCanvas.height = height;
       atlasContext.setTransform(width / RIPPLE.cellWidth, 0, 0, height / RIPPLE.cellHeight, 0, 0);
@@ -829,12 +840,19 @@ color = vec4(rgb * a, a);
       gl.uniform1f(uniforms.glyphCount, GLYPHS.length);
       atlasKey = key;
     }
-    build();
+    try {
+      build();
+    } catch {
+      try { free(); } catch {}
+      return null;
+    }
     return {
       mode: 'webgl2',
       data,
       build,
+      isContextLost: () => Boolean(gl.isContextLost?.()),
       draw(palette, dpr, uploadCells = true) {
+        if (!program || gl.isContextLost?.()) return;
         buildAtlas(palette.fontFamily, dpr);
         gl.viewport(0, 0, canvas.width, canvas.height);
         gl.uniform2f(uniforms.size, canvas.width, canvas.height);
@@ -843,11 +861,11 @@ color = vec4(rgb * a, a);
         gl.uniform3f(uniforms.ink, palette.ink[0] / 255, palette.ink[1] / 255, palette.ink[2] / 255);
         gl.uniform3f(uniforms.wave, palette.wave[0] / 255, palette.wave[1] / 255, palette.wave[2] / 255);
         const aura = readAura(palette);
-        const amb = Number.isFinite(Number(palette.ambientIntensity)) ? Math.max(0, Math.min(1, Number(palette.ambientIntensity))) : 1;
+        const amb = Number.isFinite(Number(palette.ambientIntensity)) ? M.max(0, M.min(1, Number(palette.ambientIntensity))) : 1;
         const specCode = Number(palette.spectrumCode ?? 0);
         gl.uniform4f(uniforms.aura, aura.x * dpr, aura.y * dpr, aura.radius * dpr, aura.strength * amb);
         gl.uniform4f(uniforms.optics, RIPPLE.auraTint * (specCode === 5 ? 0.55 : 1), RIPPLE.prismTint * (specCode === 5 ? 0.45 : 1), RIPPLE.prismCap, palette.prismStrength);
-        gl.uniform1f(uniforms.auraLift, RIPPLE.auraLift * amb);
+        gl.uniform1f(uniforms.auraLift, RIPPLE.auraLift * amb * (palette.auraLiftScale ?? 1));
         gl.uniform1f(uniforms.auraPhase, palette.auraPhase || 0);
         gl.uniform1f(uniforms.lightMode, palette.dark === false ? 1 : 0);
         gl.uniform1f(uniforms.spectrumMode, specCode);
@@ -858,8 +876,9 @@ color = vec4(rgb * a, a);
         gl.uniform4f(uniforms.neb0, n0 ? n0.x * dpr : 0, n0 ? n0.y * dpr : 0, n0 ? n0.radius * dpr : 1, n0 ? n0.strength * amb : 0);
         gl.uniform4f(uniforms.neb1, n1 ? n1.x * dpr : 0, n1 ? n1.y * dpr : 0, n1 ? n1.radius * dpr : 1, n1 ? n1.strength * amb : 0);
         gl.uniform4f(uniforms.neb2, n2 ? n2.x * dpr : 0, n2 ? n2.y * dpr : 0, n2 ? n2.radius * dpr : 1, n2 ? n2.strength * amb : 0);
-        gl.uniform4f(uniforms.nebOpt, n0 ? n0.hue : 0, n1 ? n1.hue : 0, n2 ? n2.hue : 0, RIPPLE.nebulaTint * amb * (specCode === 5 ? 0.45 : 1));
-        gl.uniform1f(uniforms.nebulaLift, RIPPLE.nebulaLift * amb);
+        const nebL = palette.nebulaLiftScale ?? 1;
+        gl.uniform4f(uniforms.nebOpt, n0 ? n0.hue : 0, n1 ? n1.hue : 0, n2 ? n2.hue : 0, RIPPLE.nebulaTint * amb * (specCode === 5 ? 0.45 : 1) * (0.35 + 0.65 * nebL));
+        gl.uniform1f(uniforms.nebulaLift, RIPPLE.nebulaLift * amb * nebL);
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, cellTexture);
         if (uploadCells !== false) {
@@ -869,10 +888,9 @@ color = vec4(rgb * a, a);
         gl.clear(gl.COLOR_BUFFER_BIT);
         gl.drawArrays(gl.TRIANGLES, 0, 3);
       },
-      dispose() {
-        gl.deleteProgram(program);
-        gl.deleteTexture(cellTexture);
-        gl.deleteTexture(atlasTexture);
+      dispose(keep) {
+        free();
+        if (!keep) try { gl.getExtension?.('WEBGL_lose_context')?.loseContext?.(); } catch {}
       },
     };
   }
@@ -903,8 +921,8 @@ color = vec4(rgb * a, a);
       const key = font + '|' + dpr;
       if (key === atlasKey && mask) return;
       const { cellWidth, cellHeight } = RIPPLE;
-      gw = Math.max(1, Math.ceil(cellWidth * dpr));
-      gh = Math.max(1, Math.ceil(cellHeight * dpr));
+      gw = M.max(1, M.ceil(cellWidth * dpr));
+      gh = M.max(1, M.ceil(cellHeight * dpr));
       atlas.width = gw * GLYPHS.length;
       atlas.height = gh;
       atlasCtx.setTransform(gw / cellWidth, 0, 0, gh / cellHeight, 0, 0);
@@ -930,7 +948,7 @@ color = vec4(rgb * a, a);
     }
     function ensureImage() {
       if (!image || image.width !== canvas.width || image.height !== canvas.height) {
-        image = ctx.createImageData(Math.max(1, canvas.width), Math.max(1, canvas.height));
+        image = ctx.createImageData(M.max(1, canvas.width), M.max(1, canvas.height));
         pixels = new Uint32Array(image.data.buffer);
       }
     }
@@ -947,7 +965,7 @@ color = vec4(rgb * a, a);
         const ink = palette.ink;
         const wave = palette.wave;
         const isLight = palette.dark === false;
-        const amb = Number.isFinite(Number(palette.ambientIntensity)) ? Math.max(0, Math.min(1, Number(palette.ambientIntensity))) : 1;
+        const amb = Number.isFinite(Number(palette.ambientIntensity)) ? M.max(0, M.min(1, Number(palette.ambientIntensity))) : 1;
         const specCode = Number(palette.spectrumCode ?? 0);
         const aura = readAura(palette);
         const auraStrength = aura.strength * amb;
@@ -965,7 +983,7 @@ color = vec4(rgb * a, a);
           if (srcLobe && srcLobe.strength * amb > 0.001) {
             dstLobe.x = srcLobe.x * dpr;
             dstLobe.y = srcLobe.y * dpr;
-            dstLobe.r = Math.max(1, srcLobe.radius * dpr);
+            dstLobe.r = M.max(1, srcLobe.radius * dpr);
             dstLobe.r2 = dstLobe.r * dstLobe.r;
             dstLobe.s = srcLobe.strength * amb;
             dstLobe.hue = srcLobe.hue;
@@ -975,16 +993,18 @@ color = vec4(rgb * a, a);
           }
         }
         const auraTintScale = RIPPLE.auraTint * (specCode === 5 ? 0.55 : 1);
-        const nebTintScale = RIPPLE.nebulaTint * amb * (specCode === 5 ? 0.45 : 1);
-        const nebLiftScale = RIPPLE.nebulaLift * amb;
+        const auraLiftScale = RIPPLE.auraLift * (palette.auraLiftScale ?? 1);
+        const nebL = palette.nebulaLiftScale ?? 1;
+        const nebTintScale = RIPPLE.nebulaTint * amb * (specCode === 5 ? 0.45 : 1) * (0.35 + 0.65 * nebL);
+        const nebLiftScale = RIPPLE.nebulaLift * amb * nebL;
         const prismGain = RIPPLE.prismTint * palette.prismStrength * (specCode === 5 ? 0.45 : 1);
         const stepX = RIPPLE.cellWidth * dpr;
         const stepY = RIPPLE.cellHeight * dpr;
         const cellArea = gw * gh;
         for (let r = 0; r < rows; r++) {
-          const dy0 = Math.round(r * stepY);
+          const dy0 = M.round(r * stepY);
           if (dy0 >= H) break;
-          const hRows = Math.min(gh, H - dy0);
+          const hRows = M.min(gh, H - dy0);
           const cyPx = r * stepY + stepY / 2;
           const py = cyPx - ay;
           const py2 = py * py;
@@ -1011,12 +1031,12 @@ color = vec4(rgb * a, a);
               const px = cxPx - ax;
               const d2 = px * px + py2;
               if (d2 < ar2) {
-                const rNorm = Math.sqrt(d2) / ar;
+                const rNorm = M.sqrt(d2) / ar;
                 const u = 1 - rNorm;
                 const s = u * u * (3 - 2 * u);
                 wAura = s * (0.35 + 0.65 * s);
                 auraT = wAura * auraTintScale * auraStrength;
-                const ang = Math.atan2(py, px + 1e-5) / TAU + 0.5;
+                const ang = M.atan2(py, px + 1e-5) / TAU + 0.5;
                 auraHue = ang - rNorm * 0.45 + auraPhase;
               }
             }
@@ -1032,11 +1052,11 @@ color = vec4(rgb * a, a);
                 const ndy = i === 0 ? ndy0 : (i === 1 ? ndy1 : ndy2);
                 const nd2 = ndx * ndx + (i === 0 ? ndy02 : (i === 1 ? ndy12 : ndy22));
                 if (nd2 < lb.r2) {
-                  const rn = Math.sqrt(nd2) / lb.r;
+                  const rn = M.sqrt(nd2) / lb.r;
                   const u = 1 - rn;
                   const s = u * u * (3 - 2 * u);
                   const wi = s * (0.30 + 0.70 * s) * lb.s;
-                  const nang = Math.atan2(ndy, ndx + 1e-5) / TAU;
+                  const nang = M.atan2(ndy, ndx + 1e-5) / TAU;
                   spectrumRgb(lb.hue + nang * 0.22 - rn * 0.26, nebSampleRgb, !isLight, specCode);
                   wNeb += wi;
                   nebR += nebSampleRgb[0] * wi;
@@ -1049,14 +1069,14 @@ color = vec4(rgb * a, a);
             const nebT = wNebC * nebTintScale;
             const prismT = packed > 31 ? ((packed >> 5) / PRISM_LEVELS) * prismGain * (0.88 + 0.12 * wAura) : 0;
             if (isLight) {
-              alpha = Math.min(0.88, alpha * (1 + (RIPPLE.auraLift + 0.72) * wAura * auraStrength + prismT * 0.62 + nebLiftScale * 0.66 * wNebC));
+              alpha = M.min(0.88, alpha * (1 + (auraLiftScale + 0.72) * wAura * auraStrength + prismT * 0.62 + nebLiftScale * 0.66 * wNebC));
             } else if (wAura > 0 || wNebC > 0) {
-              alpha = Math.min(1, alpha * (1 + RIPPLE.auraLift * wAura * auraStrength + nebLiftScale * wNebC));
+              alpha = M.min(1, alpha * (1 + auraLiftScale * wAura * auraStrength + nebLiftScale * wNebC));
             }
             const total = auraT + prismT + nebT;
             if (total > 0.0001) {
-              const capped = Math.min(RIPPLE.prismCap, total);
-              const mixAmt = isLight ? Math.min(0.96, capped * 1.36) : capped;
+              const capped = M.min(RIPPLE.prismCap, total);
+              const mixAmt = isLight ? M.min(0.96, capped * 1.36) : capped;
               if (auraT > 0) spectrumRgb(auraHue, auraTintRgb, !isLight, specCode);
               if (prismT > 0) spectrumRgb((packed & 31) / HUE_LEVELS, prismTintRgb, !isLight, specCode);
               const nr = wNeb > 0.0001 ? nebR / wNeb : 0;
@@ -1069,14 +1089,14 @@ color = vec4(rgb * a, a);
               cg += (tg - cg) * mixAmt;
               cb += (tb - cb) * mixAmt;
             }
-            const a8 = Math.round(alpha * 256);
-            const R = Math.round(cr) & 255;
-            const G = Math.round(cg) & 255;
-            const B = Math.round(cb) & 255;
+            const a8 = M.round(alpha * 256);
+            const R = M.round(cr) & 255;
+            const G = M.round(cg) & 255;
+            const B = M.round(cb) & 255;
             const rgb = LITTLE_ENDIAN ? (B << 16) | (G << 8) | R : (R << 24) | (G << 16) | (B << 8);
-            const dx0 = Math.round(c * stepX);
+            const dx0 = M.round(c * stepX);
             if (dx0 >= W) continue;
-            const wCols = Math.min(gw, W - dx0);
+            const wCols = M.min(gw, W - dx0);
             const m0 = (data[at] % GLYPHS.length) * cellArea;
             let o = dy0 * W + dx0;
             for (let y = 0, m = m0; y < hRows; y++, m += gw, o += W) {
@@ -1109,8 +1129,8 @@ color = vec4(rgb * a, a);
         y,
         w,
         h,
-        alpha: Number.isFinite(Number(z.alpha)) ? Math.max(0, Math.min(1, Number(z.alpha))) : RIPPLE.calmAlpha,
-        feather: Number.isFinite(Number(z.feather)) ? Math.max(1, Number(z.feather)) : RIPPLE.calmFeather,
+        alpha: Number.isFinite(Number(z.alpha)) ? M.max(0, M.min(1, Number(z.alpha))) : RIPPLE.calmAlpha,
+        feather: Number.isFinite(Number(z.feather)) ? M.max(1, Number(z.feather)) : RIPPLE.calmFeather,
       });
     }
     return out;
@@ -1122,7 +1142,7 @@ color = vec4(rgb * a, a);
   }
   function clampFinite(val, fallback, min, max) {
     const n = Number(val);
-    return Number.isFinite(n) ? Math.max(min, Math.min(max, n)) : fallback;
+    return Number.isFinite(n) ? M.max(min, M.min(max, n)) : fallback;
   }
   function isCanvasDocHidden(canvas) {
     const owner = canvas && canvas.ownerDocument;
@@ -1130,7 +1150,9 @@ color = vec4(rgb * a, a);
     return typeof document !== 'undefined' && Boolean(document && document.hidden === true);
   }
   function createGlyphField(canvas, columns, rows, waves, options) {
-    const force2D = typeof globalThis !== 'undefined' && globalThis.__agRippleForce2D === true;
+    columns = clampDim(columns);
+    rows = clampDim(rows);
+    const force2D = Boolean(options && (options.prefer2D || options.force2D)) || (typeof globalThis !== 'undefined' && globalThis.__agRippleForce2D === true);
     const renderer = (columns > 0 && rows > 0)
       ? ((force2D ? null : createWebGL2Renderer(canvas, columns, rows)) || create2DRenderer(canvas, columns, rows))
       : null;
@@ -1146,13 +1168,14 @@ color = vec4(rgb * a, a);
     const wasLit = new Uint8Array(cells);
     let lastIdleRefreshMs = -Infinity;
     let lastIdleDark = null;
+    let lastIdleAlphaScale = -1;
     const cloudColumns = new Map();
     const nebulaState = [
       { x: 0, y: 0, radius: 1, strength: 0, hue: 0 },
       { x: 0, y: 0, radius: 1, strength: 0, hue: 0 },
       { x: 0, y: 0, radius: 1, strength: 0, hue: 0 },
     ];
-    const effective = { dark: true, ink: [0, 0, 0], wave: [0, 0, 0], fontFamily: 'monospace', aura: null, nebula: nebulaState, prismStrength: 1, auraPhase: 0, ambientIntensity: 1, spectrumCode: 0 };
+    const effective = { dark: true, ink: [0, 0, 0], wave: [0, 0, 0], fontFamily: 'monospace', aura: null, nebula: nebulaState, prismStrength: 1, auraPhase: 0, ambientIntensity: 1, spectrumCode: 0, alphaScale: 1, nebulaLiftScale: 1, auraLiftScale: 1 };
     let lastNebulaEnabled = true;
     let instanceZones = normalizeZones(options && options.calmZones);
     let appliedKey = null;
@@ -1163,23 +1186,23 @@ color = vec4(rgb * a, a);
     let glowing = false;
     let prismBurst = 0;
     let stale = true;
-    const colClouds = new Array(Math.max(0, columns));
-    const featherCols = Math.max(1, columns * RIPPLE.edgeFeather);
-    const featherRows = Math.max(1, rows * RIPPLE.edgeFeather);
+    const colClouds = new Array(M.max(0, columns));
+    const featherCols = M.max(1, columns * RIPPLE.edgeFeather);
+    const featherRows = M.max(1, rows * RIPPLE.edgeFeather);
     for (let row = 0; row < rows; row++) {
       const y = row * cellHeight + cellHeight / 2;
-      const ey = smooth((Math.min(row, rows - 1 - row) + 0.5) / featherRows);
+      const ey = smooth((M.min(row, rows - 1 - row) + 0.5) / featherRows);
       const rowBase = row * columns;
       for (let column = 0; column < columns; column++) {
         const cell = rowBase + column;
         const x = column * cellWidth + cellWidth / 2;
         patch[cell] = patchClear(x, y);
-        const ex = smooth((Math.min(column, columns - 1 - column) + 0.5) / featherCols);
+        const ex = smooth((M.min(column, columns - 1 - column) + 0.5) / featherCols);
         edge[cell] = ex * ey;
         mask[cell] = edge[cell];
         const phase = fractalNoise(x / RIPPLE.breathScale + 53, y / RIPPLE.breathScale + 71) * TAU * 1.7;
-        breathSin[cell] = Math.sin(phase);
-        breathCos[cell] = Math.cos(phase);
+        breathSin[cell] = M.sin(phase);
+        breathCos[cell] = M.cos(phase);
       }
     }
     function applyZones(list) {
@@ -1194,11 +1217,11 @@ color = vec4(rgb * a, a);
           let calm = 1;
           for (let i = 0; i < list.length; i++) {
             const z = list[i];
-            const dx = Math.max(z.x - x, 0, x - (z.x + z.w));
-            const dy = Math.max(z.y - y, 0, y - (z.y + z.h));
+            const dx = M.max(z.x - x, 0, x - (z.x + z.w));
+            const dy = M.max(z.y - y, 0, y - (z.y + z.h));
             const signed = dx > 0 || dy > 0
-              ? Math.sqrt(dx * dx + dy * dy)
-              : -Math.min(x - z.x, z.x + z.w - x, y - z.y, z.y + z.h - y);
+              ? M.sqrt(dx * dx + dy * dy)
+              : -M.min(x - z.x, z.x + z.w - x, y - z.y, z.y + z.h - y);
             if (signed >= z.feather) continue;
             const inset = z.feather * 0.35;
             const t = smooth((signed + inset) / (z.feather + inset));
@@ -1219,17 +1242,14 @@ color = vec4(rgb * a, a);
       }
       return lastZonesNormalized;
     }
-    function onContextLost(e) { e.preventDefault(); }
-    function onContextRestored() {
-      if (renderer) renderer.build();
-      stale = true;
-    }
+    const onContextLost = (e) => { e?.preventDefault?.(); try { options?.onContextLost?.(e); } catch {} };
+    const onContextRestored = () => { try { renderer?.build?.(); } catch {} stale = true; };
     if (canvas && canvas.addEventListener) {
       canvas.addEventListener('webglcontextlost', onContextLost);
       canvas.addEventListener('webglcontextrestored', onContextRestored);
     }
     function tickAt(now, still) {
-      return still ? 0 : Math.floor((now / 1000) * RIPPLE.changeRate);
+      return still ? 0 : M.floor((now / 1000) * RIPPLE.changeRate);
     }
     function cloudColumn(absolute) {
       let col = cloudColumns.get(absolute);
@@ -1258,14 +1278,18 @@ color = vec4(rgb * a, a);
       const useCoolLightMix = !dark && (specCode === 0 || specCode === 2);
       const mix = useCoolLightMix ? RIPPLE.lightCoolMix : 0;
       for (let i = 0; i < 3; i++) {
-        effective.ink[i] = Math.round(ink[i] + (RIPPLE.lightInkCool[i] - ink[i]) * mix);
-        effective.wave[i] = Math.round(wave[i] + (RIPPLE.lightWaveCool[i] - wave[i]) * mix * 0.65);
+        effective.ink[i] = M.round(ink[i] + (RIPPLE.lightInkCool[i] - ink[i]) * mix);
+        effective.wave[i] = M.round(wave[i] + (RIPPLE.lightWaveCool[i] - wave[i]) * mix * 0.65);
       }
+      const c = palette.conv === true, cl01 = (v, d) => (v !== undefined ? clampFinite(v, 1, 0, 1) : d);
       effective.dark = dark;
       effective.fontFamily = palette.fontFamily || 'monospace';
       effective.aura = ambient <= 0.001 ? null : (palette.aura || null);
       effective.ambientIntensity = ambient;
       effective.spectrumCode = specCode;
+      effective.alphaScale = cl01(palette.alphaScale, c ? (ambient <= 0.001 ? 0 : 0.85) : 1);
+      effective.nebulaLiftScale = cl01(palette.nebulaLiftScale, c ? 0.75 : 1);
+      effective.auraLiftScale = cl01(palette.auraLiftScale, c ? 0.75 : 1);
       if (palette.nebula === false || ambient <= 0.001) {
         effective.nebula = null;
         lastNebulaEnabled = false;
@@ -1274,9 +1298,9 @@ color = vec4(rgb * a, a);
         lastNebulaEnabled = true;
       }
       const ps = Number(palette.prismStrength ?? (palette.aura && palette.aura.active ? palette.aura.strength : 1));
-      effective.prismStrength = (Number.isFinite(ps) ? Math.max(0, Math.min(1, ps)) : 1) * ambient;
+      effective.prismStrength = (Number.isFinite(ps) ? M.max(0, M.min(1, ps)) : 1) * ambient;
       const ph = Number.isFinite(Number(palette.auraPhase)) ? Number(palette.auraPhase) : seconds * 0.12;
-      effective.auraPhase = ph - Math.floor(ph);
+      effective.auraPhase = ph - M.floor(ph);
       return effective;
     }
     function isFieldBusy() {
@@ -1284,6 +1308,7 @@ color = vec4(rgb * a, a);
     }
     return {
       mode: renderer ? renderer.mode : 'none',
+      isContextLost: () => Boolean(renderer && renderer.isContextLost && renderer.isContextLost()),
       invalidate() { stale = true; },
       setCalmZones(zones) {
         instanceZones = normalizeZones(zones);
@@ -1295,8 +1320,8 @@ color = vec4(rgb * a, a);
         if (!waves || typeof waves.disturb !== 'function' || columns <= 0 || rows <= 0) return false;
         const nx = clampFinite(normX, 0.5, 0, 1);
         const ny = clampFinite(normY, 0.62, 0, 1);
-        const col = Math.max(0, Math.min(columns - 1, Math.round(nx * (columns - 1))));
-        const row = Math.max(0, Math.min(rows - 1, Math.round(ny * (rows - 1))));
+        const col = M.max(0, M.min(columns - 1, M.round(nx * (columns - 1))));
+        const row = M.max(0, M.min(rows - 1, M.round(ny * (rows - 1))));
         waves.disturb(col, row, {
           amplitudeScale: 1.55,
           radiusScale: 1.45,
@@ -1304,7 +1329,7 @@ color = vec4(rgb * a, a);
           frequency: 6.4,
           loadWeight: 0.22,
         });
-        waves.disturb(col, Math.max(0, row - 1), {
+        waves.disturb(col, M.max(0, row - 1), {
           amplitudeScale: 1.28,
           radiusScale: 2.35,
           duration: 0.56,
@@ -1318,7 +1343,7 @@ color = vec4(rgb * a, a);
       },
       triggerTideSwell() {
         if (!waves || typeof waves.disturb !== 'function' || columns <= 0 || rows <= 0) return false;
-        const baseRow = Math.max(0, rows - 1 - Math.min(2, Math.floor(rows * 0.06)));
+        const baseRow = M.max(0, rows - 1 - M.min(2, M.floor(rows * 0.06)));
         const anchors = [
           { nx: 0.5, delay: 0, amp: 0.78, rad: 1.32, dur: 0.62, freq: 3.2 },
           { nx: 0.22, delay: 0.07, amp: 0.66, rad: 1.18, dur: 0.6, freq: 3.1 },
@@ -1326,7 +1351,7 @@ color = vec4(rgb * a, a);
         ];
         for (let i = 0; i < anchors.length; i++) {
           const a = anchors[i];
-          const col = Math.max(0, Math.min(columns - 1, Math.round(a.nx * (columns - 1))));
+          const col = M.max(0, M.min(columns - 1, M.round(a.nx * (columns - 1))));
           waves.disturb(col, baseRow, {
             amplitudeScale: a.amp,
             radiusScale: a.rad,
@@ -1343,18 +1368,18 @@ color = vec4(rgb * a, a);
         if (isCanvasDocHidden(canvas)) return false;
         if (stale || isFieldBusy() || tickAt(now, still) !== lastTick) return true;
         if (still || !lastNebulaEnabled) return false;
-        return Math.abs(now - lastDraw) >= RIPPLE.nebulaFrameMs;
+        return M.abs(now - lastDraw) >= RIPPLE.nebulaFrameMs;
       },
       draw(now, palette, still) {
         if (columns <= 0 || rows <= 0 || isCanvasDocHidden(canvas)) return;
-        const rawDt = lastDraw > -Infinity ? Math.max(0, (now - lastDraw) / 1000) : 0;
+        const rawDt = lastDraw > -Infinity ? M.max(0, (now - lastDraw) / 1000) : 0;
         if (!renderer) {
           // 无渲染上下文时依然准确推进尾迹与爆发增益衰减，防止 busy() 永久卡 true
           if (!waves.active()) {
             glowing = false;
             prismBurst = 0;
           } else if (prismBurst > 0) {
-            prismBurst = still ? 0 : prismBurst * Math.exp(-Math.max(0.016, rawDt) / 0.38);
+            prismBurst = still ? 0 : prismBurst * M.exp(-M.max(0.016, rawDt) / 0.38);
             if (prismBurst < 0.015) prismBurst = 0;
           }
           lastDraw = now;
@@ -1366,7 +1391,7 @@ color = vec4(rgb * a, a);
         const eff = prepareEffective(palette || {}, seconds, still);
         const burst = prismBurst;
         if (burst > 0) {
-          eff.prismStrength = Math.min(1.35, Math.max(eff.prismStrength, 0.96) + 0.34 * burst);
+          eff.prismStrength = M.min(1.35, M.max(eff.prismStrength, 0.96) + 0.34 * burst);
         }
         const tick = tickAt(now, still);
         const waveActive = waves.active();
@@ -1374,8 +1399,9 @@ color = vec4(rgb * a, a);
           stale ||
           tick !== lastTick ||
           eff.dark !== lastIdleDark ||
+          eff.alphaScale !== lastIdleAlphaScale ||
           renderer.mode !== 'webgl2' ||
-          Math.abs(now - lastIdleRefreshMs) >= 40;
+          M.abs(now - lastIdleRefreshMs) >= RIPPLE.nebulaFrameMs;
 
         if (renderer.mode === 'webgl2' && !needIdleRefresh && !waveActive && !glowing && burst <= 0) {
           renderer.draw(eff, canvas.width / (columns * cellWidth), false);
@@ -1390,30 +1416,31 @@ color = vec4(rgb * a, a);
             }
           }
         }
-        const drift = Math.floor((seconds * RIPPLE.cloudDrift) / cellWidth);
+        const drift = M.floor((seconds * RIPPLE.cloudDrift) / cellWidth);
         if (needIdleRefresh) {
           for (const abs of cloudColumns.keys()) if (abs < drift) cloudColumns.delete(abs);
           lastIdleRefreshMs = now;
           lastIdleDark = eff.dark;
+          lastIdleAlphaScale = eff.alphaScale;
         }
         const decay = still
           ? 0
-          : (rawDt > 0 ? Math.exp(-rawDt / RIPPLE.glowDecay) : (waveActive ? 1 : 0.88));
+          : (rawDt > 0 ? M.exp(-rawDt / RIPPLE.glowDecay) : (waveActive ? 1 : 0.88));
         const idleAlpha = eff.dark ? RIPPLE.idleAlphaDark : RIPPLE.idleAlphaLight;
-        const themeScale = eff.dark ? 1 : RIPPLE.lightAlphaScale;
+        const themeScale = (eff.dark ? 1 : RIPPLE.lightAlphaScale) * eff.alphaScale;
         const omega = (TAU / RIPPLE.breathPeriod) * seconds;
-        const bs = Math.sin(omega);
-        const bc = Math.cos(omega);
+        const bs = M.sin(omega);
+        const bc = M.cos(omega);
         const breathHalf = RIPPLE.breathDepth * 0.5;
         const cap = RIPPLE.waveAlphaCap;
         const slopeScale = RIPPLE.prismSlopeScale;
-        const prismThreshold = Math.min(0.95, Math.max(0, RIPPLE.prismThreshold * (1 - 0.38 * burst)));
+        const prismThreshold = M.min(0.95, M.max(0, RIPPLE.prismThreshold * (1 - 0.38 * burst)));
         const crestScale = 0.78 + 0.34 * burst;
         const bandScale = RIPPLE.prismBands / TAU;
         const invCap = 1 / cap;
         const inv2CellW = 1 / (2 * cellWidth);
         const inv2CellH = 1 / (2 * cellHeight);
-        const invPrismSpan = 1 / Math.max(1e-4, 1 - prismThreshold);
+        const invPrismSpan = 1 / M.max(1e-4, 1 - prismThreshold);
         const idleThemeScale = idleAlpha * themeScale;
         const height = waves.height;
         const { data } = renderer;
@@ -1442,7 +1469,7 @@ color = vec4(rgb * a, a);
               continue;
             }
             const breath = 1 - breathHalf * (1 + bs * breathCos[cell] + bc * breathSin[cell]);
-            const strength = Math.tanh(RIPPLE.waveGain * (here < 0 ? -here : here));
+            const strength = M.tanh(RIPPLE.waveGain * (here < 0 ? -here : here));
             const decayed = prevG * decay;
             const shown = decayed > strength ? decayed : strength;
             const lit = shown < 0.01 ? 0 : shown;
@@ -1454,7 +1481,7 @@ color = vec4(rgb * a, a);
             if (lit > 0) {
               if (lit > brightest) brightest = lit;
               const rawRatio = (patch[cell] * (lit * RIPPLE.glowAlpha + strength * RIPPLE.waveAlpha)) * invCap;
-              alpha += cap * Math.tanh(rawRatio);
+              alpha += cap * M.tanh(rawRatio);
               const sBoost = strength * 1.15;
               const lBoost = lit * 0.42;
               const mixRaw = sBoost > lBoost ? sBoost : lBoost;
@@ -1465,16 +1492,16 @@ color = vec4(rgb * a, a);
               const below = hasBelow ? height[cell + columns] : here;
               const gx = (right - left) * inv2CellW;
               const gy = (below - above) * inv2CellH;
-              const slopeG = Math.sqrt(gx * gx + gy * gy) * slopeScale;
+              const slopeG = M.sqrt(gx * gx + gy * gy) * slopeScale;
               const crestG = strength * crestScale;
               const g = slopeG > crestG ? slopeG : crestG;
               if (g > prismThreshold) {
                 const amt = smooth((g - prismThreshold) * invPrismSpan);
-                const level = Math.round(amt * PRISM_LEVELS);
+                const level = M.round(amt * PRISM_LEVELS);
                 if (level > 0) {
-                  let hue = Math.atan2(gy, gx + 1e-6) * bandScale + Math.tanh(here * 2.4) * 0.3;
-                  hue -= Math.floor(hue);
-                  packed = (level << 5) | (Math.floor(hue * HUE_LEVELS) & 31);
+                  let hue = M.atan2(gy, gx + 1e-6) * bandScale + M.tanh(here * 2.4) * 0.3;
+                  hue -= M.floor(hue);
+                  packed = (level << 5) | (M.floor(hue * HUE_LEVELS) & 31);
                 }
               }
             }
@@ -1488,7 +1515,7 @@ color = vec4(rgb * a, a);
         }
         renderer.draw(eff, canvas.width / (columns * cellWidth));
         if (burst > 0) {
-          prismBurst = still ? 0 : burst * Math.exp(-Math.max(0.016, rawDt) / 0.38);
+          prismBurst = still ? 0 : burst * M.exp(-M.max(0.016, rawDt) / 0.38);
           if (prismBurst < 0.015) prismBurst = 0;
         }
         glowing = brightest > 0;
@@ -1500,12 +1527,12 @@ color = vec4(rgb * a, a);
         lastDraw = now;
         stale = false;
       },
-      dispose() {
+      dispose(keep) {
         if (canvas && canvas.removeEventListener) {
           canvas.removeEventListener('webglcontextlost', onContextLost);
           canvas.removeEventListener('webglcontextrestored', onContextRestored);
         }
-        if (renderer) renderer.dispose();
+        if (renderer) renderer.dispose(keep);
       },
     };
   }
@@ -1527,6 +1554,7 @@ color = vec4(rgb * a, a);
     amber: 4,
     mono: 5,
     graphite: 5,
+    neon: 6,
   });
 
   const HORIZON_SEMANTIC_MODES = Object.freeze({
@@ -1541,7 +1569,7 @@ color = vec4(rgb * a, a);
 
   function resolveHorizonSpectrumCode(mode) {
     if (typeof mode === 'number' && Number.isFinite(mode)) {
-      return Math.max(0, Math.min(5, Math.round(mode)));
+      return M.max(0, M.min(6, M.round(mode)));
     }
     const key = String(mode || '').trim().toLowerCase();
     return Object.prototype.hasOwnProperty.call(HORIZON_SPECTRUM_MODES, key)
@@ -1551,7 +1579,7 @@ color = vec4(rgb * a, a);
 
   function resolveHorizonSemanticCode(sem) {
     if (typeof sem === 'number' && Number.isFinite(sem)) {
-      return Math.max(0, Math.min(3, Math.round(sem)));
+      return M.max(0, M.min(3, M.round(sem)));
     }
     const key = String(sem || '').trim().toLowerCase();
     return Object.prototype.hasOwnProperty.call(HORIZON_SEMANTIC_MODES, key)
@@ -1562,8 +1590,8 @@ color = vec4(rgb * a, a);
   function resolveHorizonDpr(devicePixelRatio = 1, baseScale = 0.72) {
     const raw = Number.isFinite(Number(devicePixelRatio)) && Number(devicePixelRatio) > 0 ? Number(devicePixelRatio) : 1;
     const sc = Number.isFinite(Number(baseScale)) && Number(baseScale) > 0 ? Number(baseScale) : 0.72;
-    if (raw <= 1) return Math.max(0.5, +(raw * sc).toFixed(3));
-    return Math.max(0.72, Math.min(1.35, +(raw * Math.min(0.68, sc * 0.9)).toFixed(3)));
+    if (raw <= 1) return M.max(0.5, +(raw * sc).toFixed(3));
+    return M.max(0.72, M.min(1.35, +(raw * M.min(0.68, sc * 0.9)).toFixed(3)));
   }
 
   function detectHostSpectrumCode(canvas, dark = true) {
@@ -1571,15 +1599,14 @@ color = vec4(rgb * a, a);
       const doc = (canvas && canvas.ownerDocument) || (typeof document !== 'undefined' ? document : null);
       const html = doc && doc.documentElement;
       if (!html || typeof html.getAttribute !== 'function') return 0;
-      const accent = String(html.getAttribute('data-ag-cs-accent') || '').trim().toLowerCase();
-      if (accent && accent !== 'follow' && accent !== 'default' && Object.prototype.hasOwnProperty.call(HORIZON_SPECTRUM_MODES, accent)) {
-        return HORIZON_SPECTRUM_MODES[accent];
-      }
+      const ac = resolveHorizonSpectrumCode(html.getAttribute('data-ag-cs-accent'));
+      if (ac) return ac;
       const pal = String(html.getAttribute('data-ag-cs-palette') || '').trim().toLowerCase();
       if (pal === 'warm' || pal === 'claude') return 1;
       if (!dark && String(html.getAttribute('data-ag-cs-light-preset') || '').trim().toLowerCase() === 'alabaster') {
         return 1;
       }
+      if (dark && html.getAttribute('data-ag-cs-dark-aura-style') === 'neon') return 6;
     } catch {}
     return 0;
   }
@@ -1591,6 +1618,12 @@ color = vec4(rgb * a, a);
     [251, 188, 4],
     [92, 198, 252],
   ];
+  const HORIZON_NEON_STOPS = [
+    [86, 196, 248],
+    [142, 108, 235],
+    [220, 92, 224],
+    [67, 130, 246],
+  ];
   // 白昼高透水彩棱镜折射五阶闭合光谱（Royal Cobalt #2563EB / Iris #7C3AED / Coral #EA4335 / Amber #D97706 / Cerulean #0284C7）
   const HORIZON_DAYLIGHT_STOPS = [
     [37, 99, 235],
@@ -1600,15 +1633,15 @@ color = vec4(rgb * a, a);
     [2, 132, 199],
   ];
   function horizonPrismRgb(t, out, dark = true) {
-    const stops = dark === false ? HORIZON_DAYLIGHT_STOPS : HORIZON_PRISM_STOPS;
-    let f = (t - Math.floor(t)) * 5;
-    const i = Math.min(4, Math.floor(f));
+    const stops = dark === 2 ? HORIZON_NEON_STOPS : dark === false ? HORIZON_DAYLIGHT_STOPS : HORIZON_PRISM_STOPS;
+    const idx = dark && dark !== 2 ? [0, 1, 2, 3, 2, 1, 4] : 0;
+    const n = idx ? 7 : stops.length;
+    let f = (t - M.floor(t)) * n;
+    const i = M.min(n - 1, M.floor(f));
     f = smooth(f - i);
-    const a = stops[i];
-    const b = stops[(i + 1) % 5];
-    out[0] = a[0] + (b[0] - a[0]) * f;
-    out[1] = a[1] + (b[1] - a[1]) * f;
-    out[2] = a[2] + (b[2] - a[2]) * f;
+    const a = stops[idx ? idx[i] : i];
+    const b = stops[idx ? idx[(i + 1) % n] : (i + 1) % n];
+    for (let k = 0; k < 3; k++) out[k] = a[k] + (b[k] - a[k]) * f;
     return out;
   }
   const GLOW_VERT_SHADER = `#version 300 es
@@ -1675,8 +1708,6 @@ const vec3 SKY_BLUE = vec3(0.361, 0.776, 0.988);
 const vec3 HAZE_BLUE = vec3(0.733, 0.886, 1.000);
 const vec3 PRISM_COBALT = vec3(0.259, 0.522, 0.957);
 const vec3 PRISM_IRIS = vec3(0.608, 0.447, 0.796);
-const vec3 PRISM_CORAL = vec3(0.918, 0.263, 0.208);
-const vec3 PRISM_AMBER = vec3(0.984, 0.737, 0.016);
 const vec3 ICE_MIST = vec3(0.839, 0.933, 1.000);
 const vec3 DAY_COBALT = vec3(0.145, 0.388, 0.922);
 const vec3 DAY_IRIS = vec3(0.486, 0.227, 0.929);
@@ -1698,77 +1729,43 @@ const vec3 SEM_CORAL_D = vec3(0.851, 0.345, 0.365);
 const vec3 SEM_CORAL_L = vec3(0.863, 0.149, 0.149);
 const vec3 SEM_JADE_D = vec3(0.314, 0.745, 0.576);
 const vec3 SEM_JADE_L = vec3(0.020, 0.588, 0.412);
-vec3 blueLoop(float x) {
-float t = fract(x) * 4.0;
-float f = smoothstep(0.0, 1.0, fract(t));
-vec3 indigo = mix(DEEP_SPACE_BLUE, ZENITH_BLUE, 0.84);
-vec3 ice = mix(SKY_BLUE, HAZE_BLUE, 0.35);
-if (t < 1.0) return mix(ZENITH_BLUE, indigo, f);
-if (t < 2.0) return mix(indigo, SKY_BLUE, f);
-if (t < 3.0) return mix(SKY_BLUE, ice, f);
-return mix(ice, ZENITH_BLUE, f);
+float sf(float t){return smoothstep(0.,1.,fract(t));}
+vec3 blueLoop(float x){
+float t=fract(x)*4.,f=sf(t);
+vec3 i=mix(DEEP_SPACE_BLUE,ZENITH_BLUE,.84),c=mix(SKY_BLUE,HAZE_BLUE,.35);
+return t<1.?mix(ZENITH_BLUE,i,f):t<2.?mix(i,SKY_BLUE,f):t<3.?mix(SKY_BLUE,c,f):mix(c,ZENITH_BLUE,f);
 }
-vec3 prismLoop(float x) {
-float t = fract(x) * 5.0;
-float f = smoothstep(0.0, 1.0, fract(t));
-if (t < 1.0) return mix(PRISM_COBALT, PRISM_IRIS, f);
-if (t < 2.0) return mix(PRISM_IRIS, PRISM_CORAL, f);
-if (t < 3.0) return mix(PRISM_CORAL, PRISM_AMBER, f);
-if (t < 4.0) return mix(PRISM_AMBER, SKY_BLUE, f);
-return mix(SKY_BLUE, PRISM_COBALT, f);
+vec3 prismLoop(float x){
+float t=fract(x)*7.,f=sf(t);
+vec3 cr=vec3(.94,.4,.48),am=vec3(.95,.64,.32);
+return t<1.?mix(PRISM_COBALT,PRISM_IRIS,f):t<2.?mix(PRISM_IRIS,cr,f):t<3.?mix(cr,am,f):t<4.?mix(am,cr,f):t<5.?mix(cr,PRISM_IRIS,f):t<6.?mix(PRISM_IRIS,SKY_BLUE,f):mix(SKY_BLUE,PRISM_COBALT,f);
 }
-vec3 daylightInkLoop(float x) {
-float t = fract(x) * 5.0;
-float f = smoothstep(0.0, 1.0, fract(t));
-if (t < 1.0) return mix(DAY_COBALT, DAY_IRIS, f);
-if (t < 2.0) return mix(DAY_IRIS, DAY_CORAL, f);
-if (t < 3.0) return mix(DAY_CORAL, DAY_AMBER, f);
-if (t < 4.0) return mix(DAY_AMBER, DAY_CERULEAN, f);
-return mix(DAY_CERULEAN, DAY_COBALT, f);
+vec3 neonLoop(float x){
+float t=fract(x)*4.,f=sf(t);
+vec3 m=vec3(.863,.361,.878);
+return t<1.?mix(SKY_BLUE,PRISM_IRIS,f):t<2.?mix(PRISM_IRIS,m,f):t<3.?mix(m,PRISM_COBALT,f):mix(PRISM_COBALT,SKY_BLUE,f);
 }
-vec3 spectrumBaseDark(float spec, float ph) {
-float w = 0.5 + 0.5 * sin(ph * 6.2831853);
-if (spec > 4.5) return mix(MONO_DARK_LO, MONO_DARK_HI, w);
-if (spec > 3.5) return mix(vec3(0.820, 0.545, 0.200), SEM_AMBER_D, w);
-if (spec > 2.5) return mix(vec3(0.440, 0.360, 0.820), PRISM_IRIS, w);
-if (spec > 1.5) return blueLoop(ph);
-if (spec > 0.5) return mix(WARM_DARK_A, WARM_DARK_B, 0.35 + 0.65 * w);
-return blueLoop(ph);
+vec3 daylightInkLoop(float x){
+float t=fract(x)*5.,f=sf(t);
+return t<1.?mix(DAY_COBALT,DAY_IRIS,f):t<2.?mix(DAY_IRIS,DAY_CORAL,f):t<3.?mix(DAY_CORAL,DAY_AMBER,f):t<4.?mix(DAY_AMBER,DAY_CERULEAN,f):mix(DAY_CERULEAN,DAY_COBALT,f);
 }
-vec3 spectrumPrismDark(float spec, float ph) {
-float w = 0.5 + 0.5 * sin(ph * 6.2831853 + 1.1);
-if (spec > 4.5) return mix(MONO_DARK_LO, MONO_DARK_HI, w);
-if (spec > 3.5) return mix(SEM_AMBER_D, WARM_DARK_C, w);
-if (spec > 2.5) return mix(PRISM_IRIS, vec3(0.710, 0.560, 0.960), w);
-if (spec > 1.5) return mix(PRISM_COBALT, SKY_BLUE, w);
-if (spec > 0.5) return mix(WARM_DARK_B, WARM_DARK_C, w);
-return prismLoop(ph);
+vec3 spectrumBaseDark(float spec,float ph){
+float w=.5+.5*sin(ph*6.2831853);
+return spec>5.5?blueLoop(ph):spec>4.5?mix(MONO_DARK_LO,MONO_DARK_HI,w):spec>3.5?mix(vec3(.82,.545,.2),SEM_AMBER_D,w):spec>2.5?mix(vec3(.44,.36,.82),PRISM_IRIS,w):spec>1.5?blueLoop(ph):spec>.5?mix(WARM_DARK_A,WARM_DARK_B,.35+.65*w):blueLoop(ph);
 }
-vec3 spectrumInkLight(float spec, float ph, float washPhase) {
-float w = 0.5 + 0.5 * sin(ph * 6.2831853);
-float sw = 0.5 + 0.5 * sin(washPhase);
-if (spec > 4.5) return mix(MONO_LIGHT_LO, MONO_LIGHT_HI, 0.5 * (w + sw));
-if (spec > 3.5) return mix(DAY_AMBER, vec3(0.706, 0.325, 0.035), w);
-if (spec > 2.5) return mix(DAY_IRIS, vec3(0.310, 0.275, 0.898), w);
-if (spec > 1.5) return mix(DAY_COBALT, DAY_CERULEAN, sw);
-if (spec > 0.5) return mix(DAY_TERRACOTTA, mix(DAY_AMBER, DAY_SIENNA, sw), 0.45 + 0.45 * w);
-return daylightInkLoop(ph);
+vec3 spectrumPrismDark(float spec,float ph){
+float w=.5+.5*sin(ph*6.2831853+1.1);
+return spec>5.5?neonLoop(ph):spec>4.5?mix(MONO_DARK_LO,MONO_DARK_HI,w):spec>3.5?mix(SEM_AMBER_D,WARM_DARK_C,w):spec>2.5?mix(PRISM_IRIS,vec3(.71,.56,.96),w):spec>1.5?mix(PRISM_COBALT,SKY_BLUE,w):spec>.5?mix(WARM_DARK_B,WARM_DARK_C,w):prismLoop(ph);
 }
-vec3 semanticColor(float sem, float dark, float ph) {
-float w = 0.5 + 0.5 * sin(ph * 6.2831853);
-if (sem < 1.5) {
-return dark > 0.5
-  ? mix(SEM_AMBER_D, vec3(0.980, 0.835, 0.480), 0.35 * w)
-  : mix(SEM_AMBER_L, vec3(0.706, 0.325, 0.035), 0.40 * w);
+vec3 spectrumInkLight(float spec,float ph,float washPhase){
+float w=.5+.5*sin(ph*6.2831853),sw=.5+.5*sin(washPhase);
+return abs(spec-5.)<.5?mix(MONO_LIGHT_LO,MONO_LIGHT_HI,.5*(w+sw)):spec>3.5?mix(DAY_AMBER,vec3(.706,.325,.035),w):spec>2.5?mix(DAY_IRIS,vec3(.31,.275,.898),w):spec>1.5?mix(DAY_COBALT,DAY_CERULEAN,sw):spec>.5?mix(DAY_TERRACOTTA,mix(DAY_AMBER,DAY_SIENNA,sw),.45+.45*w):daylightInkLoop(ph);
 }
-if (sem < 2.5) {
-return dark > 0.5
-  ? mix(SEM_CORAL_D, vec3(0.690, 0.235, 0.265), 0.40 * w)
-  : mix(SEM_CORAL_L, vec3(0.620, 0.110, 0.120), 0.35 * w);
-}
-return dark > 0.5
-  ? mix(SEM_JADE_D, SKY_BLUE, 0.38 * w)
-  : mix(SEM_JADE_L, DAY_CERULEAN, 0.42 * w);
+vec3 semanticColor(float sem,float dark,float ph){
+float w=.5+.5*sin(ph*6.2831853);
+if(sem<1.5)return dark>.5?mix(SEM_AMBER_D,vec3(.98,.835,.48),.35*w):mix(SEM_AMBER_L,vec3(.706,.325,.035),.4*w);
+if(sem<2.5)return dark>.5?mix(SEM_CORAL_D,vec3(.69,.235,.265),.4*w):mix(SEM_CORAL_L,vec3(.62,.11,.12),.35*w);
+return dark>.5?mix(SEM_JADE_D,SKY_BLUE,.38*w):mix(SEM_JADE_L,DAY_CERULEAN,.42*w);
 }
 vec3 sm(vec3 a,float d,float p,float i,float w){return w>.001?mix(a,semanticColor(i,d,p),w):a;}
 void main() {
@@ -1808,54 +1805,29 @@ float surgeArc = 0.0;
 float surgeDy = 0.0;
 float chimeWave = 0.0;
 float chimePhase = 0.0;
-float effPrism = uSpectrum > 4.5 ? uPrism * 0.28 : uPrism;
+bool M = abs(uSpectrum - 5.0) < 0.5;
+float effPrism = M ? uPrism * 0.28 : uPrism;
 if (effPrism > 0.0001 || abs(uSurge) > 0.0001) {
 vec3 pCol = sm(spectrumPrismDark(uSpectrum, pPhase), 1.0, pPhase, semId, semW);
 if (effPrism > 0.0001) {
-float wing = smoothstep(0.06, 0.42, field) * (1.0 - 0.52 * smoothstep(0.72, 0.98, field));
-float caustics = 0.52 + 0.48 * smoothstep(-0.24, 0.26, jut);
-base = mix(base, pCol, clamp(effPrism * 1.15 * wing * caustics, 0.0, 0.68));
-dotPrismTint = pCol;
-dotPrismMix = clamp(effPrism * 1.25 * (0.45 + 0.55 * caustics), 0.0, 0.78);
+float wing=smoothstep(.04,.34,field)*(1.-.18*smoothstep(.76,.99,field)),caustics=.62+.38*smoothstep(-.24,.26,jut);
+base = mix(base, pCol, clamp(effPrism * 1.45, 0.0, 1.0)) * (0.86 + 0.28 * wing * caustics);
+dotPrismTint=pCol;dotPrismMix=clamp(effPrism*1.25*(.45+.55*caustics),0.,.78);
 }
 if (uSurge > 0.0001) {
-float sp = clamp(uSurge, 0.0, 1.0);
-float sEnv = sin(sp * 3.14159265) * (1.0 - 0.32 * sp);
-float xRel = (uv.x - 0.5) * 2.0;
-float xSpan = smoothstep(0.0, 0.22, uv.x) * (1.0 - smoothstep(0.78, 1.0, uv.x));
-float frontY = 1.15 * (1.0 - pow(1.0 - sp, 1.45)) - 0.15 * xRel * xRel + 0.06 * jut;
-float dy = y - frontY;
-float arc = (dy >= 0.0 ? exp(-dy * dy * 24.0) : exp(-dy * dy * 5.2)) * sEnv * xSpan;
-surgeArc = arc;
-surgeDy = dy - sp * 0.35;
-vec3 surgeLead = sm(uSpectrum > 4.5 ? MONO_DARK_HI : (uSpectrum > 0.5 && uSpectrum < 1.5 ? WARM_DARK_C : SKY_BLUE), 1.0, pPhase + 0.2, semId, semW);
-vec3 surgeTrail = sm(spectrumPrismDark(uSpectrum, pPhase + surgeDy * 1.3), 1.0, pPhase + surgeDy * 1.3, semId, semW);
-vec3 surgeCol = mix(surgeLead, surgeTrail, 0.62);
+float sp = clamp(uSurge, 0.0, 1.0), sEnv = sin(sp * 3.14159265) * (1.0 - 0.32 * sp), xRel = (uv.x - 0.5) * 2.0, xSpan = smoothstep(0.0, 0.22, uv.x) * (1.0 - smoothstep(0.78, 1.0, uv.x)), frontY = 1.15 * (1.0 - pow(1.0 - sp, 1.45)) - 0.15 * xRel * xRel + 0.06 * jut, dy = y - frontY, arc = (dy >= 0.0 ? exp(-dy * dy * 24.0) : exp(-dy * dy * 5.2)) * sEnv * xSpan;
+surgeArc = arc; surgeDy = dy - sp * 0.35;
+vec3 surgeLead = sm(M ? MONO_DARK_HI : (uSpectrum > 0.5 && uSpectrum < 1.5 ? WARM_DARK_C : SKY_BLUE), 1.0, pPhase + 0.2, semId, semW), surgeTrail = sm(spectrumPrismDark(uSpectrum, pPhase + surgeDy * 1.3), 1.0, pPhase + surgeDy * 1.3, semId, semW), surgeCol = mix(surgeLead, surgeTrail, 0.62);
 field = clamp(field + arc * 0.52, 0.0, 1.0);
 base = mix(base, surgeCol, clamp(arc * 0.78, 0.0, 0.85));
-dotBoost += arc * 0.58;
-dotPrismTint = mix(dotPrismTint, surgeCol, clamp(arc * 0.85, 0.0, 1.0));
-dotPrismMix = max(dotPrismMix, clamp(arc * 0.82, 0.0, 0.85));
+dotBoost += arc * 0.58; dotPrismTint = mix(dotPrismTint, surgeCol, clamp(arc * 0.85, 0.0, 1.0)); dotPrismMix = max(dotPrismMix, clamp(arc * 0.82, 0.0, 0.85));
 } else if (uSurge < -0.0001) {
-float cp = clamp(-uSurge, 0.0, 1.0);
-float cEnv = sin(cp * 3.14159265) * (1.0 - 0.28 * cp);
-float rx = abs(uv.x - 0.5);
-float ringR = 0.04 + 0.43 * (1.0 - pow(1.0 - cp, 1.35));
-float dr = (rx - ringR) / 0.135;
-float hRip = exp(-dr * dr) + 0.32 * (1.0 - cp) * exp(-rx * rx * 18.0);
-float setY = 0.70 * pow(1.0 - cp, 1.35) + 0.04;
-float dsy = y - setY;
-float vSet = exp(-dsy * dsy * 13.5) * (1.0 - smoothstep(1.05, 1.35, y));
-float chime = hRip * vSet * cEnv;
-chimeWave = chime;
-chimePhase = uv.x * 1.5 + rx * 2.0 - cp * 0.35;
-vec3 chimeLead = sm(uSpectrum > 4.5 ? MONO_DARK_HI : (uSpectrum > 0.5 && uSpectrum < 1.5 ? WARM_DARK_C : ICE_MIST), 1.0, chimePhase, semId, semW);
-vec3 chimeCol = mix(mix(chimeLead, spectrumPrismDark(uSpectrum, chimePhase), 0.22), chimeLead, semW);
+float cp = clamp(-uSurge, 0.0, 1.0), cEnv = sin(cp * 3.14159265) * (1.0 - 0.28 * cp), rx = abs(uv.x - 0.5), ringR = 0.04 + 0.43 * (1.0 - pow(1.0 - cp, 1.35)), dr = (rx - ringR) / 0.135, hRip = exp(-dr * dr) + 0.32 * (1.0 - cp) * exp(-rx * rx * 18.0), setY = 0.70 * pow(1.0 - cp, 1.35) + 0.04, dsy = y - setY, vSet = exp(-dsy * dsy * 13.5) * (1.0 - smoothstep(1.05, 1.35, y)), chime = hRip * vSet * cEnv;
+chimeWave = chime; chimePhase = uv.x * 1.5 + rx * 2.0 - cp * 0.35;
+vec3 chimeLead = sm(M ? MONO_DARK_HI : (uSpectrum > 0.5 && uSpectrum < 1.5 ? WARM_DARK_C : ICE_MIST), 1.0, chimePhase, semId, semW), chimeCol = mix(mix(chimeLead, spectrumPrismDark(uSpectrum, chimePhase), 0.22), chimeLead, semW);
 field = clamp(field + chime * 0.46, 0.0, 1.0);
 base = mix(base, chimeCol, clamp(chime * 0.82, 0.0, 0.88));
-dotBoost += chime * 0.42;
-dotPrismTint = mix(dotPrismTint, chimeCol, clamp(chime * 0.8, 0.0, 1.0));
-dotPrismMix = max(dotPrismMix, clamp(chime * 0.75, 0.0, 0.82));
+dotBoost += chime * 0.42; dotPrismTint = mix(dotPrismTint, chimeCol, clamp(chime * 0.8, 0.0, 1.0)); dotPrismMix = max(dotPrismMix, clamp(chime * 0.75, 0.0, 0.82));
 }
 }
 float hot = 0.75 * smoothstep(0.65, 1.0, field);
@@ -1864,23 +1836,16 @@ dotBoost *= topFeather;
 float band = smoothstep(0.3, 0.55, field) * (1.0 - smoothstep(0.7, 0.98, field));
 float dotMsk = clamp(band * 0.8 * smoothstep(0.12, 0.32, -jut) + dotBoost, 0.0, 1.0);
 float dA = halftone(px, res, uv.y, t, 7.0, dotMsk);
-float grain = hash(px + fract(t * 7.0) * 91.0) - 0.5;
-vec3 c;
-vec3 dc;
-float a;
-float da;
-if (uDark > 0.5) {
-vec3 fill = base * (1.0 + 0.25 * hot) * mix(0.72, 1.16, uIntensity);
-c = fill + grain * 0.05;
-dc = min(fill * 1.6, 1.0);
-if (dotPrismMix > 0.0001) {
-dc = mix(dc, min(dotPrismTint * 1.22 + 0.08, 1.0), dotPrismMix);
-}
-float breathMod = mix(0.68, 1.24, clamp(uIntensity, 0.0, 1.0));
-a = clamp(field * 0.56 * breathMod * uPresence, 0.0, 1.0);
-da = clamp(dA * sqrt(a) * 0.78, 0.0, 1.0);
-} else {
-// Daylight Dichroic Ink Wash (pure high-chroma jewel pigments without white fog dilution)
+float grain=hash(px+fract(t*7.)*91.)-.5;
+vec3 c,dc;float a,da;
+if(uDark>.5){
+vec3 fill=base*(1.+.28*hot)*mix(.92,1.24,uIntensity);
+c=fill+grain*.024;dc=min(fill*1.6,1.);
+if(dotPrismMix>.0001)dc=mix(dc,min(dotPrismTint*1.22+.08,1.),dotPrismMix);
+float breathMod=mix(.68,1.24,clamp(uIntensity,0.,1.));
+a=clamp(field*.56*breathMod*uPresence,0.,1.);
+da=clamp(dA*sqrt(a)*.78,0.,1.);
+}else{
 float washPh = uv.x * 3.1 + t * 0.48 + 1.3 * n;
 vec3 prismInk = sm(spectrumInkLight(uSpectrum, pPhase, washPh), 0.0, pPhase, semId, semW);
 vec3 washBase = sm(uSpectrum > 0.5 ? spectrumInkLight(uSpectrum, basePhase, washPh) : mix(DAY_COBALT, DAY_CERULEAN, 0.5 + 0.5 * sin(washPh)), 0.0, basePhase, semId, semW);
@@ -1894,7 +1859,7 @@ inkRgb = mix(inkRgb, surgeInk, clamp(surgeArc * 0.85, 0.0, 0.90));
 vec3 chimeInk = sm(mix(washBase, spectrumInkLight(uSpectrum, chimePhase, washPh), 0.45), 0.0, chimePhase, semId, semW);
 inkRgb = mix(inkRgb, chimeInk, clamp(chimeWave * 0.86, 0.0, 0.90));
 }
-vec3 hotAnchor = mix(uSpectrum > 4.5 ? MONO_LIGHT_LO : (uSpectrum > 0.5 && uSpectrum < 1.5 ? DAY_SIENNA : DAY_COBALT * 0.84 + DAY_IRIS * 0.16), washBase * 0.88, semW);
+vec3 hotAnchor = mix(M ? MONO_LIGHT_LO : (uSpectrum > 0.5 && uSpectrum < 1.5 ? DAY_SIENNA : DAY_COBALT * 0.84 + DAY_IRIS * 0.16), washBase * 0.88, semW);
 inkRgb = mix(inkRgb, hotAnchor, hot * 0.24);
 c = clamp(inkRgb + grain * 0.022, 0.0, 1.0);
 dc = clamp(mix(washBase * 0.86, prismInk * 0.92, clamp(0.26 + dotPrismMix * 0.68, 0.0, 0.90)), 0.0, 1.0);
@@ -1918,7 +1883,7 @@ outColor = clamp(vec4(premulRgb, outAlpha), 0.0, 1.0);
     const gl = canvas && canvas.getContext
       ? canvas.getContext('webgl2', { alpha: true, premultipliedAlpha: true, antialias: false, preserveDrawingBuffer: false })
       : null;
-    if (!gl) return null;
+    if (!gl || gl.isContextLost?.()) return null;
     let program = null;
     const u = {};
     function compile(type, source) {
@@ -1932,7 +1897,12 @@ outColor = clamp(vec4(premulRgb, outAlpha), 0.0, 1.0);
       }
       return sh;
     }
+    function free() {
+      if (program) gl.deleteProgram(program);
+      program = null;
+    }
     function build() {
+      free();
       const vs = compile(gl.VERTEX_SHADER, GLOW_VERT_SHADER);
       const fs = compile(gl.FRAGMENT_SHADER, HORIZON_FRAGMENT_SHADER);
       program = gl.createProgram();
@@ -1952,18 +1922,21 @@ outColor = clamp(vec4(premulRgb, outAlpha), 0.0, 1.0);
     try {
       build();
     } catch {
-      if (program) gl.deleteProgram(program);
+      try { free(); } catch {}
       return null;
     }
     return {
       mode: 'webgl2',
       build,
+      isContextLost: () => Boolean(gl.isContextLost?.()),
       clear() {
+        if (!program || gl.isContextLost?.()) return;
         gl.viewport(0, 0, canvas.width, canvas.height);
         gl.clearColor(0, 0, 0, 0);
         gl.clear(gl.COLOR_BUFFER_BIT);
       },
       draw(w, h, dpr, timeSec, dark, intensity, presence, reach = DEFAULT_HORIZON_AURA.reach, prism = 0, surge = 0, speed = 1, spectrumCode = 0, semanticCode = 0) {
+        if (!program || gl.isContextLost?.()) return;
         gl.viewport(0, 0, w, h);
         gl.useProgram(program);
         gl.uniform2f(u.uRes, w, h);
@@ -1983,62 +1956,24 @@ outColor = clamp(vec4(premulRgb, outAlpha), 0.0, 1.0);
         gl.clear(gl.COLOR_BUFFER_BIT);
         gl.drawArrays(gl.TRIANGLES, 0, 3);
       },
-      dispose() {
-        if (program) gl.deleteProgram(program);
-        program = null;
+      dispose(keep) {
+        free();
+        if (!keep) try { gl.getExtension?.('WEBGL_lose_context')?.loseContext?.(); } catch {}
       },
     };
   }
   function sampleHorizonTone2D(spectrumCode, semanticCode, dark, phase, out) {
-    const w = 0.5 + 0.5 * Math.sin(phase * TAU);
-    if (semanticCode >= 1) {
-      if (semanticCode === 1) {
-        out[0] = dark ? 242 + 8 * w : 217 - 37 * w;
-        out[1] = dark ? 184 + 28 * w : 119 - 36 * w;
-        out[2] = dark ? 75 + 47 * w : 6 + 3 * w;
-        return out;
-      }
-      if (semanticCode === 2) {
-        out[0] = dark ? 217 - 41 * w : 220 - 62 * w;
-        out[1] = dark ? 88 - 28 * w : 38 - 10 * w;
-        out[2] = dark ? 93 - 25 * w : 38 - 8 * w;
-        return out;
-      }
-      out[0] = dark ? 80 + 12 * w : 5 - 3 * w;
-      out[1] = dark ? 190 + 8 * w : 150 - 18 * w;
-      out[2] = dark ? 147 + 105 * w : 105 + 94 * w;
-      return out;
-    }
-    if (spectrumCode === 5) {
-      out[0] = dark ? 158 + 58 * w : 68 + 38 * w;
-      out[1] = dark ? 168 + 56 * w : 81 + 40 * w;
-      out[2] = dark ? 185 + 52 * w : 102 + 43 * w;
-      return out;
-    }
-    if (spectrumCode === 4) {
-      out[0] = dark ? 209 + 33 * w : 217 - 37 * w;
-      out[1] = dark ? 139 + 45 * w : 119 - 36 * w;
-      out[2] = dark ? 51 + 24 * w : 6 + 3 * w;
-      return out;
-    }
-    if (spectrumCode === 3) {
-      out[0] = dark ? 112 + 69 * w : 124 - 45 * w;
-      out[1] = dark ? 92 + 51 * w : 58 + 12 * w;
-      out[2] = dark ? 209 + 36 * w : 237 - 8 * w;
-      return out;
-    }
-    if (spectrumCode === 2) {
-      out[0] = dark ? 49 + 43 * w : 37 - 35 * w;
-      out[1] = dark ? 134 + 64 * w : 99 + 33 * w;
-      out[2] = dark ? 255 - 3 * w : 235 - 36 * w;
-      return out;
-    }
-    if (spectrumCode === 1) {
-      out[0] = dark ? 168 + 64 * w : 194 - 28 * w;
-      out[1] = dark ? 86 + 72 * w : 89 + 16 * w;
-      out[2] = dark ? 58 + 35 * w : 52 - 22 * w;
-      return out;
-    }
+    const w = 0.5 + 0.5 * M.sin(phase * TAU);
+    const s = (r, g, b) => { out[0] = r; out[1] = g; out[2] = b; return out; };
+    if (semanticCode === 1) return dark ? s(242 + 8 * w, 184 + 28 * w, 75 + 47 * w) : s(217 - 37 * w, 119 - 36 * w, 6 + 3 * w);
+    if (semanticCode === 2) return dark ? s(217 - 41 * w, 88 - 28 * w, 93 - 25 * w) : s(220 - 62 * w, 38 - 10 * w, 38 - 8 * w);
+    if (semanticCode >= 3) return dark ? s(80 + 12 * w, 190 + 8 * w, 147 + 105 * w) : s(5 - 3 * w, 150 - 18 * w, 105 + 94 * w);
+    if (spectrumCode === 6) return horizonPrismRgb(phase, out, 2);
+    if (spectrumCode === 5) return dark ? s(158 + 58 * w, 168 + 56 * w, 185 + 52 * w) : s(68 + 38 * w, 81 + 40 * w, 102 + 43 * w);
+    if (spectrumCode === 4) return dark ? s(209 + 33 * w, 139 + 45 * w, 51 + 24 * w) : s(217 - 37 * w, 119 - 36 * w, 6 + 3 * w);
+    if (spectrumCode === 3) return dark ? s(112 + 69 * w, 92 + 51 * w, 209 + 36 * w) : s(124 - 45 * w, 58 + 12 * w, 237 - 8 * w);
+    if (spectrumCode === 2) return dark ? s(49 + 43 * w, 134 + 64 * w, 255 - 3 * w) : s(37 - 35 * w, 99 + 33 * w, 235 - 36 * w);
+    if (spectrumCode === 1) return dark ? s(168 + 64 * w, 86 + 72 * w, 58 + 35 * w) : s(194 - 28 * w, 89 + 16 * w, 52 - 22 * w);
     return horizonPrismRgb(phase, out, dark);
   }
   function createBrandHorizon2DRenderer(canvas) {
@@ -2071,135 +2006,125 @@ outColor = clamp(vec4(premulRgb, outAlpha), 0.0, 1.0);
         if (!w || !h) return;
         ensureImage(w, h);
         pixels.fill(0);
-        const rEff = Math.max(0.01, reach);
+        const { max, min, sin, exp, pow, round, abs, floor, sqrt, log } = M;
+        const cl01 = (v) => max(0, min(1, v));
+        const cl255 = (v) => round(min(255, max(0, v))) & 255;
+        const sTone = (dk, ph, out) => sampleHorizonTone2D(spectrumCode, semanticCode, dk, ph, out);
+        const rEff = max(0.01, reach);
         const stretchScale = 1 + 0.08 * (speed - 1);
-        const surgeUp = Math.max(0, surge);
+        const surgeUp = max(0, surge);
         const effPrism = spectrumCode === 5 ? prism * 0.28 : prism;
         const hasPrism = effPrism > 0.0001;
-        const hasSurge = Math.abs(surge) > 0.0001;
+        const hasSurge = abs(surge) > 0.0001;
         const customMode = spectrumCode > 0 || semanticCode > 0;
-        const cssW = w / Math.max(0.5, dpr);
-        const cssH = h / Math.max(0.5, dpr);
-        const step = Math.max(1, Math.round(dpr));
-        const effPresL = dark ? presence : Math.pow(Math.max(0, Math.min(1, presence)), 0.68);
-        const washGainL = dark ? 1 : (1.02 + 0.60 * Math.max(0, Math.min(1, intensity)));
-        const darkBreathMod = dark ? (0.68 + 0.56 * Math.max(0, Math.min(1, intensity))) : 1;
+        const dprS = max(0.5, dpr);
+        const cssW = w / dprS;
+        const cssH = h / dprS;
+        const step = max(1, round(dpr));
+        const effPresL = dark ? presence : pow(cl01(presence), 0.68);
+        const washGainL = dark ? 1 : (1.02 + 0.60 * cl01(intensity));
+        const darkBreathMod = dark ? (0.68 + 0.56 * cl01(intensity)) : 1;
         for (let py = 0; py < h; py += step) {
           const uvY = 1 - py / h;
           const yNorm = uvY / rEff;
           if (yNorm > 1.48 + 0.25 * surgeUp) continue;
           const persp = 1 / (0.55 + uvY);
-          const gyBase = cssH * Math.log(0.55 + uvY);
+          const gyBase = cssH * log(0.55 + uvY);
           for (let px = 0; px < w; px += step) {
             const uvX = px / w;
-            const cssX = px / Math.max(0.5, dpr);
-            const waveA = Math.sin(uvX * 5.2 - timeSec * 0.68);
-            const waveB = Math.sin(uvX * 8.6 + timeSec * 0.46 + 1.4);
+            const cssX = px / dprS;
+            const waveA = sin(uvX * 5.2 - timeSec * 0.68);
+            const waveB = sin(uvX * 8.6 + timeSec * 0.46 + 1.4);
             const curtain = 0.5 + 0.32 * waveA + 0.18 * waveB;
             const jut = (valueNoise(cssX / 220 + timeSec * 0.18, timeSec * 0.11) - 0.5) * 0.68 + (waveA * 0.65 + waveB * 0.35) * 0.24;
-            const hJut = Math.max(0, yNorm + 0.25 * stretchScale * jut);
+            const hJut = max(0, yNorm + 0.25 * stretchScale * jut);
             const edgeFade = (uvX < 0.3 ? 0.35 + 0.65 * smooth(uvX / 0.3) : uvX > 0.7 ? 0.35 + 0.65 * smooth((1 - uvX) / 0.3) : 1);
-            const gVal = Math.exp(-hJut * hJut * 4.0) * (0.76 + 0.42 * curtain) * edgeFade;
+            const gVal = exp(-hJut * hJut * 4.0) * (0.76 + 0.42 * curtain) * edgeFade;
             let field = dark
-              ? Math.min(1, gVal * 1.12 * darkBreathMod * presence)
-              : Math.min(1, gVal * 1.12);
+              ? min(1, gVal * 1.12 * darkBreathMod * presence)
+              : min(1, gVal * 1.12);
             if (!hasSurge && (dark ? field < 0.008 : field * effPresL < 0.008)) continue;
-            const mixSky = 0.5 + 0.5 * Math.sin(uvX * 3.2 + timeSec * 0.48);
+            const mixSky = 0.5 + 0.5 * sin(uvX * 3.2 + timeSec * 0.48);
             const pPhase = uvX * 1.18 - timeSec * 0.18 + 0.28 * valueNoise(uvX * 3.1 + 1.7, yNorm * 1.6 - timeSec * 0.12) + 0.14 * yNorm;
-            let baseR;
-            let baseG;
-            let baseB;
-            let dotR = 0;
-            let dotG = 0;
-            let dotB = 0;
+            let baseR, baseG, baseB, dotR = 0, dotG = 0, dotB = 0;
             if (dark) {
               if (customMode) {
-                sampleHorizonTone2D(spectrumCode, semanticCode, true, uvX * 0.8 + timeSec * 0.12, toneRgb);
+                sTone(true, uvX * 0.8 + timeSec * 0.12, toneRgb);
                 baseR = toneRgb[0];
                 baseG = toneRgb[1];
                 baseB = toneRgb[2];
               } else {
-                baseR = 49 + (92 - 49) * mixSky;
-                baseG = 134 + (198 - 134) * mixSky;
-                baseB = 255 + (252 - 255) * mixSky;
+                baseR = 49 + 43 * mixSky;
+                baseG = 134 + 64 * mixSky;
+                baseB = 255 - 3 * mixSky;
               }
-            } else if (customMode) {
-              sampleHorizonTone2D(spectrumCode, semanticCode, false, pPhase, prismRgb);
-              sampleHorizonTone2D(spectrumCode, semanticCode, false, uvX * 0.5 + timeSec * 0.08, toneRgb);
+            } else {
+              if (customMode) {
+                sTone(false, pPhase, prismRgb);
+                sTone(false, uvX * 0.5 + timeSec * 0.08, toneRgb);
+              } else {
+                horizonPrismRgb(pPhase, prismRgb, false);
+                toneRgb[0] = 37 - 35 * mixSky;
+                toneRgb[1] = 99 + 33 * mixSky;
+                toneRgb[2] = 235 - 36 * mixSky;
+              }
               const causticsL = 0.48 + 0.52 * smooth((jut + 0.24) / 0.5);
-              const dichroicW = Math.min(0.94, (0.48 + 0.46 * effPrism) * (0.58 + 0.42 * causticsL));
+              const ep2 = customMode ? effPrism : prism;
+              const dichroicW = min(0.94, (0.48 + 0.46 * ep2) * (0.58 + 0.42 * causticsL));
               baseR = toneRgb[0] + (prismRgb[0] - toneRgb[0]) * dichroicW;
               baseG = toneRgb[1] + (prismRgb[1] - toneRgb[1]) * dichroicW;
               baseB = toneRgb[2] + (prismRgb[2] - toneRgb[2]) * dichroicW;
-              const dotMix = Math.min(0.9, 0.26 + effPrism * 0.64);
-              dotR = toneRgb[0] * 0.86 * (1 - dotMix) + prismRgb[0] * 0.92 * dotMix;
-              dotG = toneRgb[1] * 0.86 * (1 - dotMix) + prismRgb[1] * 0.92 * dotMix;
-              dotB = toneRgb[2] * 0.86 * (1 - dotMix) + prismRgb[2] * 0.92 * dotMix;
-            } else {
-              // 白昼高透水彩棱镜折射（2D 分支镜像：Royal Cobalt #2563EB + 四色宝石彩墨，零泛白）
-              horizonPrismRgb(pPhase, prismRgb, false);
-              const cobR = 37 + (2 - 37) * mixSky;
-              const cobG = 99 + (132 - 99) * mixSky;
-              const cobB = 235 + (199 - 235) * mixSky;
-              const causticsL = 0.48 + 0.52 * smooth((jut + 0.24) / 0.5);
-              const dichroicW = Math.min(0.94, (0.48 + 0.46 * prism) * (0.58 + 0.42 * causticsL));
-              baseR = cobR + (prismRgb[0] - cobR) * dichroicW;
-              baseG = cobG + (prismRgb[1] - cobG) * dichroicW;
-              baseB = cobB + (prismRgb[2] - cobB) * dichroicW;
-              const dotMix = Math.min(0.9, 0.26 + prism * 0.64);
-              dotR = 32 * (1 - dotMix) + prismRgb[0] * 0.92 * dotMix;
-              dotG = 85 * (1 - dotMix) + prismRgb[1] * 0.92 * dotMix;
-              dotB = 202 * (1 - dotMix) + prismRgb[2] * 0.92 * dotMix;
+              const dotMix = min(0.9, 0.26 + ep2 * 0.64);
+              dotR = (customMode ? toneRgb[0] * 0.86 : 32) * (1 - dotMix) + prismRgb[0] * 0.92 * dotMix;
+              dotG = (customMode ? toneRgb[1] * 0.86 : 85) * (1 - dotMix) + prismRgb[1] * 0.92 * dotMix;
+              dotB = (customMode ? toneRgb[2] * 0.86 : 202) * (1 - dotMix) + prismRgb[2] * 0.92 * dotMix;
             }
             let dotBoost = 0;
             if (hasPrism || hasSurge) {
               if (dark && hasPrism) {
-                sampleHorizonTone2D(spectrumCode, semanticCode, true, pPhase + 0.18, prismRgb);
-                const wing = smooth((field - 0.04) / 0.32) * (1 - 0.5 * smooth((field - 0.68) / 0.28));
-                const caustics = 0.52 + 0.48 * smooth((jut + 0.24) / 0.5);
-                const wPrism = Math.min(0.68, effPrism * 1.2 * wing * caustics);
+                sTone(true, pPhase + 0.18, prismRgb);
+                const wing = smooth((field - 0.04) / 0.32) * (1 - 0.18 * smooth((field - 0.72) / 0.27));
+                const caustics = 0.62 + 0.38 * smooth((jut + 0.24) / 0.5);
+                const wPrism = min(0.92, (0.35 + 0.65 * effPrism) * wing * caustics);
                 baseR += (prismRgb[0] - baseR) * wPrism;
                 baseG += (prismRgb[1] - baseG) * wPrism;
                 baseB += (prismRgb[2] - baseB) * wPrism;
               }
               if (surge > 0.0001) {
-                const sp = Math.min(1, surge);
-                const sEnv = Math.sin(sp * Math.PI) * (1 - 0.32 * sp);
+                const sp = min(1, surge);
+                const sEnv = sin(sp * M.PI) * (1 - 0.32 * sp);
                 const xRel = (uvX - 0.5) * 2;
                 const xSpan = smooth(uvX / 0.22) * (1 - smooth((uvX - 0.78) / 0.22));
-                const frontY = 1.15 * (1 - Math.pow(1 - sp, 1.45)) - 0.15 * xRel * xRel + 0.06 * jut;
+                const frontY = 1.15 * (1 - pow(1 - sp, 1.45)) - 0.15 * xRel * xRel + 0.06 * jut;
                 const dy = yNorm - frontY;
-                const arc = (dy >= 0 ? Math.exp(-dy * dy * 24) : Math.exp(-dy * dy * 5.2)) * sEnv * xSpan;
-                field = Math.min(1, field + arc * 0.52 * (dark ? presence : 1));
-                sampleHorizonTone2D(spectrumCode, semanticCode, dark, pPhase + dy * 1.3 - sp * 0.35, surgeRgb);
+                const arc = (dy >= 0 ? exp(-dy * dy * 24) : exp(-dy * dy * 5.2)) * sEnv * xSpan;
+                field = min(1, field + arc * 0.52 * (dark ? presence : 1));
+                sTone(dark, pPhase + dy * 1.3 - sp * 0.35, surgeRgb);
                 const leadR = customMode ? surgeRgb[0] : (dark ? 92 : 37);
                 const leadG = customMode ? surgeRgb[1] : (dark ? 198 : 99);
                 const leadB = customMode ? surgeRgb[2] : (dark ? 252 : 235);
-                const sr = leadR * 0.34 + surgeRgb[0] * 0.66;
-                const sg = leadG * 0.34 + surgeRgb[1] * 0.66;
-                const sb = leadB * 0.34 + surgeRgb[2] * 0.66;
-                const wArc = Math.min(0.88, arc * 0.82);
-                baseR += (sr - baseR) * wArc;
-                baseG += (sg - baseG) * wArc;
-                baseB += (sb - baseB) * wArc;
+                const wArc = min(0.88, arc * 0.82);
+                baseR += (leadR * 0.34 + surgeRgb[0] * 0.66 - baseR) * wArc;
+                baseG += (leadG * 0.34 + surgeRgb[1] * 0.66 - baseG) * wArc;
+                baseB += (leadB * 0.34 + surgeRgb[2] * 0.66 - baseB) * wArc;
                 dotBoost += arc * 0.58 * (dark ? presence : 1);
               } else if (surge < -0.0001) {
-                const cp = Math.min(1, -surge);
-                const cEnv = Math.sin(cp * Math.PI) * (1 - 0.28 * cp);
-                const rx = Math.abs(uvX - 0.5);
-                const ringR = 0.04 + 0.43 * (1 - Math.pow(1 - cp, 1.35));
+                const cp = min(1, -surge);
+                const cEnv = sin(cp * M.PI) * (1 - 0.28 * cp);
+                const rx = abs(uvX - 0.5);
+                const ringR = 0.04 + 0.43 * (1 - pow(1 - cp, 1.35));
                 const dr = (rx - ringR) / 0.135;
-                const hRip = Math.exp(-dr * dr) + 0.32 * (1 - cp) * expClamp(rx * rx * 18);
-                const setY = 0.70 * Math.pow(1 - cp, 1.35) + 0.04;
+                const hRip = exp(-dr * dr) + 0.32 * (1 - cp) * expClamp(rx * rx * 18);
+                const setY = 0.70 * pow(1 - cp, 1.35) + 0.04;
                 const dsy = yNorm - setY;
-                const vSet = Math.exp(-dsy * dsy * 13.5) * (1 - smooth((yNorm - 1.05) / 0.3));
+                const vSet = exp(-dsy * dsy * 13.5) * (1 - smooth((yNorm - 1.05) / 0.3));
                 const chime = hRip * vSet * cEnv;
-                field = Math.min(1, field + chime * 0.46 * (dark ? presence : 1));
-                sampleHorizonTone2D(spectrumCode, semanticCode, dark, uvX * 1.5 + rx * 2 - cp * 0.35, surgeRgb);
+                field = min(1, field + chime * 0.46 * (dark ? presence : 1));
+                sTone(dark, uvX * 1.5 + rx * 2 - cp * 0.35, surgeRgb);
                 const cr = customMode ? surgeRgb[0] : (dark ? (214 * 0.78 + surgeRgb[0] * 0.22) : (2 * 0.55 + surgeRgb[0] * 0.45));
                 const cg = customMode ? surgeRgb[1] : (dark ? (238 * 0.78 + surgeRgb[1] * 0.22) : (132 * 0.55 + surgeRgb[1] * 0.45));
                 const cb = customMode ? surgeRgb[2] : (dark ? (255 * 0.78 + surgeRgb[2] * 0.22) : (199 * 0.55 + surgeRgb[2] * 0.45));
-                const wChime = Math.min(0.88, chime * 0.84);
+                const wChime = min(0.88, chime * 0.84);
                 baseR += (cr - baseR) * wChime;
                 baseG += (cg - baseG) * wChime;
                 baseB += (cb - baseB) * wChime;
@@ -2208,26 +2133,22 @@ outColor = clamp(vec4(premulRgb, outAlpha), 0.0, 1.0);
             }
             if (dark ? field < 0.008 : field * effPresL < 0.008) continue;
             const gx = (cssX - cssW * 0.5) * persp;
-            const gy = gyBase + 10 * Math.sin(gx * 0.007 + timeSec * 0.42) - timeSec * 1.4;
-            const cellX = gx / 7 - Math.floor(gx / 7) - 0.5;
-            const cellY = gy / 7 - Math.floor(gy / 7) - 0.5;
-            const dist = Math.sqrt(cellX * cellX + cellY * cellY);
-            const band = Math.min(1, smooth((field - 0.25) / 0.25) * (1 - smooth((field - 0.72) / 0.26)) + dotBoost);
-            let fillA;
-            let dotA;
-            let R;
-            let G;
-            let B;
+            const gy = gyBase + 10 * sin(gx * 0.007 + timeSec * 0.42) - timeSec * 1.4;
+            const cellX = gx / 7 - floor(gx / 7) - 0.5;
+            const cellY = gy / 7 - floor(gy / 7) - 0.5;
+            const dist = sqrt(cellX * cellX + cellY * cellY);
+            const band = min(1, smooth((field - 0.25) / 0.25) * (1 - smooth((field - 0.72) / 0.26)) + dotBoost);
+            let fillA, dotA, R, G, B;
             if (dark) {
               dotA = dist < 0.26 ? (1 - smooth((dist - 0.12) / 0.14)) * band * 0.65 : 0;
               fillA = field * 0.48;
               const dLift = spectrumCode === 5 ? 36 : 56;
-              R = Math.round(Math.min(255, Math.max(0, baseR + dotA * (spectrumCode === 5 ? 36 : 72)))) & 255;
-              G = Math.round(Math.min(255, Math.max(0, baseG + dotA * dLift))) & 255;
-              B = Math.round(Math.min(255, Math.max(0, baseB + dotA * (spectrumCode === 5 ? 38 : 24)))) & 255;
+              R = cl255(baseR + dotA * (spectrumCode === 5 ? 36 : 72));
+              G = cl255(baseG + dotA * dLift);
+              B = cl255(baseB + dotA * (spectrumCode === 5 ? 38 : 24));
             } else {
-              fillA = Math.min(0.84, field * 0.66 * washGainL * effPresL);
-              dotA = dist < 0.24 ? Math.min(0.88, (1 - smooth((dist - 0.14) / 0.1)) * band * (0.52 + 0.44 * Math.sqrt(fillA)) * effPresL) : 0;
+              fillA = min(0.84, field * 0.66 * washGainL * effPresL);
+              dotA = dist < 0.24 ? min(0.88, (1 - smooth((dist - 0.14) / 0.1)) * band * (0.52 + 0.44 * sqrt(fillA)) * effPresL) : 0;
               const hotL = 0.24 * smooth((field - 0.65) / 0.35);
               const ancR = customMode ? baseR * 0.85 : 46;
               const ancG = customMode ? baseG * 0.85 : 92;
@@ -2239,12 +2160,12 @@ outColor = clamp(vec4(premulRgb, outAlpha), 0.0, 1.0);
               if (compA <= 0.002) continue;
               const wFill = (fillA * (1 - dotA)) / compA;
               const wDot = dotA / compA;
-              R = Math.round(Math.min(255, Math.max(0, inkR * wFill + dotR * wDot))) & 255;
-              G = Math.round(Math.min(255, Math.max(0, inkG * wFill + dotG * wDot))) & 255;
-              B = Math.round(Math.min(255, Math.max(0, inkB * wFill + dotB * wDot))) & 255;
+              R = cl255(inkR * wFill + dotR * wDot);
+              G = cl255(inkG * wFill + dotG * wDot);
+              B = cl255(inkB * wFill + dotB * wDot);
             }
-            const outA = Math.max(0, Math.min(1, fillA + dotA * (1 - fillA)));
-            const A = Math.round(outA * 255) & 255;
+            const outA = cl01(fillA + dotA * (1 - fillA));
+            const A = round(outA * 255) & 255;
             if (A === 0) continue;
             const packed = LITTLE_ENDIAN ? ((A << 24) | (B << 16) | (G << 8) | R) >>> 0 : ((R << 24) | (G << 16) | (B << 8) | A) >>> 0;
             for (let sy = 0; sy < step && py + sy < h; sy++) {
@@ -2261,14 +2182,14 @@ outColor = clamp(vec4(premulRgb, outAlpha), 0.0, 1.0);
     };
   }
   function expClamp(v) {
-    return v > 40 ? 0 : Math.exp(-v);
+    return v > 40 ? 0 : M.exp(-v);
   }
 
   function parseAmbientScale(raw) {
     if (raw === null || raw === undefined || raw === '') return 1;
     const n = Number(raw);
     if (!Number.isFinite(n)) return 1;
-    return n <= 0 ? 0 : n > 1 ? Math.max(0, Math.min(1, n / 100)) : Math.max(0, Math.min(1, n));
+    return n <= 0 ? 0 : n > 1 ? M.max(0, M.min(1, n / 100)) : M.max(0, M.min(1, n));
   }
 
   function mountBrandHorizonGlow(canvas, options = {}) {
@@ -2286,14 +2207,15 @@ outColor = clamp(vec4(premulRgb, outAlpha), 0.0, 1.0);
         draw() {},
         drawStaticSnapshot() { return false; },
         isSleeping() { return true; },
+        isContextLost() { return false; },
         dispose() {},
       };
     }
-    const force2D = Boolean(options.force2D) || (typeof globalThis !== 'undefined' && globalThis.__agRippleForce2D === true);
+    const force2D = Boolean(options.prefer2D || options.force2D) || (typeof globalThis !== 'undefined' && globalThis.__agRippleForce2D === true);
     const renderer = (force2D ? null : createBrandHorizonGLRenderer(canvas)) || createBrandHorizon2DRenderer(canvas);
-    let cssW = Math.max(0, Number(options.width || canvas.clientWidth || 0));
-    let cssH = Math.max(0, Number(options.height || canvas.clientHeight || 0));
-    let dpr = Math.max(0.5, Math.min(1.75, Number(options.dpr || 1)));
+    let cssW = M.max(0, Number(options.width ?? canvas.clientWidth ?? 0));
+    let cssH = M.max(0, Number(options.height ?? canvas.clientHeight ?? 0));
+    let dpr = M.max(0.5, M.min(1.75, Number(options.dpr || 1)));
     const baseAura = {
       reach: clampFinite(options.reach, DEFAULT_HORIZON_AURA.reach, 0.05, 1),
       prism: clampFinite(options.prism, DEFAULT_HORIZON_AURA.prism, 0, 1),
@@ -2326,21 +2248,18 @@ outColor = clamp(vec4(premulRgb, outAlpha), 0.0, 1.0);
     let clearedZero = false;
     let stale = true;
     let sleeping = false;
-    function onContextLost(e) { if (e && e.preventDefault) e.preventDefault(); }
-    function onContextRestored() {
-      if (renderer && renderer.build) renderer.build();
-      stale = true;
-    }
+    const onContextLost = (e) => { e?.preventDefault?.(); try { options?.onContextLost?.(e); } catch {} };
+    const onContextRestored = () => { try { renderer?.build?.(); } catch {} stale = true; };
     if (canvas.addEventListener) {
       canvas.addEventListener('webglcontextlost', onContextLost);
       canvas.addEventListener('webglcontextrestored', onContextRestored);
     }
     function syncSize(w, h, nextDpr) {
-      const nw = Math.max(0, Math.round(Number(w || 0)));
-      const nh = Math.max(0, Math.round(Number(h || 0)));
-      const nd = Math.max(0.5, Math.min(1.75, Number(nextDpr || dpr || 1)));
-      const pw = Math.max(1, Math.round(nw * nd));
-      const ph = Math.max(1, Math.round(nh * nd));
+      const nw = M.max(0, M.round(Number(w || 0)));
+      const nh = M.max(0, M.round(Number(h || 0)));
+      const nd = M.max(0.5, M.min(1.75, Number(nextDpr || dpr || 1)));
+      const pw = M.max(1, M.round(nw * nd));
+      const ph = M.max(1, M.round(nh * nd));
       if (nw !== cssW || nh !== cssH || nd !== dpr || canvas.width !== pw || canvas.height !== ph) {
         cssW = nw;
         cssH = nh;
@@ -2469,27 +2388,27 @@ outColor = clamp(vec4(premulRgb, outAlpha), 0.0, 1.0);
       activeSemantic = String(rawSem || 'none');
 
       const rawNow = Number(nowInput || 0);
-      const inSec = Boolean(extra && extra.timeUnit === 'sec') || (!isObjOpts && lastRawNow !== null && rawNow > 0 && rawNow < 1e4 && Math.abs(rawNow - lastRawNow) > 0 && Math.abs(rawNow - lastRawNow) < 0.5);
+      const inSec = Boolean(extra && extra.timeUnit === 'sec') || (!isObjOpts && lastRawNow !== null && rawNow > 0 && rawNow < 1e4 && M.abs(rawNow - lastRawNow) > 0 && M.abs(rawNow - lastRawNow) < 0.5);
       lastRawNow = rawNow;
       const nowMs = inSec ? rawNow * 1000 : rawNow;
       if (startMs === null) startMs = nowMs;
       const ext = Boolean(extra) || hasCustom;
-      const realSec = still ? 0 : Math.max(0, (nowMs - startMs) / 1000);
-      const ramp = (still || forceStatic || ext) ? 1 : -(Math.cos(Math.PI * Math.min(1, Math.max(0, realSec / 1.4))) - 1) * 0.5;
-      const basePresence = Math.max(0.22, ramp);
+      const realSec = still ? 0 : M.max(0, (nowMs - startMs) / 1000);
+      const ramp = (still || forceStatic || ext) ? 1 : -(M.cos(M.PI * M.min(1, M.max(0, realSec / 1.4))) - 1) * 0.5;
+      const basePresence = M.max(0.22, ramp);
       const dirty = forceStatic
         || dark !== lastDark
         || spectrumCode !== lastSpectrum
         || semanticCode !== lastSemantic
-        || Math.abs((semanticCode > 0 ? 1 : 0) - semMix) > 0.005
-        || Math.abs(strength - lastStrength) >= 0.005
-        || Math.abs(reach - lastReach) >= 0.002
-        || Math.abs(prism - lastPrism) >= 0.002
-        || Math.abs(surge - lastSurge) >= 0.001
-        || Math.abs(speed - lastSpeed) >= 0.005;
+        || M.abs((semanticCode > 0 ? 1 : 0) - semMix) > 0.005
+        || M.abs(strength - lastStrength) >= 0.005
+        || M.abs(reach - lastReach) >= 0.002
+        || M.abs(prism - lastPrism) >= 0.002
+        || M.abs(surge - lastSurge) >= 0.001
+        || M.abs(speed - lastSpeed) >= 0.005;
       const isGpuGlow = Boolean(renderer && renderer.mode === 'webgl2');
       const frameGap = isGpuGlow ? 0 : (ext ? 14 : (basePresence < 1 ? 33 : 42));
-      if (!stale && !dirty && (still || (frameGap > 0 && Math.abs(nowMs - lastDrawMs) < frameGap))) {
+      if (!stale && !dirty && (still || (frameGap > 0 && M.abs(nowMs - lastDrawMs) < frameGap))) {
         if (forceStatic) sleeping = true;
         return false;
       }
@@ -2504,10 +2423,10 @@ outColor = clamp(vec4(premulRgb, outAlpha), 0.0, 1.0);
       } else {
         sleeping = false;
         if (lastClockMs === null || nowMs < lastClockMs) {
-          if (lastClockMs === null) flowSec = Math.min(2.4, realSec * speed);
+          if (lastClockMs === null) flowSec = M.min(2.4, realSec * speed);
           lastClockMs = nowMs;
         } else {
-          dtSec = Math.min(0.35, Math.max(0, (nowMs - lastClockMs) / 1000));
+          dtSec = M.min(0.35, M.max(0, (nowMs - lastClockMs) / 1000));
           lastClockMs = nowMs;
           flowSec += dtSec * speed;
         }
@@ -2517,17 +2436,17 @@ outColor = clamp(vec4(premulRgb, outAlpha), 0.0, 1.0);
         semMix = semanticCode > 0 ? 1 : 0;
       } else {
         const tgt = semanticCode > 0 ? 1 : 0;
-        const step = Math.min(1, Math.max(0.04, dtSec / 0.45));
+        const step = M.min(1, M.max(0.04, dtSec / 0.45));
         semMix += (tgt - semMix) * step;
-        if (Math.abs(tgt - semMix) < 0.01) semMix = tgt;
+        if (M.abs(tgt - semMix) < 0.01) semMix = tgt;
       }
       const effSem = holdSem > 0 && semMix > 0.005 ? holdSem + (1 - semMix) * 0.98 : 0;
       const breath = forceStatic
         ? 0.64
-        : (still ? 0.58 : 0.46 + 0.24 * Math.sin(flowSec * 1.15) + 0.06 * Math.sin(flowSec * 2.05 + 0.9));
+        : (still ? 0.58 : 0.46 + 0.24 * M.sin(flowSec * 1.15) + 0.06 * M.sin(flowSec * 2.05 + 0.9));
       const isDefaultHome = !ext && strength >= 0.999;
       const intensity = isDefaultHome ? breath * (0.2 + 0.8 * strength) : breath * (0.55 + 0.45 * strength);
-      const strengthGain = strength <= 0 ? 0 : (strength >= 0.999 ? 1 : Math.pow(strength, 0.78));
+      const strengthGain = strength <= 0 ? 0 : (strength >= 0.999 ? 1 : M.pow(strength, 0.78));
       const presence = basePresence * strengthGain;
       renderer.draw(canvas.width, canvas.height, dpr, 12 + flowSec, dark, intensity, presence, reach, prism, surge, speed, spectrumCode, effSem);
       clearedZero = false;
@@ -2545,6 +2464,7 @@ outColor = clamp(vec4(premulRgb, outAlpha), 0.0, 1.0);
     }
     return {
       mode: renderer ? renderer.mode : 'none',
+      isContextLost: () => Boolean(renderer && renderer.isContextLost && renderer.isContextLost()),
       resize(w, h, nextDpr) {
         syncSize(w, h, nextDpr);
       },
@@ -2575,13 +2495,13 @@ outColor = clamp(vec4(premulRgb, outAlpha), 0.0, 1.0);
         stale = true;
         return renderInternal(nowInput, isDarkOrOpts, strengthArg, extraArg, true);
       },
-      dispose() {
+      dispose(keep) {
         sleeping = true;
         if (canvas.removeEventListener) {
           canvas.removeEventListener('webglcontextlost', onContextLost);
           canvas.removeEventListener('webglcontextrestored', onContextRestored);
         }
-        if (renderer) renderer.dispose();
+        if (renderer) renderer.dispose(keep);
       },
     };
   }

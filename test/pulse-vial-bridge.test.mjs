@@ -555,7 +555,7 @@ test('peaceful coexistence: preserves #ag-pulse-status-bar, __agPulseRuntimeVers
     assert.equal(card.style.getPropertyValue('--pv-cx'), '-108px');
 
     const toggleBtn = sr.querySelector('[data-ag-pulse-vial-toggle="1"]');
-    assert.equal(toggleBtn?.textContent, '实体试管');
+    assert.equal(toggleBtn?.textContent, 'Vial', 'Unset language must default cleanly to English without Chinese leak');
     const canvas = sr.querySelector('canvas[data-vial-canvas="true"]');
     assert.ok(canvas);
 
@@ -937,12 +937,12 @@ test('v1.0.1 interactive slice hover, >=80% /compact button, 5h+weekly quota for
     compactBtn.dispatchEvent({ type: 'click' });
     assert.equal(composerInput.value, '/compact');
 
-    // 3. Hovering .pv-seg updates hoveredSlice (0/1/2) & telemetry readout, and resets on pointerleave
+    // 3. Hovering .pv-seg updates hoveredSlice (0/1/2) & telemetry readout, and resets on pointerleave (default en without Chinese leak)
     const segs = sr.querySelectorAll('[data-layer-slice]');
     assert.equal(segs.length, 3);
     segs[2].dispatchEvent({ type: 'pointerenter' });
     assert.equal(bridge.getDebugState().hoveredSlice, 2);
-    assert.match(sr.querySelector('[data-ag-pulse-telemetry="1"]').textContent, /工具输出/);
+    assert.match(sr.querySelector('[data-ag-pulse-telemetry="1"]').textContent, /Tool Output/);
     segs[2].dispatchEvent({ type: 'pointerleave' });
     assert.equal(bridge.getDebugState().hoveredSlice, -1);
     assert.match(sr.querySelector('[data-ag-pulse-telemetry="1"]').textContent, /TTFT/);
@@ -958,7 +958,7 @@ test('v1.0.1 interactive slice hover, >=80% /compact button, 5h+weekly quota for
     assert.equal(qtSec.querySelector('[data-ag-pulse-quota-fill="weekly"]')?.style?.width, '80.0%', 'Weekly solid bar must reflect 100% true remaining quota (80.0%)');
     const taskSplit = sr.querySelector('[data-ag-pulse-qtask="1"]');
     assert.equal(taskSplit.hidden, false);
-    assert.match(taskSplit.textContent, /Swarm\/子代理\(3\)/);
+    assert.match(taskSplit.textContent, /Swarm\/Sub\(3\)/);
 
     // Click sibling Argon pill (remaining: 0.25 <= 0.35) -> switches to Argon weekly window & amber 'tight' health tier (25.0% solid bar)
     const qTabs = sr.querySelectorAll('[data-ag-pulse-qgroup]');
@@ -1168,7 +1168,7 @@ test('v0.9.1 live compatibility: [data-ag-pulse-bar="true"][data-scope="main"] h
   }
 });
 
-test('OP-5.2 / HS-8.3 / UX-9 & <31,000B gate: light+warm alabaster alignment, targetFps=60 rAF throttling, and live 5-language switching', async () => {
+test('OP-5.2 / HS-8.3 / UX-9 & <31,000B gate: light+warm alabaster alignment, targetFps=60 rAF throttling, and live 8-language switching', async () => {
   const rawSrc = fs.readFileSync(BRIDGE_PATH, 'utf8');
   assert.equal(rawSrc.includes('\r'), false, 'pulse-vial-bridge.js must use LF line endings');
   assert.ok(Buffer.byteLength(rawSrc, 'utf8') < 31000, `pulse-vial-bridge.js must stay < 31,000B, got ${Buffer.byteLength(rawSrc, 'utf8')}`);
@@ -1263,24 +1263,35 @@ test('OP-5.2 / HS-8.3 / UX-9 & <31,000B gate: light+warm alabaster alignment, ta
     assert.equal(host.getAttribute('data-pv-preset'), 'alabaster');
     assert.equal(bridge.getDebugState().lightPreset, 'alabaster');
 
-    // 2. UX-9: Live 5-language switching (zh-CN -> en -> ja)
+    // 2. UX-9: Unset/auto defaults cleanly to English (zero Chinese leak), plus live 8-language switching & yue->zh-CN migration
     const toggleBtn = sr.querySelector('[data-ag-pulse-vial-toggle="1"]');
     const segs = sr.querySelectorAll('[data-layer-slice]');
     const taskSplit = sr.querySelector('[data-ag-pulse-qtask="1"]');
-    assert.equal(toggleBtn.textContent, '实体试管');
-
-    env.doc.documentElement.setAttribute('data-ag-cs-lang', 'en');
+    assert.equal(toggleBtn.textContent, 'Vial', 'Unset language must default to English without Chinese leak');
+    env.doc.documentElement.setAttribute('data-ag-cs-lang', 'auto');
     for (const rec of observerRecords) rec.cb([]);
-    assert.equal(toggleBtn.textContent, 'Vial');
-    assert.match(taskSplit.textContent, /Main .* Swarm\/Sub\(3\)/);
-    segs[2].dispatchEvent({ type: 'pointerenter' });
-    assert.match(sr.querySelector('[data-ag-pulse-telemetry="1"]').textContent, /Tool Output/);
-    segs[2].dispatchEvent({ type: 'pointerleave' });
+    assert.equal(toggleBtn.textContent, 'Vial', 'auto without Chinese navigator.language must stay clean English');
 
-    env.doc.documentElement.setAttribute('data-ag-cs-lang', 'ja');
-    for (const rec of observerRecords) rec.cb([]);
-    assert.equal(toggleBtn.textContent, '試験管');
-    assert.match(taskSplit.textContent, /メイン .* Swarm\/サブ\(3\)/);
+    for (const [langAttr, expToggle, expSplitRe, expToolRe] of [
+      ['zh-CN', '实体试管', /主会话 .* Swarm\/子代理\(3\)/, /工具输出/],
+      ['yue', '实体试管', /主会话 .* Swarm\/子代理\(3\)/, /工具输出/],
+      ['zh-TW', '實體試管', /主會話 .* Swarm\/子代理\(3\)/, /工具輸出/],
+      ['zh-HK', '實體試管', /主會話 .* Swarm\/子代理\(3\)/, /工具輸出/],
+      ['en', 'Vial', /Main .* Swarm\/Sub\(3\)/, /Tool Output/],
+      ['ja', '試験管', /メイン .* Swarm\/サブ\(3\)/, /ツール出力/],
+      ['ko', '시험관', /메인 .* Swarm\/서브\(3\)/, /도구 출력/],
+      ['es', 'Tubo', /Principal .* Swarm\/Sub\(3\)/, /Salida/],
+      ['fr', 'Fiole', /Principal .* Swarm\/Sous\(3\)/, /Outils/],
+      ['de', 'Gefäß', /Haupt .* Swarm\/Sub\(3\)/, /Ausgabe/],
+    ]) {
+      env.doc.documentElement.setAttribute('data-ag-cs-lang', langAttr);
+      for (const rec of observerRecords) rec.cb([]);
+      assert.equal(toggleBtn.textContent, expToggle, `Toggle label mismatch for ${langAttr}`);
+      assert.match(taskSplit.textContent, expSplitRe, `Task split mismatch for ${langAttr}`);
+      segs[2].dispatchEvent({ type: 'pointerenter' });
+      assert.match(sr.querySelector('[data-ag-pulse-telemetry="1"]').textContent, expToolRe, `Telemetry hover mismatch for ${langAttr}`);
+      segs[2].dispatchEvent({ type: 'pointerleave' });
+    }
 
     // 3. HS-8.3: targetFps="60" throttles 180Hz (5ms) rAF callbacks to ~60Hz (>=15.2ms)
     env.doc.documentElement.setAttribute('data-ag-cs-target-fps', '60');

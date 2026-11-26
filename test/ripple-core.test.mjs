@@ -690,7 +690,8 @@ test('mountBrandHorizonGlow WebGL2 shader compiles #version 300 es prism/surge/s
     assert.equal(drawArraysCount, 6);
 
     glow.dispose();
-    assert.equal(deletedPrograms, 1);
+    // onContextRestored() frees the previous program before rebuilding (1), then dispose() deletes the rebuilt program (2)
+    assert.equal(deletedPrograms, 2);
     assert.equal(listeners.size, 0);
   } finally {
     if (prevForce !== undefined) globalThis.__agRippleForce2D = prevForce;
@@ -1753,6 +1754,7 @@ test('Conv-aura wave smoothness & 450ms semantic blend: non-negative running sur
   delete globalThis.__agRippleForce2D;
   try {
     const uniformValues = new Map();
+    let loseContextCalls = 0;
     const gl = {
       VERTEX_SHADER: 35633,
       FRAGMENT_SHADER: 35632,
@@ -1781,6 +1783,7 @@ test('Conv-aura wave smoothness & 450ms semantic blend: non-negative running sur
       uniform2f() {},
       uniform1f(loc, v) { if (loc?.name) uniformValues.set(loc.name, v); },
       drawArrays() {},
+      getExtension: (n) => (n === 'WEBGL_lose_context' ? { loseContext() { loseContextCalls += 1; } } : null),
     };
     const canvas = {
       width: 0,
@@ -1827,7 +1830,707 @@ test('Conv-aura wave smoothness & 450ms semantic blend: non-negative running sur
     assert.ok(semExit > 3.01 && semExit < 3.98, `Expected smooth fractional uSemantic crossfade on exit, got ${semExit}`);
 
     glow.dispose();
+    assert.equal(loseContextCalls, 1, 'createHorizonGlowWebGL.dispose() must invoke WEBGL_lose_context.loseContext()');
+
+    // 3) Verify createWebGLRenderer.dispose() also invokes WEBGL_lose_context.loseContext()
+    let glyphLoseCalls = 0;
+    const glGlyph = {
+      ...gl,
+      TEXTURE_2D: 3553,
+      TEXTURE0: 33984,
+      TEXTURE1: 33985,
+      RGBA: 6408,
+      RGBA8: 32856,
+      UNSIGNED_BYTE: 5121,
+      LINEAR: 9729,
+      NEAREST: 9728,
+      CLAMP_TO_EDGE: 33071,
+      TEXTURE_MIN_FILTER: 10241,
+      TEXTURE_MAG_FILTER: 10240,
+      TEXTURE_WRAP_S: 10242,
+      TEXTURE_WRAP_T: 10243,
+      BLEND: 3042,
+      SRC_ALPHA: 770,
+      ONE_MINUS_SRC_ALPHA: 771,
+      createTexture: () => ({}),
+      deleteTexture() {},
+      activeTexture() {},
+      bindTexture() {},
+      texParameteri() {},
+      texStorage2D() {},
+      texImage2D() {},
+      texSubImage2D() {},
+      enable() {},
+      blendFunc() {},
+      uniform1i() {},
+      uniform3f() {},
+      uniform4f() {},
+      getExtension: (n) => (n === 'WEBGL_lose_context' ? { loseContext() { glyphLoseCalls += 1; } } : null),
+    };
+    const glyphCanvas = {
+      width: 0,
+      height: 0,
+      ownerDocument: {
+        createElement: () => ({
+          width: 0,
+          height: 0,
+          getContext: () => ({
+            setTransform() {},
+            clearRect() {},
+            fillText() {},
+            font: '',
+            fillStyle: '',
+            textAlign: '',
+            textBaseline: '',
+          }),
+        }),
+      },
+      getContext: (t) => (t === 'webgl2' ? glGlyph : null),
+      addEventListener() {},
+      removeEventListener() {},
+    };
+    const gField = rippleCore.createGlyphField(glyphCanvas, 16, 8);
+    assert.equal(gField.mode, 'webgl2');
+    gField.dispose();
+    assert.equal(glyphLoseCalls, 1, 'createWebGLRenderer.dispose() must invoke WEBGL_lose_context.loseContext()');
   } finally {
     if (prevForce !== undefined) globalThis.__agRippleForce2D = prevForce;
   }
+});
+
+test('resize regression: dispose(true) preserves WebGL2 context across resizes, lost context never throws shader compile error, and home-ripple-host survives resize & external context loss', () => {
+  const prevForce = globalThis.__agRippleForce2D;
+  globalThis.__agRippleForce2D = false;
+  try {
+    let contextLost = false;
+    let loseCalls = 0;
+    let deleteProgramCalls = 0;
+    let deleteTextureCalls = 0;
+    const makeGl = () => ({
+      VERTEX_SHADER: 35633,
+      FRAGMENT_SHADER: 35632,
+      COMPILE_STATUS: 35713,
+      LINK_STATUS: 35714,
+      COLOR_BUFFER_BIT: 16384,
+      TRIANGLES: 4,
+      TEXTURE_2D: 3553,
+      TEXTURE0: 33984,
+      TEXTURE1: 33985,
+      RGBA: 6408,
+      RGBA8: 32856,
+      UNSIGNED_BYTE: 5121,
+      LINEAR: 9729,
+      NEAREST: 9728,
+      CLAMP_TO_EDGE: 33071,
+      TEXTURE_MIN_FILTER: 10241,
+      TEXTURE_MAG_FILTER: 10240,
+      TEXTURE_WRAP_S: 10242,
+      TEXTURE_WRAP_T: 10243,
+      isContextLost: () => contextLost,
+      createShader: () => (contextLost ? null : {}),
+      shaderSource() {},
+      compileShader() {},
+      getShaderParameter: () => !contextLost,
+      getShaderInfoLog: () => '',
+      deleteShader() {},
+      createProgram: () => (contextLost ? null : {}),
+      attachShader() {},
+      linkProgram() {},
+      getProgramParameter: () => !contextLost,
+      getProgramInfoLog: () => '',
+      useProgram() {},
+      deleteProgram() { deleteProgramCalls += 1; },
+      getUniformLocation: () => ({}),
+      createTexture: () => ({}),
+      deleteTexture() { deleteTextureCalls += 1; },
+      activeTexture() {},
+      bindTexture() {},
+      texParameteri() {},
+      texStorage2D() {},
+      texImage2D() {},
+      texSubImage2D() {},
+      viewport() {},
+      uniform1i() {},
+      uniform1f() {},
+      uniform2f() {},
+      uniform3f() {},
+      uniform4f() {},
+      clearColor() {},
+      clear() {},
+      drawArrays() {},
+      getExtension: (n) => (n === 'WEBGL_lose_context' ? { loseContext() { loseCalls += 1; contextLost = true; } } : null),
+    });
+
+    const gl = makeGl();
+    const atlasCtx = {
+      setTransform() {},
+      clearRect() {},
+      fillText() {},
+      font: '',
+      fillStyle: '',
+      textAlign: '',
+      textBaseline: '',
+    };
+    const canvas = {
+      width: 200,
+      height: 100,
+      ownerDocument: {
+        createElement: () => ({ width: 0, height: 0, getContext: () => atlasCtx }),
+      },
+      getContext: (t) => (t === 'webgl2' ? gl : null),
+      addEventListener() {},
+      removeEventListener() {},
+    };
+
+    // 1) Repeated resize with dispose(true) deletes GL objects but keeps context alive
+    const f1 = rippleCore.createGlyphField(canvas, 16, 8);
+    assert.equal(f1.mode, 'webgl2');
+    f1.dispose(true);
+    assert.equal(loseCalls, 0, 'dispose(true) must NOT invoke WEBGL_lose_context.loseContext()');
+    assert.equal(contextLost, false);
+    assert.equal(deleteProgramCalls, 1);
+    assert.equal(deleteTextureCalls, 2);
+
+    const f2 = rippleCore.createGlyphField(canvas, 24, 12);
+    assert.equal(f2.mode, 'webgl2', 'recreating glyph field on resized canvas must stay in webgl2 mode');
+
+    // 2) Final unmount dispose() (default keepContext=false) still loses context once
+    f2.dispose();
+    assert.equal(loseCalls, 1);
+    assert.equal(contextLost, true);
+
+    // 3) Attempting to create on a permanently lost WebGL2 canvas must never throw shader compile error
+    const fLost = rippleCore.createGlyphField(canvas, 24, 12);
+    assert.equal(fLost.mode, 'none', 'lost WebGL2 canvas without 2D context must degrade to mode: none without throwing');
+
+    const glowLost = rippleCore.mountBrandHorizonGlow(canvas);
+    assert.equal(glowLost.mode, 'none', 'mountBrandHorizonGlow on lost WebGL2 canvas must degrade safely');
+
+    // 4) Shader compile failure inside createWebGL2Renderer must not throw uncaught error
+    contextLost = false;
+    const brokenGl = { ...makeGl(), getShaderParameter: () => false, getShaderInfoLog: () => 'simulated failure' };
+    const brokenCanvas = { ...canvas, getContext: (t) => (t === 'webgl2' ? brokenGl : null) };
+    const fBroken = rippleCore.createGlyphField(brokenCanvas, 16, 8);
+    assert.equal(fBroken.mode, 'none', 'shader compile failure must fall back cleanly instead of throwing');
+
+    // 5) home-ripple-host layout() calls dispose(true) across resizes and swaps canvas if context is externally lost
+    const homeRippleHost = require(path.resolve(__dirname, '..', 'home-ripple-host.js'));
+    const prevDoc = globalThis.document;
+    const prevWin = globalThis.window;
+    const prevRaf = globalThis.requestAnimationFrame;
+    const prevCaf = globalThis.cancelAnimationFrame;
+    const prevRO = globalThis.ResizeObserver;
+    const prevPerf = globalThis.performance;
+    try {
+      let roCallback = null;
+      let nextCanvasId = 0;
+      const makeNode = (tag) => {
+        const attrs = new Map();
+        const children = [];
+        let nodeLost = false;
+        let nodeGl = null;
+        const node = {
+          tagName: tag.toUpperCase(),
+          className: '',
+          style: {},
+          width: 0,
+          height: 0,
+          clientWidth: 960,
+          clientHeight: 600,
+          children,
+          parentNode: null,
+          _canvasId: tag === 'canvas' ? ++nextCanvasId : 0,
+          _setLost(v) { nodeLost = v; },
+          get isConnected() { return Boolean(this.parentNode); },
+          get firstChild() { return children[0] || null; },
+          setAttribute(k, v) { attrs.set(k, String(v)); },
+          getAttribute(k) { return attrs.get(k) ?? null; },
+          hasAttribute(k) { return attrs.has(k); },
+          removeAttribute(k) { attrs.delete(k); },
+          appendChild(ch) { ch.parentNode = this; children.push(ch); return ch; },
+          insertBefore(ch, ref) {
+            ch.parentNode = this;
+            const i = ref ? children.indexOf(ref) : -1;
+            if (i >= 0) children.splice(i, 0, ch);
+            else children.push(ch);
+            return ch;
+          },
+          replaceChild(next, old) {
+            const i = children.indexOf(old);
+            if (i >= 0) {
+              old.parentNode = null;
+              next.parentNode = this;
+              children[i] = next;
+            }
+            return old;
+          },
+          replaceWith(next) {
+            if (this.parentNode) this.parentNode.replaceChild(next, this);
+          },
+          remove() {
+            if (this.parentNode) {
+              const i = this.parentNode.children.indexOf(this);
+              if (i >= 0) this.parentNode.children.splice(i, 1);
+              this.parentNode = null;
+            }
+          },
+          querySelector: () => null,
+          getBoundingClientRect: () => ({ left: 0, top: 0, width: 960, height: 600 }),
+          addEventListener() {},
+          removeEventListener() {},
+          ownerDocument: null,
+          getContext(type) {
+            if (type === '2d') return atlasCtx;
+            if (type === 'webgl2') {
+              if (!nodeGl) {
+                const base = makeGl();
+                nodeGl = {
+                  ...base,
+                  isContextLost: () => nodeLost,
+                  createShader: () => (nodeLost ? null : {}),
+                  getShaderParameter: () => !nodeLost,
+                  createProgram: () => (nodeLost ? null : {}),
+                  getProgramParameter: () => !nodeLost,
+                  getExtension: (n) => (n === 'WEBGL_lose_context' ? { loseContext() { nodeLost = true; } } : null),
+                };
+              }
+              return nodeGl;
+            }
+            return null;
+          },
+        };
+        return node;
+      };
+      const fakeDoc = {
+        hidden: false,
+        documentElement: makeNode('html'),
+        createElement(tag) {
+          const el = makeNode(tag);
+          el.ownerDocument = fakeDoc;
+          return el;
+        },
+        querySelector(sel) { return sel === '.agy-home' ? homeEl : null; },
+        addEventListener() {},
+        removeEventListener() {},
+      };
+      const homeEl = fakeDoc.createElement('div');
+      homeEl.parentNode = fakeDoc.documentElement;
+      const rafQueue = [];
+      let rafSeq = 0;
+      const flushRaf = (ts = 16) => {
+        const batch = rafQueue.splice(0, rafQueue.length);
+        for (const item of batch) {
+          if (!item.cancelled) item.fn(ts);
+        }
+      };
+      globalThis.document = fakeDoc;
+      globalThis.window = { devicePixelRatio: 1, addEventListener() {}, removeEventListener() {} };
+      globalThis.requestAnimationFrame = (fn) => {
+        const id = ++rafSeq;
+        rafQueue.push({ id, fn, cancelled: false });
+        return id;
+      };
+      globalThis.cancelAnimationFrame = (id) => {
+        const item = rafQueue.find((x) => x.id === id);
+        if (item) item.cancelled = true;
+      };
+      globalThis.ResizeObserver = class { constructor(cb) { roCallback = cb; } observe() {} disconnect() {} };
+      globalThis.performance = { now: () => 100 };
+
+      let ctl = null;
+      try {
+        ctl = homeRippleHost.createHomeRippleController({
+          rippleCore,
+          isDestroyed: () => false,
+          isAllowed: () => true,
+          isDarkTheme: () => true,
+          motionReduced: () => false,
+          getMinFrameGapMs: () => 0,
+          getAmbientIntensity: () => 1,
+          getAccentTone: () => 'follow',
+          setAttrIfChanged(el, k, v) { el.setAttribute(k, v); },
+        });
+        ctl.sync();
+        flushRaf(100);
+        const mount = ctl.getMount();
+        assert.equal(mount.field.mode, 'webgl2');
+        const initialCanvas = mount.canvas;
+
+        // Trigger resize -> must keep same live WebGL2 canvas and stay in webgl2 mode
+        homeEl.clientWidth = 1280;
+        homeEl.clientHeight = 720;
+        roCallback();
+        flushRaf(120);
+        assert.equal(mount.field.mode, 'webgl2', 'home-ripple-host resize must preserve WebGL2 rendering');
+        assert.equal(mount.canvas, initialCanvas, 'healthy canvas should be reused on resize');
+        assert.equal(mount.canvas.getContext('webgl2').isContextLost(), false);
+
+        // Simulate external GPU context loss then resize -> must swap in fresh canvas and recover WebGL2
+        mount.canvas._setLost(true);
+        homeEl.clientWidth = 1440;
+        homeEl.clientHeight = 800;
+        roCallback();
+        flushRaf(140);
+        assert.notEqual(mount.canvas, initialCanvas, 'externally lost canvas must be replaced with a fresh <canvas>');
+        assert.equal(mount.field.mode, 'webgl2', 'swapped fresh canvas must recover WebGL2 mode');
+      } finally {
+        ctl?.unmount?.();
+      }
+    } finally {
+      if (prevDoc === undefined) delete globalThis.document; else globalThis.document = prevDoc;
+      if (prevWin === undefined) delete globalThis.window; else globalThis.window = prevWin;
+      if (prevRaf === undefined) delete globalThis.requestAnimationFrame; else globalThis.requestAnimationFrame = prevRaf;
+      if (prevCaf === undefined) delete globalThis.cancelAnimationFrame; else globalThis.cancelAnimationFrame = prevCaf;
+      if (prevRO === undefined) delete globalThis.ResizeObserver; else globalThis.ResizeObserver = prevRO;
+      if (prevPerf === undefined) delete globalThis.performance; else globalThis.performance = prevPerf;
+    }
+  } finally {
+    if (prevForce !== undefined) globalThis.__agRippleForce2D = prevForce;
+  }
+});
+
+test('Issue #64 WebGL2 white-screen hardening: Chromium canvas-lock true-2D fallback, glowCanvas dispose(true) & self-heal, async webglcontextlost recovery & hide-on-total-failure', () => {
+  const homeRippleHost = require(path.resolve(__dirname, '..', 'home-ripple-host.js'));
+  const prevForce = globalThis.__agRippleForce2D;
+  const prevDoc = globalThis.document;
+  const prevWin = globalThis.window;
+  const prevRaf = globalThis.requestAnimationFrame;
+  const prevCaf = globalThis.cancelAnimationFrame;
+  const prevST = globalThis.setTimeout;
+  const prevCT = globalThis.clearTimeout;
+  const prevRO = globalThis.ResizeObserver;
+  const prevPerf = globalThis.performance;
+
+  globalThis.__agRippleForce2D = false;
+
+  const make2DCtx = () => ({
+    setTransform() {},
+    clearRect() {},
+    fillText() {},
+    getImageData(_x, _y, w, h) {
+      const buf = new Uint8ClampedArray(w * h * 4);
+      for (let i = 3; i < buf.length; i += 4) buf[i] = 255;
+      return { width: w, height: h, data: buf };
+    },
+    createImageData: (w, h) => ({ width: w, height: h, data: new Uint8ClampedArray(w * h * 4) }),
+    putImageData() {},
+  });
+
+  // 1) Direct ripple-core checks: mountBrandHorizonGlow.dispose(true) preserves context, isContextLost(), onContextRestored try/catch
+  {
+    let lost = false;
+    let loseCalls = 0;
+    let buildFail = false;
+    let lostNotified = 0;
+    const ls = new Map();
+    const gl = {
+      VERTEX_SHADER: 35633, FRAGMENT_SHADER: 35632, COMPILE_STATUS: 35713, LINK_STATUS: 35714,
+      COLOR_BUFFER_BIT: 16384, TRIANGLES: 4,
+      isContextLost: () => lost,
+      createShader: () => (buildFail ? null : {}),
+      shaderSource() {}, compileShader() {},
+      getShaderParameter: () => !buildFail,
+      getShaderInfoLog: () => (buildFail ? 'restored-fail' : ''),
+      deleteShader() {},
+      createProgram: () => ({}), attachShader() {}, linkProgram() {},
+      getProgramParameter: () => !buildFail, getProgramInfoLog: () => '',
+      useProgram() {}, deleteProgram() {}, getUniformLocation: () => ({}),
+      viewport() {}, uniform1f() {}, uniform2f() {}, clearColor() {}, clear() {}, drawArrays() {},
+      getExtension: (n) => (n === 'WEBGL_lose_context' ? { loseContext() { loseCalls += 1; lost = true; } } : null),
+    };
+    const cv = {
+      width: 320, height: 180,
+      ownerDocument: { hidden: false },
+      getContext: (t) => (t === 'webgl2' ? gl : null),
+      addEventListener: (t, fn) => ls.set(t, fn),
+      removeEventListener: (t) => ls.delete(t),
+    };
+    const g = rippleCore.mountBrandHorizonGlow(cv, { onContextLost: () => { lostNotified += 1; } });
+    assert.equal(g.mode, 'webgl2');
+    assert.equal(g.isContextLost(), false);
+    lost = true;
+    assert.equal(g.isContextLost(), true);
+    ls.get('webglcontextlost')({ preventDefault() {} });
+    assert.equal(lostNotified, 1, 'onContextLost callback must fire');
+    buildFail = true;
+    assert.doesNotThrow(() => ls.get('webglcontextrestored')(), 'onContextRestored must catch build() errors cleanly');
+    lost = false;
+    g.dispose(true);
+    assert.equal(loseCalls, 0, 'mountBrandHorizonGlow.dispose(true) must NOT call loseContext()');
+    assert.equal(ls.size, 0);
+  }
+
+  // 2) Full home-ripple-host harness with REAL Chromium canvas-context locking:
+  // Once getContext('webgl2') is called on a canvas, subsequent getContext('2d') on that SAME canvas returns null!
+  try {
+    let roCallback = null;
+    let nextId = 0;
+    const stateCtrl = { webglFails: false, ctx2dFails: false, loseCalls: 0 };
+    const timers = [];
+    let timerSeq = 0;
+    const rafs = [];
+    let rafSeq = 0;
+
+    const flushTimers = () => {
+      const batch = timers.splice(0, timers.length);
+      for (const it of batch) if (!it.cancelled) it.fn();
+    };
+    const flushRaf = (ts = 200) => {
+      const batch = rafs.splice(0, rafs.length);
+      for (const it of batch) if (!it.cancelled) it.fn(ts);
+    };
+
+    const makeLockedNode = (tag) => {
+      const attrs = new Map();
+      const children = [];
+      const evs = new Map();
+      let lockedType = null;
+      let nodeLost = false;
+      let nodeGl = null;
+      let node2d = null;
+      const node = {
+        tagName: tag.toUpperCase(),
+        className: '',
+        style: {},
+        width: 0,
+        height: 0,
+        clientWidth: 960,
+        clientHeight: 600,
+        children,
+        parentNode: null,
+        ownerDocument: null,
+        _id: tag === 'canvas' ? ++nextId : 0,
+        _setLost(v) { nodeLost = v; },
+        _emit(type, ev = {}) {
+          for (const fn of [...(evs.get(type) || [])]) fn({ preventDefault() {}, ...ev });
+        },
+        get isConnected() { return Boolean(this.parentNode); },
+        get firstChild() { return children[0] || null; },
+        setAttribute(k, v) { attrs.set(k, String(v)); },
+        getAttribute(k) { return attrs.get(k) ?? null; },
+        hasAttribute(k) { return attrs.has(k); },
+        removeAttribute(k) { attrs.delete(k); },
+        appendChild(ch) { ch.parentNode = this; children.push(ch); return ch; },
+        insertBefore(ch, ref) {
+          ch.parentNode = this;
+          const i = ref ? children.indexOf(ref) : -1;
+          if (i >= 0) children.splice(i, 0, ch); else children.push(ch);
+          return ch;
+        },
+        replaceChild(next, old) {
+          const i = children.indexOf(old);
+          if (i >= 0) { old.parentNode = null; next.parentNode = this; children[i] = next; }
+          return old;
+        },
+        replaceWith(next) { if (this.parentNode) this.parentNode.replaceChild(next, this); },
+        remove() {
+          if (this.parentNode) {
+            const i = this.parentNode.children.indexOf(this);
+            if (i >= 0) this.parentNode.children.splice(i, 1);
+            this.parentNode = null;
+          }
+        },
+        querySelector: () => null,
+        getBoundingClientRect: () => ({ left: 0, top: 0, width: this.clientWidth, height: this.clientHeight }),
+        addEventListener(t, fn) { if (!evs.has(t)) evs.set(t, new Set()); evs.get(t).add(fn); },
+        removeEventListener(t, fn) { evs.get(t)?.delete(fn); },
+        getContext(type) {
+          if (this.tagName !== 'CANVAS') return null;
+          // Real Chromium spec: a canvas already bound to one context type returns null for any other type!
+          if (lockedType && lockedType !== type) return null;
+          if (type === '2d') {
+            if (stateCtrl.ctx2dFails) return null;
+            lockedType = '2d';
+            if (!node2d) node2d = make2DCtx();
+            return node2d;
+          }
+          if (type === 'webgl2') {
+            lockedType = 'webgl2'; // Even if shader compilation fails, WebGL2 context locks the canvas!
+            if (!nodeGl) {
+              nodeGl = {
+                VERTEX_SHADER: 35633, FRAGMENT_SHADER: 35632, COMPILE_STATUS: 35713, LINK_STATUS: 35714,
+                COLOR_BUFFER_BIT: 16384, TRIANGLES: 4, TEXTURE_2D: 3553, TEXTURE0: 33984, TEXTURE1: 33985,
+                RGBA: 6408, RGBA8: 32856, UNSIGNED_BYTE: 5121, LINEAR: 9729, NEAREST: 9728, CLAMP_TO_EDGE: 33071,
+                TEXTURE_MIN_FILTER: 10241, TEXTURE_MAG_FILTER: 10240, TEXTURE_WRAP_S: 10242, TEXTURE_WRAP_T: 10243,
+                isContextLost: () => nodeLost,
+                createShader: () => (nodeLost || stateCtrl.webglFails ? null : {}),
+                shaderSource() {}, compileShader() {},
+                getShaderParameter: () => !(nodeLost || stateCtrl.webglFails),
+                getShaderInfoLog: () => (stateCtrl.webglFails ? 'compile-fail' : ''),
+                deleteShader() {},
+                createProgram: () => (nodeLost || stateCtrl.webglFails ? null : {}),
+                attachShader() {}, linkProgram() {},
+                getProgramParameter: () => !(nodeLost || stateCtrl.webglFails),
+                getProgramInfoLog: () => '',
+                useProgram() {}, deleteProgram() {}, getUniformLocation: () => ({}),
+                createTexture: () => ({}), deleteTexture() {}, activeTexture() {}, bindTexture() {},
+                texParameteri() {}, texStorage2D() {}, texImage2D() {}, texSubImage2D() {},
+                viewport() {}, uniform1i() {}, uniform1f() {}, uniform2f() {}, uniform3f() {}, uniform4f() {},
+                clearColor() {}, clear() {}, drawArrays() {},
+                getExtension: (n) => (n === 'WEBGL_lose_context' ? { loseContext() { stateCtrl.loseCalls += 1; nodeLost = true; } } : null),
+              };
+            }
+            return nodeGl;
+          }
+          return null;
+        },
+      };
+      return node;
+    };
+
+    const fakeDoc = {
+      hidden: false,
+      documentElement: makeLockedNode('html'),
+      createElement(tag) {
+        const el = makeLockedNode(tag);
+        el.ownerDocument = fakeDoc;
+        return el;
+      },
+      querySelector(sel) { return sel === '.agy-home' ? homeEl : null; },
+      addEventListener() {},
+      removeEventListener() {},
+    };
+    const homeEl = fakeDoc.createElement('div');
+    homeEl.parentNode = fakeDoc.documentElement;
+
+    globalThis.document = fakeDoc;
+    globalThis.window = { devicePixelRatio: 1, addEventListener() {}, removeEventListener() {} };
+    globalThis.requestAnimationFrame = (fn) => { const id = ++rafSeq; rafs.push({ id, fn, cancelled: false }); return id; };
+    globalThis.cancelAnimationFrame = (id) => { const it = rafs.find((x) => x.id === id); if (it) it.cancelled = true; };
+    globalThis.setTimeout = (fn) => { const id = ++timerSeq; timers.push({ id, fn, cancelled: false }); return id; };
+    globalThis.clearTimeout = (id) => { const it = timers.find((x) => x.id === id); if (it) it.cancelled = true; };
+    globalThis.ResizeObserver = class { constructor(cb) { roCallback = cb; } observe() {} disconnect() {} };
+    globalThis.performance = { now: () => 200 };
+
+    // Case A: WebGL2 shader compile fails -> Chromium locks first canvas -> host swaps fresh canvas & succeeds with true 2D!
+    stateCtrl.webglFails = true;
+    stateCtrl.ctx2dFails = false;
+    let ctl = homeRippleHost.createHomeRippleController({
+      rippleCore, isDestroyed: () => false, isAllowed: () => true, isDarkTheme: () => true,
+      motionReduced: () => false, getMinFrameGapMs: () => 0, getAmbientIntensity: () => 1, getAccentTone: () => 'follow',
+      setAttrIfChanged: (el, k, v) => el.setAttribute(k, v),
+    });
+    ctl.sync();
+    flushRaf(200);
+    assert.equal(ctl.getMount().field.mode, '2d', 'locked failed WebGL2 canvas must swap to fresh canvas and recover in true 2D mode');
+    assert.equal(ctl.getMount().glow.mode, '2d', 'locked failed WebGL2 glowCanvas must swap to fresh canvas and recover in true 2D mode');
+    assert.notEqual(ctl.getMount().canvas.style.display, 'none');
+    assert.notEqual(ctl.getMount().glowCanvas.style.display, 'none');
+    ctl.unmount();
+
+    // Case B: Both WebGL2 and 2D fail -> canvases MUST be hidden (display: none) to prevent white-screen / broken placeholder!
+    stateCtrl.webglFails = true;
+    stateCtrl.ctx2dFails = true;
+    ctl = homeRippleHost.createHomeRippleController({
+      rippleCore, isDestroyed: () => false, isAllowed: () => true, isDarkTheme: () => true,
+      motionReduced: () => false, getMinFrameGapMs: () => 0, getAmbientIntensity: () => 1, getAccentTone: () => 'follow',
+      setAttrIfChanged: (el, k, v) => el.setAttribute(k, v),
+    });
+    ctl.sync();
+    flushRaf(220);
+    assert.equal(ctl.getMount().field.mode, 'none');
+    assert.equal(ctl.getMount().glow.mode, 'none');
+    assert.equal(ctl.getMount().canvas.style.display, 'none', 'dead ripple canvas must be hidden (0 white box)');
+    assert.equal(ctl.getMount().glowCanvas.style.display, 'none', 'dead glow canvas must be hidden (0 white box)');
+    ctl.unmount();
+
+    // Case C: Healthy WebGL2 -> resize preserves glowCanvas (0 loseContext) -> async webglcontextlost hides immediately & self-heals!
+    stateCtrl.webglFails = false;
+    stateCtrl.ctx2dFails = false;
+    stateCtrl.loseCalls = 0;
+    ctl = homeRippleHost.createHomeRippleController({
+      rippleCore, isDestroyed: () => false, isAllowed: () => true, isDarkTheme: () => true,
+      motionReduced: () => false, getMinFrameGapMs: () => 0, getAmbientIntensity: () => 1, getAccentTone: () => 'follow',
+      setAttrIfChanged: (el, k, v) => el.setAttribute(k, v),
+    });
+    ctl.sync();
+    flushRaf(240);
+    const m = ctl.getMount();
+    assert.equal(m.field.mode, 'webgl2');
+    assert.equal(m.glow.mode, 'webgl2');
+    const origFieldCv = m.canvas;
+    const origGlowCv = m.glowCanvas;
+
+    // Resize: neither field nor glowCanvas calls loseContext()
+    homeEl.clientWidth = 1120;
+    homeEl.clientHeight = 700;
+    roCallback();
+    flushRaf(260);
+    assert.equal(stateCtrl.loseCalls, 0, 'resize must NOT call loseContext() on field or glowCanvas');
+    assert.equal(m.glowCanvas, origGlowCv);
+
+    // Async webglcontextlost on BOTH canvas and glowCanvas (simulating Ctrl+J xterm GPU preemption)
+    origFieldCv._setLost(true);
+    origGlowCv._setLost(true);
+    origFieldCv._emit('webglcontextlost');
+    origGlowCv._emit('webglcontextlost');
+    assert.equal(origFieldCv.style.display, 'none', 'lost ripple canvas must hide immediately before recovery');
+    assert.equal(origGlowCv.style.display, 'none', 'lost glow canvas must hide immediately before recovery');
+
+    // Run debounced recovery timer -> swaps fresh canvases & restores WebGL2 + visibility
+    flushTimers();
+    flushRaf(300);
+    assert.notEqual(m.canvas, origFieldCv, 'async lost ripple canvas must be swapped');
+    assert.notEqual(m.glowCanvas, origGlowCv, 'async lost glow canvas must be swapped');
+    assert.equal(m.field.mode, 'webgl2');
+    assert.equal(m.glow.mode, 'webgl2');
+    assert.notEqual(m.canvas.style.display, 'none');
+    assert.notEqual(m.glowCanvas.style.display, 'none');
+
+    // Second async webglcontextlost -> automatically falls back to true 2D on fresh canvases to break GPU fight loop!
+    const secondCv = m.canvas;
+    const secondGlow = m.glowCanvas;
+    secondCv._setLost(true);
+    secondGlow._setLost(true);
+    secondCv._emit('webglcontextlost');
+    secondGlow._emit('webglcontextlost');
+    flushTimers();
+    flushRaf(340);
+    assert.equal(m.field.mode, '2d', 'repeated async context loss must automatically stabilize on true 2D fallback');
+    assert.equal(m.glow.mode, '2d', 'repeated async glow context loss must stabilize on true 2D fallback');
+    assert.notEqual(m.canvas.style.display, 'none');
+    assert.notEqual(m.glowCanvas.style.display, 'none');
+
+    ctl.unmount();
+    assert.equal(timers.filter((t) => !t.cancelled).length, 0, 'unmount must cancel pending recovery timers');
+  } finally {
+    if (prevForce === undefined) delete globalThis.__agRippleForce2D; else globalThis.__agRippleForce2D = prevForce;
+    if (prevDoc === undefined) delete globalThis.document; else globalThis.document = prevDoc;
+    if (prevWin === undefined) delete globalThis.window; else globalThis.window = prevWin;
+    if (prevRaf === undefined) delete globalThis.requestAnimationFrame; else globalThis.requestAnimationFrame = prevRaf;
+    if (prevCaf === undefined) delete globalThis.cancelAnimationFrame; else globalThis.cancelAnimationFrame = prevCaf;
+    if (prevST === undefined) delete globalThis.setTimeout; else globalThis.setTimeout = prevST;
+    if (prevCT === undefined) delete globalThis.clearTimeout; else globalThis.clearTimeout = prevCT;
+    if (prevRO === undefined) delete globalThis.ResizeObserver; else globalThis.ResizeObserver = prevRO;
+    if (prevPerf === undefined) delete globalThis.performance; else globalThis.performance = prevPerf;
+  }
+});
+
+test('conv-aura darkAura tiers (subtle / balanced / vivid) scale dark chat optics monotonically while leaving light mode untouched', () => {
+  require('../conv-aura.js');
+  const { computeConvAuraOptics } = globalThis.__agPrismConvAura;
+  const dSubtleIdle = computeConvAuraOptics('idle', 0, 1000, true, false, {}, 'subtle');
+  const dBalIdle = computeConvAuraOptics('idle', 0, 1000, true, false, {}, 'balanced');
+  const dVividIdle = computeConvAuraOptics('idle', 0, 1000, true, false, {}, 'vivid');
+  assert.ok(dSubtleIdle.strength < dBalIdle.strength && dBalIdle.strength < dVividIdle.strength, 'dark idle strength must scale subtle < balanced < vivid');
+  assert.ok(dSubtleIdle.prism < dBalIdle.prism && dBalIdle.prism < dVividIdle.prism, 'dark idle prism must scale subtle < balanced < vivid');
+
+  const dSubtleRun = computeConvAuraOptics('running', 0, 1000, true, true, {}, 'subtle');
+  const dBalRun = computeConvAuraOptics('running', 0, 1000, true, true, {}, 'balanced');
+  const dVividRun = computeConvAuraOptics('running', 0, 1000, true, true, {}, 'vivid');
+  assert.ok(dSubtleRun.strength < dBalRun.strength && dBalRun.strength < dVividRun.strength, 'dark running strength must scale subtle < balanced < vivid');
+
+  const lSubtle = computeConvAuraOptics('idle', 0, 1000, false, false, {}, 'subtle');
+  const lVivid = computeConvAuraOptics('idle', 0, 1000, false, false, {}, 'vivid');
+  assert.equal(lSubtle.strength, lVivid.strength, 'light mode must be unaffected by darkAura');
+  assert.equal(lSubtle.prism, lVivid.prism, 'light mode prism must be unaffected by darkAura');
+});
+
+test('HORIZON_FRAGMENT_SHADER eliminates direct AMBER->SKY_BLUE mixing, decouples blueLoop/prismLoop cross-mix, and supports neonLoop', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'ripple-core.js'), 'utf8');
+  assert.equal(src.includes('mix(PRISM_AMBER, SKY_BLUE'), false, 'prismLoop must fold through coral/iris instead of mixing amber directly into sky blue');
+  assert.ok(src.includes('vec3 neonLoop('), 'shader must define neonLoop for Abyssal Glow style');
+  assert.ok(src.includes('base = mix(base, pCol, clamp(effPrism * 1.45'), 'shader must decouple hue purity from caustic luminance');
+  assert.equal(rippleCore.resolveHorizonSpectrumCode(6), 6);
+  assert.equal(rippleCore.resolveHorizonSpectrumCode('neon'), 6);
 });

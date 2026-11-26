@@ -6,10 +6,25 @@ import {setImmediate as yieldLoop} from 'node:timers/promises';
 import {delegatedIds,normalizeConversationId} from './delegation.mjs';
 import {taskRecords,mergeTaskRecords,aggregateTaskUsage,safeTaskUsage} from './task-usage.mjs';
 
+const SETTLED_STATUS_RE = /IDLE|DONE|COMPLETED|CANCELLED|CANCELED|STOPPED|FAILED|ERROR/i;
+function isSettledDelegatedStatus(status) {
+  if (status === 1 || status === 'CASCADE_RUN_STATUS_1') return true;
+  return SETTLED_STATUS_RE.test(String(status || ''));
+}
+function delegatedSummaryStamp(summary) {
+  if (!summary || typeof summary !== 'object') return '';
+  const lm = summary.lastModifiedTime;
+  const lmStr = typeof lm === 'string' || typeof lm === 'number' || typeof lm === 'bigint'
+    ? String(lm)
+    : lm && typeof lm === 'object' ? `${lm.seconds ?? ''}:${lm.nanos ?? 0}` : '';
+  const sc = summary.stepCount ?? summary.numTotalSteps ?? '';
+  return lmStr || sc !== '' ? `${lmStr}|${sc}` : '';
+}
+
 export class DelegatedUsage {
   constructor(client,{onSource=async()=>{},onUpdate=async()=>{},owns=()=>true,now=Date.now,
-    budgetBytes=2*1024*1024,maxAgents=128,maxEntries=2,refreshMs=15000}={}) {
-    Object.assign(this,{client,onSource,onUpdate,owns,now,budgetBytes,maxAgents,maxEntries,refreshMs});
+    budgetBytes=2*1024*1024,maxAgents=32,maxEntries=2,refreshMs=15000,maxPerPass=null}={}) {
+    Object.assign(this,{client,onSource,onUpdate,owns,now,budgetBytes,maxAgents,maxEntries,refreshMs,maxPerPass});
     // A Promise is truthy but is never proof of ownership. Callers must supply
     // the synchronous cached predicate, not the asynchronous marker verifier.
     this.owns=()=>owns()===true;
@@ -27,7 +42,7 @@ export class DelegatedUsage {
     if(!ids.length&&!task)return safeTaskUsage(saved);
     if(!task){
       while(this.tasks.size>=this.maxEntries){const oldest=this.tasks.keys().next().value;this.bytes-=this.tasks.get(oldest).bytes;this.tasks.delete(oldest);}
-      task={id,scope,children:new Set(),sources:new Map(),failures:new Map(),staleSources:new Set(),attempted:new Map(),order:0,bytes:0,lastAt:-Infinity,requested:false,force:false,result:safeTaskUsage(saved),truncated:false};
+      task={id,scope,children:new Set(),sources:new Map(),settledChildren:new Set(),childStamps:new Map(),failures:new Map(),staleSources:new Set(),attempted:new Map(),order:0,bytes:0,lastAt:-Infinity,requested:false,force:false,result:safeTaskUsage(saved),truncated:false};
       this.tasks.set(id,task);
     }
     this.tasks.delete(id);this.tasks.set(id,task);
@@ -84,24 +99,45 @@ export class DelegatedUsage {
     }).finally(()=>{this.running=null;});
   }
   async collect(task,force,current){
-    const deadline=this.now()+30000;let failed=false;
+    const isProxy=this.client?.server?.mode==='renderer-proxy';
+    const perPassLimit=Number.isInteger(this.maxPerPass)&&this.maxPerPass>0?this.maxPerPass:(isProxy?6:12);
+    const deadline=this.now()+12000;let failed=false,fetchedThisPass=0;
     try{
       // Resume oldest/unread sources first after a bounded pass. Starting from
       // the same first child every time can starve late children in a large task.
       const queue=[...task.children].sort((a,b)=>(task.attempted.get(a)||0)-(task.attempted.get(b)||0)),queued=new Set(queue);
       for(const id of queue){
         if(!current())return;
-        if(this.now()>deadline){failed=true;break;}
+        if(this.now()>deadline||fetchedThisPass>=perPassLimit){failed=true;break;}
+        const summaries=this.client.reader?.summaries||{};
+        const summary=summaries[id]||Object.entries(summaries).find(([key])=>key.toLowerCase()===id)?.[1]||{};
+        const curStamp=delegatedSummaryStamp(summary);
+        // 已拉取且确认结束的子代理：仅当未重新激活且 summary stamp 未变时跳过，绝不反复唤醒沉睡 .db
+        if(!force&&task.sources.has(id)&&task.settledChildren.has(id)){
+          const summaryReopened=summary.status!==undefined&&summary.status!==''&&!isSettledDelegatedStatus(summary.status);
+          const prevStamp=task.childStamps.get(id)||'';
+          const stampUnchanged=(!curStamp&&!prevStamp)||(Boolean(curStamp)&&curStamp===prevStamp);
+          if(!summaryReopened&&stampUnchanged)continue;
+          task.settledChildren.delete(id);
+        }
         const failure=task.failures.get(id);
         if(!force&&failure?.retryAt>this.now()){failed=true;continue;}
         task.attempted.set(id,++task.order);
+        fetchedThisPass+=1;
         try{
-          const summaries=this.client.reader?.summaries||{};
-          const summary=summaries[id]||Object.entries(summaries).find(([key])=>key.toLowerCase()===id)?.[1]||{};
           const raw=await this.client.trajectory(id,{summary,force,isCurrent:current});
           if(!current())return;
           if(!raw?.trajectory||!Array.isArray(raw.trajectory.generatorMetadata)||
             !raw.trajectory.generatorMetadata.length&&!raw.trajectory.steps?.length&&!Object.keys(summary).length)throw Error('Delegated statistics unavailable');
+          const hasAuthStatus=raw.status!==undefined&&raw.status!==null&&raw.status!=='';
+          const settledNow=hasAuthStatus?isSettledDelegatedStatus(raw.status):isSettledDelegatedStatus(summary.status);
+          if(settledNow){
+            task.settledChildren.add(id);
+            if(curStamp)task.childStamps.set(id,curStamp);
+          }else{
+            task.settledChildren.delete(id);
+            task.childStamps.delete(id);
+          }
           this.addChildren(task,this.links(id,raw));
           for(const child of task.children)if(!queued.has(child)){queued.add(child);queue.push(child);}
           if(!this.put(task,id,taskRecords(raw,id))){task.truncated=true;failed=true;break;}

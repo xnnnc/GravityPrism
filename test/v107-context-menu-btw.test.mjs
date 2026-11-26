@@ -715,28 +715,33 @@ test('7. Dual-mode curated menu (plain vs selection), no banned commands, SVG ic
   ctl.destroy();
 });
 
-test('8. 5-language live sync (zh-CN, zh-TW, yue, en, ja) including live refresh while open', () => {
+test('8. 8-language live sync (zh-CN, zh-TW, en, ja, ko, es, fr, de) + yue->zh-CN migration including live refresh while open', () => {
   const env = createMockEnv();
   const ctl = ctxMenuMod.createContextMenuController({ doc: env.doc, win: env.win, nav: env.nav, loc: env.loc, stepDelayMs: 0 });
 
   const expectations = [
-    ['zh-CN', '复制', '打开侧边会话'],
-    ['zh-TW', '複製', '開啟側邊會話'],
-    ['yue', '複製', '開側邊對話'],
-    ['en', 'Copy', 'Open side chat'],
-    ['ja', 'コピー', 'サイド会話を開く'],
+    ['zh-CN', 'zh-CN', '复制', '打开侧边会话'],
+    ['zh-TW', 'zh-TW', '複製', '開啟側邊會話'],
+    ['zh-HK', 'zh-TW', '複製', '開啟側邊會話'],
+    ['yue', 'zh-CN', '复制', '打开侧边会话'],
+    ['en', 'en', 'Copy', 'Open side chat'],
+    ['ja', 'ja', 'コピー', 'サイド会話を開く'],
+    ['ko', 'ko', '복사', '사이드 채팅 열기'],
+    ['es', 'es', 'Copiar', 'Abrir chat lateral'],
+    ['fr', 'fr', 'Copier', 'Ouvrir le chat latéral'],
+    ['de', 'de', 'Kopieren', 'Seitenchat öffnen'],
   ];
 
   ctl.openAt(100, 100, { selectedText: 'hello' });
-  for (const [lang, copyWord] of expectations) {
+  for (const [lang, expectedAttr, copyWord] of expectations) {
     ctl.sync({ lang });
     const m = env.doc.querySelector('.ag-cs-ctx-menu');
-    assert.equal(m.getAttribute('data-ag-cs-ctx-lang'), lang);
+    assert.equal(m.getAttribute('data-ag-cs-ctx-lang'), expectedAttr);
     assert.equal(m.querySelector('[data-ctx-action="copy"] span').textContent, copyWord);
   }
   ctl.close();
 
-  for (const [lang, , btwPlainWord] of expectations) {
+  for (const [lang, , , btwPlainWord] of expectations) {
     ctl.sync({ lang });
     const m = ctl.openAt(100, 100, { selectedText: '' });
     assert.equal(m.querySelector('[data-ctx-action="btw"] span').textContent, btwPlainWord);

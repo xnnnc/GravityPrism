@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
 const vialCore = require('../vial-core.js');
@@ -517,7 +518,7 @@ test('OP-3.5 vial-core accentTone response: mono silver-titanium, iris, amber, a
 test('Issue #2/#4/#5 high-Hz & win-blur guards: pulse-vial-bridge (<31,000B) 33ms steady throttle + 0fps blur sleep, and prism-rim-canvas DPR 1.5 + <1.5px micro-move skip', async () => {
   const fs = require('node:fs');
   const path = require('node:path');
-  const bridgePath = path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '..', 'pulse-vial-bridge.js');
+  const bridgePath = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'pulse-vial-bridge.js');
   const bridgeBytes = fs.statSync(bridgePath).size;
   assert.ok(bridgeBytes < 31000, `pulse-vial-bridge.js must stay < 31,000 B, got ${bridgeBytes} B`);
 

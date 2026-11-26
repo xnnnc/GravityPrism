@@ -271,9 +271,12 @@ test('Wave3 P1-6b & P2-7a: Channel 2~5 share .bundle-cache.json, detect same-len
     cdpNoCache.buildHostI18nExpression({ ...cdpNoCache.DEFAULT_CONFIG, hostLocalization: 'on' });
     cdpNoCache.buildThoughtExpression({ ...cdpNoCache.DEFAULT_CONFIG, thoughtTranslate: 'ai' });
     cdpNoCache.buildInlineDiffInjectExpression(cdpNoCache.DEFAULT_CONFIG);
+    cdpNoCache.buildSettingsChannelExpression(null);
+    cdpNoCache.buildMascotChannelExpression({ ...cdpNoCache.DEFAULT_CONFIG, mascot: 'crab' });
+    cdpNoCache.buildHomeStudioChannelExpression({ ...cdpNoCache.DEFAULT_CONFIG, homeLayout: 'studio' });
     assert.equal(fs.existsSync(path.join(snap.pluginDir, '.bundle-cache.json')), false);
 
-    // 1) Cold compile all 6 channels into the single shared .bundle-cache.json
+    // 1) Cold compile all channels (incl. Ch8 periodicPicker, Ch9 settings, Ch10 mascot, Ch12 homeStudio) into the single shared .bundle-cache.json
     const cdpCold = loadFreshCdp(snap.cdpPath);
     const ch1Cold = cdpCold.buildInjectExpression(cdpCold.DEFAULT_CONFIG, { cachePath, deferCacheWrite: true });
 
@@ -299,29 +302,45 @@ test('Wave3 P1-6b & P2-7a: Channel 2~5 share .bundle-cache.json, detect same-len
       cdpCold.DEFAULT_CONFIG,
       { cachePath, deferCacheWrite: true }
     );
+    const periodicPickerCold = cdpCold.buildPeriodicPickerExpression(
+      { ...cdpCold.DEFAULT_CONFIG, periodicModelPicker: 'on' },
+      { cachePath, deferCacheWrite: true }
+    );
+    const settingsCold = cdpCold.buildSettingsChannelExpression(null, {
+      cachePath,
+      deferCacheWrite: true,
+    });
+    const mascotCold = cdpCold.buildMascotChannelExpression(
+      { ...cdpCold.DEFAULT_CONFIG, mascot: 'crab' },
+      { cachePath, deferCacheWrite: true }
+    );
+    const homeStudioCold = cdpCold.buildHomeStudioChannelExpression(
+      { ...cdpCold.DEFAULT_CONFIG, homeLayout: 'studio' },
+      { cachePath, deferCacheWrite: true }
+    );
     const coldMs = performance.now() - tCold0;
 
     // Deferred writes have not hit disk yet
     assert.equal(fs.existsSync(cachePath), false, 'deferCacheWrite must hold writes until flushPendingBundleCache');
     assert.equal(cdpCold.getBundleCacheStats().deferredExprHashRuns, 0);
 
-    // Single atomic flush writes Channel 1 + Channel 2~6 into ONE .bundle-cache.json
+    // Single atomic flush writes Channel 1 + Channel 2~6 + Channel 8~10 + Channel 12 into ONE .bundle-cache.json
     assert.equal(cdpCold.flushPendingBundleCache(), true);
     assert.deepEqual(fs.readdirSync(cacheDir), ['.bundle-cache.json'], 'Must reuse ONE .bundle-cache.json with zero extra files');
     assert.equal(cdpCold.getBundleCacheStats().diskWrites, 1);
     assert.equal(cdpCold.getBundleCacheStats().deferredExprHashRuns, 1);
-    assert.equal(cdpCold.getBundleCacheStats().channelCompileRuns, 5);
+    assert.equal(cdpCold.getBundleCacheStats().channelCompileRuns, 9);
 
     const parsed = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
     assert.equal(parsed.schemaVersion, cdpCold.BUNDLE_CACHE_SCHEMA_VERSION);
     assert.ok(parsed.channels && typeof parsed.channels === 'object');
-    for (const ch of ['omni', 'sidebar', 'hostI18n', 'thought', 'inlineDiff']) {
+    for (const ch of ['omni', 'sidebar', 'hostI18n', 'thought', 'inlineDiff', 'periodicPicker', 'settings', 'mascot', 'homeStudio']) {
       assert.ok(parsed.channels[ch], `Expected channels.${ch} in .bundle-cache.json`);
       assert.match(parsed.channels[ch].sourceHash, /^[0-9a-f]{64}$/);
       assert.match(parsed.channels[ch].payloadSha256, /^[0-9a-f]{64}$/);
     }
 
-    // 2) Fresh cold reload hits all 6 channels byte-identically with 0 channel compilation and ONLY 1 readFileSync + 1 JSON.parse
+    // 2) Fresh cold reload hits all cached channels byte-identically with 0 channel compilation and ONLY 1 readFileSync + 1 JSON.parse
     const origReadFileSync = fs.readFileSync;
     const origJsonParse = JSON.parse;
     const resolvedCachePath = path.resolve(cachePath);
@@ -334,6 +353,10 @@ test('Wave3 P1-6b & P2-7a: Channel 2~5 share .bundle-cache.json, detect same-len
     let hostI18nHit;
     let thoughtHit;
     let inlineDiffHit;
+    let periodicPickerHit;
+    let settingsHit;
+    let mascotHit;
+    let homeStudioHit;
     let hitMs = 0;
     fs.readFileSync = function spyCacheRead(p, ...rest) {
       if (typeof p === 'string' && path.resolve(p) === resolvedCachePath) {
@@ -357,27 +380,35 @@ test('Wave3 P1-6b & P2-7a: Channel 2~5 share .bundle-cache.json, detect same-len
       hostI18nHit = cdpHit.buildHostI18nExpression({ ...cdpHit.DEFAULT_CONFIG, hostLocalization: 'on' }, null, { cachePath });
       thoughtHit = cdpHit.buildThoughtExpression({ ...cdpHit.DEFAULT_CONFIG, thoughtTranslate: 'ai' }, { cachePath });
       inlineDiffHit = cdpHit.buildInlineDiffInjectExpression(cdpHit.DEFAULT_CONFIG, { cachePath });
+      periodicPickerHit = cdpHit.buildPeriodicPickerExpression({ ...cdpHit.DEFAULT_CONFIG, periodicModelPicker: 'on' }, { cachePath });
+      settingsHit = cdpHit.buildSettingsChannelExpression(null, { cachePath });
+      mascotHit = cdpHit.buildMascotChannelExpression({ ...cdpHit.DEFAULT_CONFIG, mascot: 'crab' }, { cachePath });
+      homeStudioHit = cdpHit.buildHomeStudioChannelExpression({ ...cdpHit.DEFAULT_CONFIG, homeLayout: 'studio' }, { cachePath });
       hitMs = performance.now() - tHit0;
     } finally {
       fs.readFileSync = origReadFileSync;
       JSON.parse = origJsonParse;
     }
 
-    assert.equal(cacheFileReads, 1, '6-channel cold reload must execute fs.readFileSync on .bundle-cache.json exactly once');
-    assert.equal(cacheJsonParses, 1, '6-channel cold reload must execute JSON.parse on .bundle-cache.json exactly once');
+    assert.equal(cacheFileReads, 1, 'Multi-channel cold reload must execute fs.readFileSync on .bundle-cache.json exactly once');
+    assert.equal(cacheJsonParses, 1, 'Multi-channel cold reload must execute JSON.parse on .bundle-cache.json exactly once');
     assert.equal(omniHit, omniCold);
     assert.equal(sidebarHit, sidebarCold);
     assert.equal(hostI18nHit, hostI18nCold);
     assert.equal(thoughtHit, thoughtCold);
     assert.equal(inlineDiffHit, inlineDiffCold);
+    assert.equal(periodicPickerHit, periodicPickerCold);
+    assert.equal(settingsHit, settingsCold);
+    assert.equal(mascotHit, mascotCold);
+    assert.equal(homeStudioHit, homeStudioCold);
 
     const hitStats = cdpHit.getBundleCacheStats();
     assert.equal(hitStats.diskHits, 1);
     assert.equal(hitStats.compileUnifiedRuns, 0);
-    assert.equal(hitStats.channelDiskHits, 5);
+    assert.equal(hitStats.channelDiskHits, 9);
     assert.equal(hitStats.channelCompileRuns, 0);
-    assert.deepEqual(hitStats.channelHitsByName, { omni: 1, sidebar: 1, hostI18n: 1, thought: 1, inlineDiff: 1, wallpaper: 0 });
-    assert.ok(hitMs < coldMs, `Expected Channel 2~6 cache hit (${hitMs.toFixed(1)}ms) faster than cold compile (${coldMs.toFixed(1)}ms)`);
+    assert.deepEqual(hitStats.channelHitsByName, { omni: 1, sidebar: 1, hostI18n: 1, thought: 1, inlineDiff: 1, wallpaper: 0, periodicPicker: 1, settings: 1, mascot: 1, suggester: 0, homeStudio: 1 });
+    assert.ok(hitMs < coldMs, `Expected Channel 2~6 + 8~10 + 12 cache hit (${hitMs.toFixed(1)}ms) faster than cold compile (${coldMs.toFixed(1)}ms)`);
 
     // 3) P2-7a: Repeated warm-base-hit config updates defer 676KB exprSha256 until actual flush
     cdpHit.resetBundleCacheStats();
@@ -764,7 +795,7 @@ test('Wave3 P1-6a & P2-7b: async OS proxy probe deduplicates concurrent calls wi
           null,
           '    ProxyEnable    REG_DWORD    0x1\r\n    ProxyServer    REG_SZ    http=127.0.0.1:7890;https=127.0.0.1:7891\r\n'
         );
-      }, 75);
+      }, 150);
     };
 
     const directAsync = await detectOsSystemProxyAsync({ platform: 'win32', execFileFn: delayedWinReg });
@@ -1366,9 +1397,11 @@ test('SetFix #5/#6/#7b/#7d: legacy alias normalization, thoughtView off removal,
       sidebarStudio: 'off',
       hostLocalization: 'off',
       thoughtTranslate: 'off',
+      periodicModelPicker: 'off',
     };
     let omniBuildCount = 0;
     let sidebarBuildCount = 0;
+    let periodicBuildCount = 0;
     const evalHistory = [];
     const cdpSendHistory = [];
     let refreshReturnsRefreshed = true;
@@ -1422,12 +1455,17 @@ test('SetFix #5/#6/#7b/#7d: legacy alias normalization, thoughtView off removal,
         buildExpression: () => '',
         removeExpression: '',
       }),
+      buildPeriodicPickerExpression: () => {
+        periodicBuildCount += 1;
+        return '__PERIODIC__';
+      },
     });
 
     // Disabled state (fast refresh path): 0 builds, 0 evals, old omni/sidebar scripts removed & nulled
     await broadcast();
     assert.equal(omniBuildCount, 0, 'inject.js must NOT build omniExpr when omniModule=off');
     assert.equal(sidebarBuildCount, 0, 'inject.js must NOT build sidebarExpr when sidebarStudio=off');
+    assert.equal(periodicBuildCount, 0, 'inject.js must NOT build periodicPickerExpr when periodicModelPicker=off');
     assert.deepEqual(evalHistory, ['__REFRESH__'], 'Disabled omni/sidebar must trigger 0 extra evaluate calls');
     assert.equal(mockEntry.omniScriptId, null);
     assert.equal(mockEntry.sidebarScriptId, null);

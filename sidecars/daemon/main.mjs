@@ -1,7 +1,7 @@
 // Obsidian Prism Native Sidecar Daemon (sidecars/daemon/main.mjs)
 // - Auto-discovers DevToolsActivePort across Windows/macOS/Linux + fast Target.setDiscoverTargets push
 // - Registers Page.addScriptToEvaluateOnNewDocument + Runtime.evaluate (survives Ctrl+Shift+R reloads with zero app.asar touch!)
-// - Hot-upgrades legacy instances to Obsidian Prism v1.0.7
+// - Hot-upgrades legacy instances to Obsidian Prism v1.0.8-beta.3
 // - Lazily serves real MetricsStore + DesktopUsage snapshots over __agPrismMetricsCall only when requested (0 idle CPU)
 // - Registers __agPrismRepoCall (paired with window.__agPrismRepoBridge) for live Git status & safe git pull --ff-only + hot-reload!
 
@@ -24,6 +24,13 @@ import {
 } from '../../vendor/pulse-dashboard/sidecars/panel/renderer-rpc-adapter.mjs';
 import { discoverLocalConversations } from '../../vendor/pulse-dashboard/sidecars/panel/local-conversations.mjs';
 import { UpdateService, RELEASES_PAGE_URL } from './update-service.mjs';
+import { AddonRegistry, isLabEnabled as isAddonsLabEnabled } from './addon-registry.mjs';
+import { getGoMemLimitStatus, setGoMemLimit, clearGoMemLimit } from './gomemlimit-service.mjs';
+import { buildStorageGuardBannerExpression, buildStorageGuardDismissExpression } from './storage-guard-ui.mjs';
+import * as conversationArchive from './conversation-archive.mjs';
+import { sanitizeSecretText } from './redact.mjs';
+
+export { sanitizeSecretText };
 
 const require = createRequire(import.meta.url);
 const __filename = fileURLToPath(import.meta.url);
@@ -38,6 +45,7 @@ export const USAGE_BINDING = '__agPrismUsageCall';
 export const INLINE_DIFF_BINDING = '__agPrismInlineDiffCall';
 export const SIDEBAR_BINDING = '__agPrismSidebarCall';
 export const WALLPAPER_BINDING = '__agPrismWallpaperCall';
+export const SUGGESTER_BINDING = '__agPrismSuggestCall';
 export { OmniServer, OMNI_BINDING };
 const WALLPAPER_MAX_PAYLOAD_BYTES = 131072;
 const WALLPAPER_ALLOWED_ACTIONS = new Set([
@@ -48,13 +56,38 @@ const WALLPAPER_ALLOWED_ACTIONS = new Set([
   'get-media-blob',
   'status',
 ]);
+const SUGGESTER_MAX_PAYLOAD_BYTES = 131072;
+const SUGGESTER_ALLOWED_ACTIONS = new Set([
+  'get-config',
+  'save-config',
+  'fetch-models',
+  'test-connection',
+  'suggest',
+  'cancel',
+  'clear-cache',
+]);
 const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const RPC_ROUTE_STORAGE = new AsyncLocalStorage();
 const USAGE_CACHE_MAX_BYTES = 4 * 1024 * 1024;
 const USAGE_CACHE_MAX_PER_SCOPE = 1200;
 const USAGE_CACHE_MAX_SCOPES = 32;
 const USAGE_CACHE_MAX_TOTAL_RECORDS = 2400;
+const LOCAL_COLD_WAKEUP_CAP = 12;
 const FORBIDDEN_SCOPE_SEGMENTS = new Set(['__proto__', 'constructor', 'prototype']);
+
+export function resolveStorageGuardStatePath(customPath = null) {
+  if (typeof customPath === 'string' && customPath.trim()) {
+    return path.resolve(customPath.trim());
+  }
+  const envPath =
+    typeof process.env.PRISM_STORAGE_GUARD_STATE_PATH === 'string'
+      ? process.env.PRISM_STORAGE_GUARD_STATE_PATH.trim()
+      : '';
+  if (envPath) {
+    return path.resolve(envPath);
+  }
+  return path.join(os.homedir(), '.gemini', 'config', 'obsidian-prism-storage-guard-state.json');
+}
 
 export function resolveUsageCachePath(customPath = null) {
   if (typeof customPath === 'string' && customPath.trim()) {
@@ -220,7 +253,26 @@ export function resolveUsageScopeKey({ explicitScopeKey = '', entry = null, item
   return 'local';
 }
 
-function hasRealUsageRecord(record) {
+function sanitizeUsageRecord(id, record) {
+  if (!record || typeof record !== 'object') return record;
+  const self = String(id || record.cascadeId || '').trim().toLowerCase();
+  if (!self) return record;
+  const pid = String(record.parentId || '').trim().toLowerCase();
+  const rid = String(record.rootId || '').trim().toLowerCase();
+  const rcid = String(record.rootConversationId || '').trim().toLowerCase();
+  const selfParent = Boolean(pid && pid === self);
+  const selfRoot = Boolean(rid && rid === self);
+  const selfRootConv = Boolean(rcid && rcid === self);
+  if (!selfParent && !selfRoot && !selfRootConv) return record;
+  const clean = { ...record };
+  if (selfParent) clean.parentId = '';
+  if (selfRoot) delete clean.rootId;
+  if (selfRootConv) delete clean.rootConversationId;
+  if (!String(clean.parentId || '').trim()) clean.subagent = false;
+  return clean;
+}
+
+export function hasRealUsageRecord(record) {
   if (!record || typeof record !== 'object' || !record.days || typeof record.days !== 'object') return false;
   if (Number(record.calls || 0) > 0) return true;
   for (const d of Object.values(record.days)) {
@@ -255,15 +307,6 @@ function execGit(args, cwd, timeoutMs = 12000, extraConfigs = []) {
       }
     );
   });
-}
-
-const SECRET_TOKEN_RE =
-  /(sk-[A-Za-z0-9_\-]{6,}|AIza[A-Za-z0-9_\-]{12,}|xai-[A-Za-z0-9_\-]{8,}|ghp_[A-Za-z0-9]{12,}|github_pat_[A-Za-z0-9_]{12,}|Bearer\s+[A-Za-z0-9._\-]{8,})/gi;
-
-function sanitizeSecretText(text) {
-  return String(text || '')
-    .replace(/https?:\/\/[^/\s:@]+:[^/\s@]+@/gi, 'https://***@')
-    .replace(SECRET_TOKEN_RE, '***REDACTED***');
 }
 
 function serializeJsonForEval(val) {
@@ -576,84 +619,18 @@ const INLINE_DIFF_REV_PARSE_TIMEOUT_MS = 3000;
 const INLINE_DIFF_GIT_DIFF_TIMEOUT_MS = 4500;
 const INLINE_DIFF_MAX_GIT_POINTER_BYTES = 4096;
 
-const INLINE_DIFF_SENSITIVE_BASENAMES = new Set([
-  'config.json',
-  'model-hub.config.json',
-  'secrets.json',
-  'credentials.json',
-  'auth.json',
-  'token.json',
-  'mcp_config.json',
-  'transcript.jsonl',
-  'transcript_full.jsonl',
-  'state.vscdb',
-  '.claude.json',
-  'keys.txt',
-  '.npmrc',
-  '.pypirc',
-  '.git-credentials',
-  '.netrc',
-  'kubeconfig',
-  'cookies',
-  'cookies-journal',
-  'login data',
-  'login data-journal',
-  'local state',
-  'web data',
-]);
-
-const INLINE_DIFF_SENSITIVE_EXTS = new Set([
-  '.env',
-  '.pem',
-  '.key',
-  '.p12',
-  '.pfx',
-  '.kdbx',
-  '.jks',
-  '.keystore',
-  '.ppk',
-  '.ovpn',
-  '.vscdb',
-  '.sqlite',
-  '.sqlite3',
-  '.db',
-]);
-
-const INLINE_DIFF_SENSITIVE_DIRS = new Set([
-  '.ssh',
-  '.aws',
-  '.gnupg',
-  '.kube',
-  '.gemini',
-  '.azure',
-  '.claude',
-  '.codex',
-]);
-
-const INLINE_DIFF_SENSITIVE_SSH_KEYS = new Set([
-  'id_rsa',
-  'id_ed25519',
-  'id_ecdsa',
-  'id_dsa',
-  'id_ed25519_sk',
-  'id_ecdsa_sk',
-]);
-
-const INLINE_DIFF_SENSITIVE_SYS_PREFIX_RE =
-  /^(?:\/(?:proc|sys|dev|etc)(?:\/|$)|(?:[a-z]:)?\/(?:windows|program files(?: \(x86\))?|programdata)(?:\/|$))/;
-
-const INLINE_DIFF_SENSITIVE_SUBPATH_RE =
-  /(?:^|\/)(?:\.config\/(?:gcloud|gh)|appdata\/roaming|appdata\/local\/google|library\/application support\/google|library\/keychains)(?:\/|$)/;
-
-const INLINE_DIFF_SENSITIVE_SYS_SUFFIXES = [
-  '/etc/shadow',
-  '/etc/gshadow',
-  '/etc/master.passwd',
-  '/etc/sudoers',
-  '/windows/system32/config/sam',
-  '/windows/system32/config/system',
-  '/windows/system32/config/security',
-];
+const SENSITIVE_PATH_RULES = JSON.parse(
+  fs.readFileSync(new URL('./sensitive-path-rules.json', import.meta.url), 'utf8')
+);
+const INLINE_DIFF_SENSITIVE_BASENAMES = new Set(SENSITIVE_PATH_RULES.basenames || []);
+const INLINE_DIFF_SENSITIVE_EXTS = new Set(SENSITIVE_PATH_RULES.extensions || []);
+const INLINE_DIFF_SENSITIVE_DIRS = new Set(SENSITIVE_PATH_RULES.directories || []);
+const INLINE_DIFF_SENSITIVE_SSH_KEYS = new Set(SENSITIVE_PATH_RULES.sshKeyNames || []);
+const INLINE_DIFF_SENSITIVE_SYS_PREFIX_RE = new RegExp(SENSITIVE_PATH_RULES.sysPrefixPattern);
+const INLINE_DIFF_SENSITIVE_SUBPATH_RE = new RegExp(SENSITIVE_PATH_RULES.subpathPattern);
+const INLINE_DIFF_SENSITIVE_SYS_SUFFIXES = Array.isArray(SENSITIVE_PATH_RULES.sysSuffixes)
+  ? SENSITIVE_PATH_RULES.sysSuffixes
+  : [];
 
 function clampPositiveInt(value, fallback, maxAllowed) {
   const n = Number(value);
@@ -687,7 +664,7 @@ function hasDotDotPathSegment(rawPath) {
   return parts.some((seg) => seg === '..');
 }
 
-function isSensitiveInlineDiffPath(filePath) {
+export function isSensitiveInlineDiffPath(filePath) {
   if (typeof filePath !== 'string' || !filePath) return true;
   let normalized = filePath.replace(/\\/g, '/');
   while (normalized.endsWith('/')) normalized = normalized.slice(0, -1);
@@ -1947,6 +1924,87 @@ function isAutomatedTestRuntime() {
   return Array.isArray(process.execArgv) && process.execArgv.some((a) => a === '--test' || a.startsWith('--test-'));
 }
 
+const WINDOWS_DAEMON_IMAGE_RE =
+  /^(?:node|nodejs|obsidian-prism(?:-watcher)?|watcher|agy-claude-style|antigravity|electron|agy)(?:\.exe)?$/i;
+
+/**
+ * 解析 Windows `tasklist /FO CSV /NH` 输出中的目标 PID 映像名。
+ */
+export function parseTasklistCsvImageName(csvOutput, expectedPid) {
+  const targetPid = Number(expectedPid);
+  if (!Number.isInteger(targetPid) || targetPid <= 0) return '';
+  const lines = String(csvOutput || '').split(/\r?\n/);
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line || !line.startsWith('"')) continue;
+    const fields = [];
+    let cur = '';
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i += 1) {
+      const ch = line[i];
+      if (ch === '"') {
+        if (inQuotes && line[i + 1] === '"') {
+          cur += '"';
+          i += 1;
+        } else {
+          inQuotes = !inQuotes;
+        }
+      } else if (ch === ',' && !inQuotes) {
+        fields.push(cur);
+        cur = '';
+      } else {
+        cur += ch;
+      }
+    }
+    fields.push(cur);
+    if (fields.length >= 2 && Number(fields[1].trim()) === targetPid) {
+      return String(fields[0] || '').trim();
+    }
+  }
+  return '';
+}
+
+/**
+ * 通过原生 `tasklist /FO CSV /NH` 查询指定 Windows PID 的进程映像名。
+ */
+export function queryWindowsProcessImageNameSync(pid, execFn = execFileSync) {
+  const n = Number(pid);
+  if (!Number.isInteger(n) || n <= 0) return '';
+  try {
+    const out = execFn('tasklist', ['/FI', `PID eq ${n}`, '/FO', 'CSV', '/NH'], {
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: 5000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    return parseTasklistCsvImageName(out, n);
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * 校验 .daemon.pid 锁文件中的 PID 与 ownerToken 是否有效且指向旧守护实例。
+ */
+export function verifyDaemonPidLockToken(pidFile, expectedPid, currentOwnerToken = '') {
+  const targetPid = Number(expectedPid);
+  if (!pidFile || !Number.isInteger(targetPid) || targetPid <= 0) return false;
+  try {
+    const st = fs.lstatSync(pidFile);
+    if (st.isSymbolicLink() || !st.isFile()) return false;
+    const raw = fs.readFileSync(pidFile, 'utf8').trim();
+    if (!raw || !raw.startsWith('{')) return false;
+    const parsed = JSON.parse(raw);
+    if (Number(parsed?.pid) !== targetPid) return false;
+    const token = typeof parsed?.token === 'string' ? parsed.token.trim() : '';
+    if (!token) return false;
+    if (currentOwnerToken && token === currentOwnerToken) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function queryProcessCommandLineSync(pid) {
   const n = Number(pid);
   if (!Number.isInteger(n) || n <= 0) return null;
@@ -1957,13 +2015,7 @@ function queryProcessCommandLineSync(pid) {
       return raw.toString('utf8').replace(/\0+/g, ' ').trim();
     }
     if (process.platform === 'win32') {
-      const psScript = `(Get-CimInstance Win32_Process -Filter 'ProcessId = ${n}' -ErrorAction SilentlyContinue).CommandLine`;
-      const out = execFileSync(
-        'powershell.exe',
-        ['-NoProfile', '-NonInteractive', '-Command', psScript],
-        { encoding: 'utf8', windowsHide: true, timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }
-      );
-      return String(out || '').trim();
+      return null;
     }
     const out = execFileSync('ps', ['-p', String(n), '-o', 'command='], {
       encoding: 'utf8',
@@ -2007,6 +2059,7 @@ export class PrismDaemon {
     metricsProvider = null,
     thoughtService = null,
     wallpaperService = null,
+    suggesterService = null,
     omniExecHooks = null,
     sidebarService = null,
     relaunchHooks = null,
@@ -2016,9 +2069,15 @@ export class PrismDaemon {
     shortcutBackoffIntervalMs = 45 * 60 * 1000,
     listPagesFallbackIntervalMs = 12000,
     _testUpdateService = null,
+    _testAddonRegistry = null,
+    addonsDir = null,
     updateCheckInitialDelayMs = 45000,
     updateCheckIntervalMs = 6 * 60 * 60 * 1000,
     enableAutoUpdateTimer = true,
+    storageGuardStatePath = null,
+    storageGuardInitialDelayMs = 35000,
+    storageGuardIntervalMs = 300000,
+    enableStorageGuardTimer = true,
     silent = false,
   } = {}) {
     this.rootDir = path.resolve(rootDir);
@@ -2039,6 +2098,8 @@ export class PrismDaemon {
     this._broadcastPending = false;
     this._broadcastWaiters = [];
     this.sessions = new Map();
+    this.swarmSessions = new Map();
+    this._swarmAttaching = new Set();
     this.ignoredTargets = new Map();
     this.browserSession = null;
     this.browserPort = null;
@@ -2060,6 +2121,8 @@ export class PrismDaemon {
     this.omniExpr = '';
     this.sidebarExpr = '';
     this.hostI18nExpr = '';
+    this.swarmI18nExpr = '';
+    this.swarmI18nCodeHash = '';
     this.thoughtExpr = '';
     this.thoughtCodeHash = '';
     this._thoughtHashSource = '';
@@ -2069,6 +2132,21 @@ export class PrismDaemon {
     this.wallpaperExpr = '';
     this.wallpaperCodeHash = '';
     this._wallpaperHashSource = '';
+    this.suggesterExpr = '';
+    this.suggesterCodeHash = '';
+    this._suggesterHashSource = '';
+    this.periodicPickerExpr = '';
+    this.periodicPickerCodeHash = '';
+    this._periodicPickerHashSource = '';
+    this.settingsExpr = '';
+    this.settingsCodeHash = '';
+    this._settingsHashSource = '';
+    this.mascotExpr = '';
+    this.mascotCodeHash = '';
+    this._mascotHashSource = '';
+    this.homeStudioExpr = '';
+    this.homeStudioCodeHash = '';
+    this._homeStudioHashSource = '';
     this.codeHash = '';
     this.ownerToken = `${process.pid}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
     this.pidFile = path.join(this.rootDir, '.daemon.pid');
@@ -2088,6 +2166,22 @@ export class PrismDaemon {
     this._usageCacheTimer = null;
     this._storageHealthCache = null;
     this._storageHealthAt = 0;
+    this._storageGuardStateFile = resolveStorageGuardStatePath(storageGuardStatePath);
+    this._enableStorageGuardTimer = enableStorageGuardTimer !== false;
+    const sgInit = Number(storageGuardInitialDelayMs);
+    this._storageGuardInitialDelayMs = Number.isFinite(sgInit) ? Math.max(0, sgInit) : 35000;
+    const sgInt = Number(storageGuardIntervalMs);
+    this._storageGuardIntervalMs = Number.isFinite(sgInt) ? Math.max(5000, sgInt) : 300000;
+    this._storageGuardInitialTimer = null;
+    this._storageGuardIntervalTimer = null;
+    this._storageGuardBannerShownAt = 0;
+    this._lastStorageIndexRefreshAt = 0;
+    this._sawLiveHost = false;
+    this._autoArchiveExitRan = false;
+    this._autoArchiveInFlight = false;
+    this._archiveActionInFlight = false;
+    this._archiveScheduledAt = 0;
+    this._isUninstalling = false;
     this._lastTelemetryActivityAt = 0;
     this._telemetryInFlight = 0;
     this._customMetricsProvider = metricsProvider;
@@ -2095,6 +2189,9 @@ export class PrismDaemon {
     this._lazyWallpaperService = wallpaperService;
     this._wallpaperServicePromise = null;
     this._wallpaperStopped = false;
+    this._lazySuggesterService = suggesterService;
+    this._suggesterServicePromise = null;
+    this._suggesterStopped = false;
     this.omniServer = null;
     this._omniServerPromise = null;
     this._omniExecHooks = omniExecHooks;
@@ -2132,7 +2229,7 @@ export class PrismDaemon {
     this.updateService =
       _testUpdateService ||
       new UpdateService({
-        currentVersion: this.cdp?.PLUGIN_VERSION || '1.0.7',
+        currentVersion: this.cdp?.PLUGIN_VERSION || '1.0.8-beta.3',
         channel: initialUpdateChannel,
       });
     if (_testUpdateService && typeof _testUpdateService.setChannel === 'function') {
@@ -2140,6 +2237,12 @@ export class PrismDaemon {
         _testUpdateService.setChannel(initialUpdateChannel);
       } catch {}
     }
+    this.addonRegistry =
+      _testAddonRegistry ||
+      new AddonRegistry({
+        rootDir: this.rootDir,
+        ...(addonsDir ? { addonsDir } : {}),
+      });
   }
 
   log(msg) {
@@ -2156,7 +2259,7 @@ export class PrismDaemon {
           fs.writeFileSync(this.logFile, '', 'utf8');
           this._logBytes = 0;
         }
-        const line = `[${new Date().toISOString()}] ${msg}\n`;
+        const line = `[${new Date().toISOString()}] ${sanitizeSecretText(msg)}\n`;
         fs.appendFileSync(this.logFile, line, 'utf8');
         this._logBytes += Buffer.byteLength(line, 'utf8');
       } catch {}
@@ -2191,89 +2294,1126 @@ export class PrismDaemon {
     return null;
   }
 
-  async _handleStorageAction(action, _testOverrides = null) {
+  _getAutoArchiveOnExitSetting() {
     try {
-      const modUrl = new URL('./conversation-archive.mjs', import.meta.url);
-      const arch = await import(modUrl.href);
+      const cfg = this.cdp?.readConfig?.();
+      return cfg?.autoArchiveOnExit === true;
+    } catch {
+      return false;
+    }
+  }
+
+  _readStorageGuardState() {
+    try {
+      const file = this._storageGuardStateFile;
+      if (!file || !fs.existsSync(file)) return { snoozeUntilMs: 0, firstPromptShownAt: 0 };
+      const st = assertNotSymlinkSync(file, 'storage guard state');
+      if (!st || !st.isFile() || st.size > 65536) return { snoozeUntilMs: 0, firstPromptShownAt: 0 };
+      const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+      return {
+        snoozeUntilMs: Math.max(0, Number(parsed?.snoozeUntilMs || 0) || 0),
+        firstPromptShownAt: Math.max(0, Number(parsed?.firstPromptShownAt || 0) || 0),
+      };
+    } catch {
+      return { snoozeUntilMs: 0, firstPromptShownAt: 0 };
+    }
+  }
+
+  _writeStorageGuardState(patch = {}) {
+    try {
+      const file = this._storageGuardStateFile;
+      if (!file) return null;
+      const cur = this._readStorageGuardState();
+      const next = {
+        schema: 1,
+        snoozeUntilMs:
+          patch.snoozeUntilMs !== undefined ? Math.max(0, Number(patch.snoozeUntilMs) || 0) : cur.snoozeUntilMs,
+        firstPromptShownAt:
+          patch.firstPromptShownAt !== undefined
+            ? Math.max(0, Number(patch.firstPromptShownAt) || 0)
+            : cur.firstPromptShownAt,
+        updatedAt: new Date().toISOString(),
+      };
+      const dir = path.dirname(file);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+      writeFileAtomicSync(file, JSON.stringify(next, null, 2) + '\n', { mode: 0o600 });
+      return next;
+    } catch {
+      return null;
+    }
+  }
+
+  _rememberDiscoveredSubagentList(items = [], scopeKey = 'local') {
+    if (!Array.isArray(items) || items.length === 0) return;
+    const safeScope = normalizeUsageScopeKey(scopeKey) || 'local';
+    if (!this._discoveredSubagentsByScope) this._discoveredSubagentsByScope = new Map();
+    let scopeMap = this._discoveredSubagentsByScope.get(safeScope);
+    if (!scopeMap) {
+      scopeMap = new Map();
+      this._discoveredSubagentsByScope.set(safeScope, scopeMap);
+      while (this._discoveredSubagentsByScope.size > USAGE_CACHE_MAX_SCOPES) {
+        this._discoveredSubagentsByScope.delete(this._discoveredSubagentsByScope.keys().next().value);
+      }
+    }
+    for (const raw of items) {
+      const cid = String(typeof raw === 'string' ? raw : raw?.id || raw?.cascadeId || '').trim().toLowerCase();
+      if (!GUID_RE.test(cid)) continue;
+      const pid = String(typeof raw === 'object' && raw ? raw.parentId || raw.parentConversationId || '' : '').trim().toLowerCase();
+      const prev = scopeMap.get(cid);
+      scopeMap.delete(cid);
+      scopeMap.set(cid, {
+        ...(prev || {}),
+        ...(GUID_RE.test(pid) && pid !== cid ? { parentId: pid } : {}),
+      });
+      while (scopeMap.size > 512) {
+        scopeMap.delete(scopeMap.keys().next().value);
+      }
+    }
+  }
+
+  _rememberVisibleMainIds(ids = []) {
+    if (!Array.isArray(ids) || ids.length === 0) return;
+    if (!this._lastVisibleMainIds) this._lastVisibleMainIds = new Set();
+    for (const raw of ids) {
+      const id = String(raw || '').trim().toLowerCase();
+      if (!GUID_RE.test(id)) continue;
+      this._lastVisibleMainIds.delete(id);
+      this._lastVisibleMainIds.add(id);
+      while (this._lastVisibleMainIds.size > 512) {
+        this._lastVisibleMainIds.delete(this._lastVisibleMainIds.values().next().value);
+      }
+    }
+  }
+
+  _collectArchiveExtraSignals(convDir, visibleMainIds = [], extraSubagents = null) {
+    const discoveredSubagents = new Map();
+    const localSubs = this._getDiscoveredSubagents?.('local');
+    if (localSubs instanceof Map) {
+      for (const [cid, info] of localSubs.entries()) {
+        if (GUID_RE.test(cid)) discoveredSubagents.set(cid.toLowerCase(), info || {});
+      }
+    }
+    // 融合渲染器活跃页面/AgentManager 零 RPC 采集到的子代理列表
+    if (Array.isArray(extraSubagents)) {
+      for (const raw of extraSubagents) {
+        const cid = String(typeof raw === 'string' ? raw : raw?.id || raw?.cascadeId || '').trim().toLowerCase();
+        if (!GUID_RE.test(cid)) continue;
+        const pid = String(typeof raw === 'object' && raw ? raw.parentId || raw.parentConversationId || '' : '').trim().toLowerCase();
+        if (!discoveredSubagents.has(cid)) {
+          discoveredSubagents.set(cid, GUID_RE.test(pid) && pid !== cid ? { parentId: pid } : {});
+        } else if (GUID_RE.test(pid) && pid !== cid && !discoveredSubagents.get(cid)?.parentId) {
+          discoveredSubagents.set(cid, { ...discoveredSubagents.get(cid), parentId: pid });
+        }
+      }
+    }
+    // 融合 MetricsStore 中已记录的委托子代理（delegatedConversations）
+    try {
+      const storeSessions = this._lazyStore?.sessions;
+      if (storeSessions instanceof Map) {
+        for (const [parentId, ent] of storeSessions.entries()) {
+          const delegated = Array.isArray(ent?.data?.delegatedConversations)
+            ? ent.data.delegatedConversations
+            : Array.isArray(ent?.delegatedConversations)
+              ? ent.delegatedConversations
+              : null;
+          if (!delegated) continue;
+          for (const rawChild of delegated) {
+            const cid = String(typeof rawChild === 'string' ? rawChild : rawChild?.id || rawChild?.cascadeId || '').trim().toLowerCase();
+            if (GUID_RE.test(cid) && cid !== String(parentId || '').toLowerCase() && !discoveredSubagents.has(cid)) {
+              discoveredSubagents.set(cid, { parentId: String(parentId || '').toLowerCase() });
+            }
+          }
+        }
+      }
+    } catch {}
+
+    const protectedMainIds = new Set();
+    if (this._lastVisibleMainIds instanceof Set) {
+      for (const id of this._lastVisibleMainIds) {
+        if (GUID_RE.test(id)) protectedMainIds.add(id);
+      }
+    }
+    for (const raw of Array.isArray(visibleMainIds) ? visibleMainIds : []) {
+      const id = String(raw || '').trim().toLowerCase();
+      if (GUID_RE.test(id)) protectedMainIds.add(id);
+    }
+
+    // 读取同级 chapter_titles/ 目录作为主对话辅助保护信号（不跨目录越界）
+    const chapterTitleIds = new Set();
+    try {
+      const chapDir = path.join(path.dirname(path.resolve(convDir)), 'chapter_titles');
+      if (fs.existsSync(chapDir)) {
+        const st = fs.lstatSync(chapDir);
+        if (!st.isSymbolicLink() && st.isDirectory()) {
+          for (const d of fs.readdirSync(chapDir, { withFileTypes: true })) {
+            if (d.isSymbolicLink() || !d.isFile()) continue;
+            const stem = d.name.replace(/\.[^.]+$/, '').toLowerCase();
+            if (GUID_RE.test(stem)) chapterTitleIds.add(stem);
+          }
+        }
+      }
+    } catch {}
+
+    return {
+      discoveredSubagents,
+      protectedMainIds,
+      chapterTitleIds,
+    };
+  }
+
+  _flushCatalogIndexFromMemory(arch, convDir, archiveDir) {
+    try {
+      const mod = arch || conversationArchive;
+      const warmSums = this._lazyStore?.client?.reader?.summaries || {};
+      const extraSignals = this._collectArchiveExtraSignals(convDir, []);
+      const hasWarm =
+        Object.keys(warmSums).length > 0 ||
+        extraSignals.discoveredSubagents.size > 0 ||
+        extraSignals.protectedMainIds.size > 0;
+      if (hasWarm) {
+        mod.saveCatalogIndex(archiveDir, warmSums, { mergeExisting: true, extraSignals });
+        return true;
+      }
+    } catch {}
+    return false;
+  }
+
+  async _checkActiveHostIdleState(_testOverrides = null) {
+    if (typeof _testOverrides?.checkIdle === 'function') {
+      return _testOverrides.checkIdle();
+    }
+    const localEntries = [];
+    for (const entry of this.sessions.values()) {
+      if (!entry || entry.session?.closed) continue;
+      const sc = resolveUsageScopeKey({ entry });
+      if (sc === 'local') localEntries.push(entry);
+    }
+    if (localEntries.length === 0) {
+      return { idle: true, runningCount: 0, domBusy: false, reason: 'no-active-local-window' };
+    }
+    for (const entry of localEntries) {
+      try {
+        const expr = buildRendererRpcExpression('CheckHostIdleState', {});
+        const evalRes = await entry.session.send(
+          'Runtime.evaluate',
+          { expression: expr, awaitPromise: true, returnByValue: true },
+          4000
+        );
+        const val = evalRes?.result?.value;
+        if (val && val.ok && val.data && val.data.idle === false) {
+          return val.data;
+        }
+      } catch {
+        // 无法确认窗口状态时保守按忙碌处理（仅在显式探测失败时防止误打扰）
+        return { idle: false, runningCount: 0, domBusy: false, reason: 'probe-failed' };
+      }
+    }
+    return { idle: true, runningCount: 0, domBusy: false, reason: 'idle' };
+  }
+
+  async _snapshotUsageBeforeArchive(candidateItems = [], { maxFetch = 24, timeoutMs = 8000 } = {}) {
+    if (!Array.isArray(candidateItems) || candidateItems.length === 0) return { fetched: 0, flushed: false };
+    const diskCache = this._getUsageDiskCacheScope('local', false);
+    const missing = [];
+    for (const it of candidateItems) {
+      const id = String(typeof it === 'string' ? it : it?.id || '').trim().toLowerCase();
+      if (!GUID_RE.test(id)) continue;
+      const hit = diskCache.get(id);
+      if (hit?.record && hasRealUsageRecord(hit.record)) continue;
+      const dbEntry = Array.isArray(it?.files) ? it.files.find((f) => f && f.suffix === 'db') : null;
+      const lmSec = Number(it?.mtimeMs || 0) > 0 ? Math.floor(Number(it.mtimeMs) / 1000) : 0;
+      const dbMtimeSec = Number(it?.dbMtimeMs || 0) > 0 ? Math.floor(Number(it.dbMtimeMs) / 1000) : lmSec;
+      const dbSize = Math.max(0, Number(dbEntry?.bytes || 0) || 0);
+      missing.push({
+        id,
+        stepCount: Number(it?.stepCount || 0) || 0,
+        lastModifiedSec: lmSec,
+        ...(dbMtimeSec > 0 ? { dbMtimeSec } : {}),
+        ...(dbSize > 0 ? { dbSize } : {}),
+        subagent: true,
+        ...(it?.parentId ? { parentId: it.parentId } : {}),
+      });
+      if (missing.length >= maxFetch) break;
+    }
+    if (missing.length === 0) {
+      this._flushUsageDiskCache();
+      return { fetched: 0, flushed: true };
+    }
+    let fetched = 0;
+    const deadline = Date.now() + Math.max(1000, timeoutMs);
+    for (let i = 0; i < missing.length && Date.now() < deadline; i += 6) {
+      const slice = missing.slice(i, i + 6);
+      try {
+        const res = await this.fetchUsageRollupBatch(slice, { action: 'fetch-batch', scopeKey: 'local' });
+        if (res?.ok && Array.isArray(res.records)) {
+          fetched += res.records.filter((r) => r && r.mode !== 'error').length;
+        }
+      } catch {
+        break;
+      }
+    }
+    this._flushUsageDiskCache();
+    return { fetched, flushed: true };
+  }
+
+  _resolveCdpQuitTarget(_testOverrides = null) {
+    if (_testOverrides?.cdpPort !== undefined) {
+      return {
+        cdpPort: Number(_testOverrides.cdpPort) || 0,
+        cdpBrowserWsPath: String(_testOverrides.cdpBrowserWsPath || '').trim(),
+      };
+    }
+    if (_testOverrides) {
+      return { cdpPort: 0, cdpBrowserWsPath: '' };
+    }
+    const verifiedPort = Number(this.browserPort) || 0;
+    const rawPort = this.overridePort || verifiedPort || discoverActivePort(this.overridePort, this.portFile) || 0;
+    const cdpPort = Number.isInteger(Number(rawPort)) && Number(rawPort) > 0 && Number(rawPort) <= 65535 ? Number(rawPort) : 0;
+    let cdpBrowserWsPath = '';
+    if (cdpPort > 0 && !this.overridePort) {
+      const files = this.portFile ? [this.portFile] : resolvePortFileCandidates();
+      for (const file of files) {
+        try {
+          const st = fs.lstatSync(file);
+          if (st.isSymbolicLink() || !st.isFile() || st.size > 2048) continue;
+          const lines = fs.readFileSync(file, 'utf8').split(/\r?\n/);
+          const filePort = parseInt(String(lines[0] || '').trim(), 10);
+          const wsPath = String(lines[1] || '').trim();
+          if (filePort === cdpPort && wsPath.startsWith('/devtools/browser/') && !/[\r\n\s]/.test(wsPath)) {
+            cdpBrowserWsPath = wsPath;
+            break;
+          }
+        } catch {}
+      }
+    }
+    return { cdpPort, cdpBrowserWsPath };
+  }
+
+  async _handleStorageAction(action, _testOverrides = null, rawInput = {}) {
+    let acquiredArchiveLock = false;
+    if (action === 'archive-and-restart') {
+      if (rawInput?.confirm !== true) {
+        return { ok: false, action, error: 'confirmation_required' };
+      }
+      if (
+        this._archiveActionInFlight ||
+        (!_testOverrides && this._archiveScheduledAt > 0 && Date.now() - this._archiveScheduledAt < 15000)
+      ) {
+        return { ok: false, action, code: 'ARCHIVE_IN_PROGRESS', error: '已有归档或还原任务正在执行，请勿重复触发。' };
+      }
+      this._archiveActionInFlight = true;
+      acquiredArchiveLock = true;
+    }
+    try {
+      const arch = conversationArchive;
       const now = Number.isFinite(_testOverrides?.now) ? _testOverrides.now : Date.now();
-      if (action === 'storage-health' && this._storageHealthCache && now - this._storageHealthAt < 300000) {
+      const forceFresh = Boolean(rawInput?.force);
+      const reqLang = typeof rawInput?.lang === 'string' && rawInput.lang.trim() ? rawInput.lang.trim() : 'en';
+      const labels = typeof arch.getStorageWorkbenchLabels === 'function' ? arch.getStorageWorkbenchLabels(reqLang) : null;
+      const fmtBatches = (list) =>
+        list.map((b) => [
+          b.batchName,
+          `${b.batchName} (${b.movedCount || 0}/${Number(b.movedMb) >= 1024 ? `${(Number(b.movedMb) / 1024).toFixed(2)} GB` : `${Math.round(Number(b.movedMb) || 0)} MB`})`,
+        ]);
+      if (action === 'storage-health' && !forceFresh && this._storageHealthCache && now - this._storageHealthAt < 300000) {
         return this._storageHealthCache;
       }
       const convDir = _testOverrides?.convDir || arch.getDefaultConversationsDir();
       const archiveDir = _testOverrides?.archiveDir || arch.getDefaultArchiveDir();
+
+      if (action === 'prepare-restore') {
+        const batches = arch.listArchiveBatches(archiveDir).slice(0, 12);
+        const rawBatch =
+          typeof rawInput?.batchName === 'string' && rawInput.batchName.trim()
+            ? rawInput.batchName.trim()
+            : typeof rawInput?.batch === 'string' && rawInput.batch.trim()
+              ? rawInput.batch.trim()
+              : 'latest';
+        let validatedBatch = 'latest';
+        try {
+          validatedBatch = arch.validateBatchSelector(rawBatch || 'latest');
+        } catch (err) {
+          return { ok: false, action, code: 'INVALID_BATCH', error: sanitizeSecretText(err?.message || 'invalid_batch'), batches };
+        }
+        const matched =
+          validatedBatch === 'latest'
+            ? batches[0] || null
+            : batches.find((b) => b.batchName === validatedBatch) || null;
+        if (!matched) {
+          return { ok: false, action, code: 'BATCH_NOT_FOUND', error: 'batch_not_found', batches, ...(labels ? { labels } : {}) };
+        }
+        const scriptPath = path.join(this.rootDir, 'sidecars', 'daemon', 'conversation-archive.mjs');
+        const helpers = arch.writeHelperScripts({
+          scriptPath,
+          archiveDir,
+          restoreBatch: matched.batchName,
+          writeArchiveScript: false,
+          writeRestoreScript: true,
+        });
+        const chipText = labels?.restoreReadyTpl
+          ? labels.restoreReadyTpl.replace('{0}', matched.batchName).replace('{1}', helpers.restoreScriptPath)
+          : `${matched.batchName}: ${helpers.restoreScriptPath}`;
+        return {
+          ok: true,
+          action,
+          batchName: matched.batchName,
+          batches,
+          wbB: fmtBatches(batches),
+          ...helpers,
+          chipText,
+          clipPath: helpers.restoreScriptPath,
+          ...(labels ? { labels, wbL: [labels.summary, labels.archiveOldMain, labels.restoreBtn, labels.refreshBtn] } : {}),
+        };
+      }
       let liveSummaries = null;
+      let visibleMainIds = [];
+      let pageSubagents = [];
       const existingIdx = arch.loadCatalogIndex(archiveDir);
       const parsedUpdatedAt = existingIdx?.updatedAt ? Date.parse(existingIdx.updatedAt) : NaN;
       const idxAgeMs = Number.isFinite(parsedUpdatedAt) ? Math.max(0, now - parsedUpdatedAt) : Infinity;
+      const mustRefreshIndex =
+        action === 'prepare-archive' ||
+        action === 'archive-and-restart' ||
+        forceFresh ||
+        !existingIdx ||
+        idxAgeMs > 1800000 ||
+        (action === 'storage-health' && !this._lastStorageIndexRefreshAt);
 
-      if (action === 'prepare-archive' || !existingIdx || idxAgeMs > 1800000) {
-        // Reuse already-warm in-memory summaries first to avoid extra RPC traffic
+      if (mustRefreshIndex) {
         const warmReaderSums = this._lazyStore?.client?.reader?.summaries;
-        if (action !== 'prepare-archive' && warmReaderSums && Object.keys(warmReaderSums).length > 0) {
-          liveSummaries = warmReaderSums;
-        } else {
-          this._telemetryInFlight = (this._telemetryInFlight || 0) + 1;
+        this._telemetryInFlight = (this._telemetryInFlight || 0) + 1;
+        this._lastTelemetryActivityAt = Date.now();
+        try {
+          const client = await this.ensureLsClient();
+          const raw = await client.call('GetAllCascadeTrajectories', {
+            excludeSubtrajectories: false,
+            maxEntries: 4096,
+            includeVisibleMainIds: true,
+          });
+          if (raw?.trajectorySummaries && Object.keys(raw.trajectorySummaries).length > 0) {
+            liveSummaries = raw.trajectorySummaries;
+          }
+          if (Array.isArray(raw?.visibleMainIds) && raw.visibleMainIds.length > 0) {
+            visibleMainIds = raw.visibleMainIds;
+            this._rememberVisibleMainIds(visibleMainIds);
+          }
+          if (Array.isArray(raw?.discoveredSubagentIds) && raw.discoveredSubagentIds.length > 0) {
+            pageSubagents = raw.discoveredSubagentIds;
+            this._rememberDiscoveredSubagentList(pageSubagents, 'local');
+          }
+        } catch {
+        } finally {
+          this._telemetryInFlight = Math.max(0, (this._telemetryInFlight || 1) - 1);
           this._lastTelemetryActivityAt = Date.now();
+        }
+        if (!liveSummaries && warmReaderSums && Object.keys(warmReaderSums).length > 0) {
+          liveSummaries = warmReaderSums;
+        }
+        const extraSignals = this._collectArchiveExtraSignals(convDir, visibleMainIds, pageSubagents);
+        const hasSignalData =
+          Boolean(liveSummaries && Object.keys(liveSummaries).length > 0) ||
+          extraSignals.protectedMainIds.size > 0 ||
+          extraSignals.discoveredSubagents.size > 0;
+        if (hasSignalData) {
           try {
-            const client = await this.ensureLsClient();
-            const raw = await client.call('GetAllCascadeTrajectories', { excludeSubtrajectories: false });
-            if (raw?.trajectorySummaries && Object.keys(raw.trajectorySummaries).length > 0) {
-              liveSummaries = raw.trajectorySummaries;
+            arch.saveCatalogIndex(archiveDir, liveSummaries || {}, { mergeExisting: true, extraSignals });
+            this._lastStorageIndexRefreshAt = now;
+          } catch {}
+        }
+      } else {
+        // 同轮 30 分钟冷却期内亦执行零 LS-RPC 轻量页面/内存增量刷新：
+        // 若存在本地活跃窗口，用 signalsOnly=true 仅读 DOM 与内存 AgentMgr（0 次 LS RPC、0 次 .db 唤醒），
+        // 把刚跑完的新 Swarm Worker / delegatedConversations / 侧栏白名单及时合入索引
+        try {
+          if (this.sessions && typeof this.sessions.values === 'function') {
+            let localEntry = null;
+            for (const entry of this.sessions.values()) {
+              if (!entry || entry.session?.closed || typeof entry.session?.send !== 'function') continue;
+              if (resolveUsageScopeKey({ entry }) === 'local') {
+                localEntry = entry;
+                break;
+              }
             }
-          } catch {
-          } finally {
-            this._telemetryInFlight = Math.max(0, (this._telemetryInFlight || 1) - 1);
-            this._lastTelemetryActivityAt = Date.now();
+            if (localEntry) {
+              const sigExpr = buildRendererRpcExpression('GetAllCascadeTrajectories', {
+                includeVisibleMainIds: true,
+                signalsOnly: true,
+              });
+              const evalRes = await localEntry.session
+                .send('Runtime.evaluate', { expression: sigExpr, awaitPromise: true, returnByValue: true }, 2500)
+                .catch(() => null);
+              const val = evalRes?.result?.value;
+              if (val && val.ok && val.data) {
+                const normSig = normalizeRendererSummaries(val.data);
+                if (Array.isArray(normSig?.visibleMainIds) && normSig.visibleMainIds.length > 0) {
+                  visibleMainIds = normSig.visibleMainIds;
+                  this._rememberVisibleMainIds(visibleMainIds);
+                }
+                if (Array.isArray(normSig?.discoveredSubagentIds) && normSig.discoveredSubagentIds.length > 0) {
+                  pageSubagents = normSig.discoveredSubagentIds;
+                  this._rememberDiscoveredSubagentList(pageSubagents, 'local');
+                }
+              }
+            }
+          }
+        } catch {}
+        const extraSignals = this._collectArchiveExtraSignals(convDir, visibleMainIds, pageSubagents);
+        const prevEntries = existingIdx?.entries || {};
+        let hasUnsavedDelta = false;
+        for (const cid of extraSignals.discoveredSubagents.keys()) {
+          if (extraSignals.protectedMainIds.has(cid) || extraSignals.chapterTitleIds.has(cid)) continue;
+          if (!prevEntries[cid] || prevEntries[cid].subagent !== true) {
+            hasUnsavedDelta = true;
+            break;
           }
         }
-        if (liveSummaries) {
-          try { arch.saveCatalogIndex(archiveDir, liveSummaries); } catch {}
+        if (!hasUnsavedDelta) {
+          for (const mid of extraSignals.protectedMainIds) {
+            if (!prevEntries[mid] || prevEntries[mid].protectedMain !== true) {
+              hasUnsavedDelta = true;
+              break;
+            }
+          }
+        }
+        if (hasUnsavedDelta) {
+          try {
+            arch.saveCatalogIndex(archiveDir, {}, { mergeExisting: true, extraSignals });
+            this._lastStorageIndexRefreshAt = now;
+          } catch {}
         }
       }
+
+      // 只读获取本机 language_server 内存（测试传入自定义 convDir 且未指定 memory hook 时跳过真机进程查询）
+      let lsMemoryMb = null;
+      if (Number.isFinite(_testOverrides?.lsMemoryMb)) {
+        lsMemoryMb = Number(_testOverrides.lsMemoryMb);
+      } else if (typeof _testOverrides?.getMemoryStats === 'function') {
+        const mem = await _testOverrides.getMemoryStats();
+        if (mem?.ok && Number.isFinite(mem.totalMb)) lsMemoryMb = mem.totalMb;
+      } else if (!_testOverrides?.convDir) {
+        const mem = await arch.getLanguageServerMemoryStatsAsync();
+        if (mem?.ok && Number.isFinite(mem.totalMb) && mem.totalMb > 0) lsMemoryMb = mem.totalMb;
+      }
+
+      const subagentHours = Number.isFinite(Number(rawInput?.subagentMaxAgeHours))
+        ? Number(rawInput.subagentMaxAgeHours)
+        : arch.AUTO_ARCHIVE_SUBAGENT_MAX_AGE_HOURS;
 
       const scan =
         typeof arch.scanConversationStorageAsync === 'function'
           ? await arch.scanConversationStorageAsync({
               convDir,
               archiveDir,
-              summaries: liveSummaries,
-              subagentMaxAgeHours: action === 'prepare-archive' ? 1 : 6,
+              summaries: null,
+              subagentMaxAgeHours: subagentHours,
+              lsMemoryMb,
               now,
             })
           : arch.scanConversationStorage({
               convDir,
               archiveDir,
-              summaries: liveSummaries,
-              subagentMaxAgeHours: action === 'prepare-archive' ? 1 : 6,
+              summaries: null,
+              subagentMaxAgeHours: subagentHours,
+              lsMemoryMb,
               now,
             });
+
+      const batches = arch.listArchiveBatches(archiveDir);
+      const recentBatches = batches.slice(0, 12);
+      const lastArchiveResult = arch.readLastArchiveResult(archiveDir);
+      const guardState = this._readStorageGuardState();
       const base = {
         ok: true,
         action,
         totalMb: scan.totalMb,
+        walMb: scan.walMb,
         conversationCount: scan.conversationCount,
         mainCount: scan.mainCount,
         mainMb: scan.mainMb,
         subagentCount: scan.subagentCount,
         subagentMb: scan.subagentMb,
+        unknownCount: scan.unknownCount,
+        unknownMb: scan.unknownMb,
         archivableSubagentCount: scan.archivableSubagentCount,
         archivableSubagentMb: scan.archivableSubagentMb,
+        archivableOldMainCount: scan.archivableOldMainCount,
+        archivableOldMainMb: scan.archivableOldMainMb,
+        lsMemoryMb: scan.lsMemoryMb,
         warn: scan.warn,
+        warnReasons: scan.warnReasons,
+        warnThresholds: scan.warnThresholds,
         archiveDir: scan.archiveDir,
+        autoArchiveOnExit: this._getAutoArchiveOnExitSetting(),
+        batchesCount: batches.length,
+        batches: recentBatches,
+        latestBatch: batches[0] || null,
+        lastArchiveResult,
+        snoozeUntilMs: guardState.snoozeUntilMs,
       };
+
+      if (action === 'storage-detail') {
+        const topConsumers = Array.isArray(scan.topConsumers) ? scan.topConsumers : [];
+        const detailObj = {
+          ...base,
+          subagentMaxAgeHours: subagentHours,
+          topConsumers,
+          batches: recentBatches,
+        };
+        const detailText =
+          typeof arch.formatStorageDetailReport === 'function'
+            ? arch.formatStorageDetailReport(detailObj, reqLang)
+            : '';
+        return {
+          ...detailObj,
+          detailText,
+          wbB: fmtBatches(recentBatches),
+          ...(labels ? { labels, wbL: [labels.summary, labels.archiveOldMain, labels.restoreBtn, labels.refreshBtn] } : {}),
+        };
+      }
+
       if (action === 'prepare-archive') {
+        const mode =
+          rawInput?.mode === 'subagents+old-main' || rawInput?.oldMain === true
+            ? 'subagents+old-main'
+            : 'subagents';
+        if (mode === 'subagents+old-main' && rawInput?.confirm !== true) {
+          return { ok: false, action, error: 'confirmation_required', mode };
+        }
+        const snapshotTargets =
+          mode === 'subagents+old-main'
+            ? [...(scan.archivableSubagents || []), ...(scan.archivableOldMain || [])]
+            : [...(scan.archivableSubagents || [])];
+        if (snapshotTargets.length > 0 && !_testOverrides?.skipUsageSnapshot) {
+          await this._snapshotUsageBeforeArchive(snapshotTargets).catch(() => {});
+        }
         const scriptPath = path.join(this.rootDir, 'sidecars', 'daemon', 'conversation-archive.mjs');
-        const helpers = arch.writeHelperScripts({ scriptPath, archiveDir });
-        // Do not overwrite 6h storage-health cache with prepare-archive's 1h threshold view
+        // old-main 预设仅写独立 archive-old-main.*，绝不覆盖默认子代理归档脚本或默认还原脚本
+        const helpers = arch.writeHelperScripts({
+          scriptPath,
+          archiveDir,
+          mode,
+          subagentMaxAgeHours: subagentHours,
+          writeArchiveScript: true,
+          writeRestoreScript: mode !== 'subagents+old-main',
+        });
         this._storageHealthCache = null;
         this._storageHealthAt = 0;
-        return { ...base, ...helpers };
+        const fmtMbChip = (v) => (Number(v) >= 1024 ? `${(Number(v) / 1024).toFixed(2)} GB` : `${Math.round(Number(v) || 0)} MB`);
+        const totalArchCount = (base.archivableSubagentCount || 0) + (base.archivableOldMainCount || 0);
+        const totalArchMb = (Number(base.archivableSubagentMb) || 0) + (Number(base.archivableOldMainMb) || 0);
+        const extraChip =
+          mode === 'subagents+old-main'
+            ? labels?.oldMainReadyTpl
+              ? labels.oldMainReadyTpl
+                  .replace('{0}', String(totalArchCount))
+                  .replace('{1}', fmtMbChip(totalArchMb))
+                  .replace('{2}', helpers.archiveScriptPath)
+              : `${totalArchCount} (${fmtMbChip(totalArchMb)}) · ${helpers.archiveScriptPath}`
+            : undefined;
+        return {
+          ...base,
+          ...helpers,
+          wbB: fmtBatches(recentBatches),
+          ...(extraChip ? { chipText: extraChip, clipPath: helpers.archiveScriptPath } : {}),
+          ...(labels ? { labels, wbL: [labels.summary, labels.archiveOldMain, labels.restoreBtn, labels.refreshBtn] } : {}),
+        };
       }
+
+      if (action === 'archive-and-restart') {
+        if (_testOverrides?.forceBusy !== true) {
+          const idleState = await this._checkActiveHostIdleState(_testOverrides);
+          if (!idleState?.idle) {
+            return {
+              ok: false,
+              action,
+              code: 'HOST_BUSY',
+              error: '检测到 AI 正在生成或 Swarm 任务运行中，请等待空闲后再执行归档并重启。',
+              idleState,
+            };
+          }
+        }
+        const snapRes =
+          scan.archivableSubagents?.length > 0 && !_testOverrides?.skipUsageSnapshot
+            ? await this._snapshotUsageBeforeArchive(scan.archivableSubagents, { maxFetch: 24, timeoutMs: 6000 }).catch(() => ({ fetched: 0, flushed: false }))
+            : { fetched: 0, flushed: true };
+        this._flushUsageDiskCache();
+
+        let host = null;
+        if (typeof _testOverrides?.detectHost === 'function') {
+          host = await _testOverrides.detectHost();
+        } else if (typeof this.cdp?.detectRunningAntigravityHost === 'function') {
+          try { host = await this.cdp.detectRunningAntigravityHost(); } catch {}
+        }
+
+        const cdpTarget = this._resolveCdpQuitTarget(_testOverrides);
+        const scriptPath = path.join(this.rootDir, 'sidecars', 'daemon', 'conversation-archive.mjs');
+        const spawnRes = arch.spawnDetachedArchiveTask(
+          {
+            action: 'archive-and-restart',
+            convDir,
+            archiveDir,
+            hostPid: host?.pid || 0,
+            cdpPort: cdpTarget.cdpPort,
+            cdpBrowserWsPath: cdpTarget.cdpBrowserWsPath,
+            exePath: host?.exePath || '',
+            gracefulQuit: true,
+            relaunch: true,
+            mode: 'subagents',
+            subagentMaxAgeHours: subagentHours,
+            settleMs: 4000,
+          },
+          {
+            scriptPath,
+            spawnHook: _testOverrides?.spawnHook,
+            disableWmiBreakaway: Boolean(_testOverrides?.disableWmiBreakaway),
+          }
+        );
+        if (spawnRes?.spawned) {
+          // 防止宿主优雅退出期间 tick()/stop() 并发启动 auto-exit-archive 与当前手动归档任务冲突
+          this._autoArchiveExitRan = true;
+          if (!_testOverrides) this._archiveScheduledAt = Date.now();
+        }
+        this._storageHealthCache = null;
+        this._storageHealthAt = 0;
+        return {
+          ...base,
+          ok: Boolean(spawnRes?.spawned),
+          ...(spawnRes?.spawned ? {} : { code: spawnRes?.code || 'SPAWN_FAILED', error: spawnRes?.error || 'Failed to launch detached archive task' }),
+          scheduled: Boolean(spawnRes?.spawned),
+          method: spawnRes?.method || 'custom',
+          snapshottedUsageCount: snapRes.fetched || 0,
+        };
+      }
+
       this._storageHealthCache = base;
       this._storageHealthAt = now;
       return base;
     } catch (err) {
       return { ok: false, action, error: sanitizeSecretText(err?.message || err) };
+    } finally {
+      if (acquiredArchiveLock) {
+        this._archiveActionInFlight = false;
+      }
+    }
+  }
+
+  async _handleRestoreArchiveAction(rawInput = {}, _testOverrides = null) {
+    try {
+      const arch = conversationArchive;
+      const convDir = _testOverrides?.convDir || arch.getDefaultConversationsDir();
+      const archiveDir = _testOverrides?.archiveDir || arch.getDefaultArchiveDir();
+      const batches = arch.listArchiveBatches(archiveDir);
+      const lastArchiveResult = arch.readLastArchiveResult(archiveDir);
+      if (rawInput?.listOnly === true) {
+        return { ok: true, action: 'restore-archive', batches, lastArchiveResult };
+      }
+      if (rawInput?.confirm !== true) {
+        return { ok: false, action: 'restore-archive', error: 'confirmation_required', batches };
+      }
+      if (this._archiveActionInFlight || (!_testOverrides && this._archiveScheduledAt > 0 && Date.now() - this._archiveScheduledAt < 15000)) {
+        return { ok: false, action: 'restore-archive', code: 'ARCHIVE_IN_PROGRESS', error: '已有归档或还原任务正在执行，请勿重复触发。', batches };
+      }
+      this._archiveActionInFlight = true;
+      try {
+        if (_testOverrides?.forceBusy !== true) {
+          const idleState = await this._checkActiveHostIdleState(_testOverrides);
+          if (!idleState?.idle) {
+            return {
+              ok: false,
+              action: 'restore-archive',
+              code: 'HOST_BUSY',
+              error: '检测到 AI 正在生成或 Swarm 任务运行中，请等待空闲后再执行无损还原并重启。',
+              idleState,
+              batches,
+            };
+          }
+        }
+        if (batches.length === 0) {
+          return { ok: false, action: 'restore-archive', code: 'NO_BATCH', error: '未找到任何历史归档批次。', batches: [] };
+        }
+        const rawBatch =
+          typeof rawInput?.batchName === 'string' && rawInput.batchName.trim()
+            ? rawInput.batchName.trim()
+            : typeof rawInput?.batch === 'string' && rawInput.batch.trim()
+              ? rawInput.batch.trim()
+              : 'latest';
+        let batchName = 'latest';
+        try {
+          batchName = arch.validateBatchSelector(rawBatch);
+        } catch (err) {
+          return {
+            ok: false,
+            action: 'restore-archive',
+            code: 'INVALID_BATCH',
+            error: sanitizeSecretText(err?.message || 'invalid_batch'),
+            batches,
+          };
+        }
+        const matchedBatch =
+          batchName === 'latest'
+            ? batches[0] || null
+            : batches.find((b) => b.batchName === batchName) || null;
+        if (!matchedBatch) {
+          return { ok: false, action: 'restore-archive', code: 'BATCH_NOT_FOUND', error: 'batch_not_found', batches };
+        }
+        const resolvedBatchName = matchedBatch.batchName;
+        let host = null;
+        if (typeof _testOverrides?.detectHost === 'function') {
+          host = await _testOverrides.detectHost();
+        } else if (typeof this.cdp?.detectRunningAntigravityHost === 'function') {
+          try { host = await this.cdp.detectRunningAntigravityHost(); } catch {}
+        }
+        const cdpTarget = this._resolveCdpQuitTarget(_testOverrides);
+        const scriptPath = path.join(this.rootDir, 'sidecars', 'daemon', 'conversation-archive.mjs');
+        const spawnRes = arch.spawnDetachedArchiveTask(
+          {
+            action: 'restore-and-restart',
+            convDir,
+            archiveDir,
+            hostPid: host?.pid || 0,
+            cdpPort: cdpTarget.cdpPort,
+            cdpBrowserWsPath: cdpTarget.cdpBrowserWsPath,
+            exePath: host?.exePath || '',
+            gracefulQuit: true,
+            relaunch: true,
+            batchName: resolvedBatchName,
+            settleMs: 4000,
+          },
+          {
+            scriptPath,
+            spawnHook: _testOverrides?.spawnHook,
+            disableWmiBreakaway: Boolean(_testOverrides?.disableWmiBreakaway),
+          }
+        );
+        if (spawnRes?.spawned) {
+          // 防止随后宿主退出时 auto-exit-archive 把刚刚无损还原的批次又移回归档目录
+          this._autoArchiveExitRan = true;
+          if (!_testOverrides) this._archiveScheduledAt = Date.now();
+        }
+        this._storageHealthCache = null;
+        this._storageHealthAt = 0;
+        return {
+          ok: Boolean(spawnRes?.spawned),
+          ...(spawnRes?.spawned ? {} : { code: spawnRes?.code || 'SPAWN_FAILED', error: spawnRes?.error || 'Failed to launch detached restore task' }),
+          action: 'restore-archive',
+          scheduled: Boolean(spawnRes?.spawned),
+          batchName: resolvedBatchName,
+          batchesCount: batches.length,
+          method: spawnRes?.method || 'custom',
+        };
+      } finally {
+        this._archiveActionInFlight = false;
+      }
+    } catch (err) {
+      return { ok: false, action: 'restore-archive', error: sanitizeSecretText(err?.message || err) };
+    }
+  }
+
+  async _handleStorageSnoozeAction(rawInput = {}) {
+    const hours = Math.max(1, Math.min(168, Number(rawInput?.hours) || 24));
+    const snoozeUntilMs = Date.now() + hours * 3600000;
+    this._writeStorageGuardState({ snoozeUntilMs });
+    this._storageHealthCache = null;
+    this._storageHealthAt = 0;
+    const dismissExpr = buildStorageGuardDismissExpression();
+    for (const entry of this.sessions.values()) {
+      if (entry && !entry.session?.closed) {
+        await entry.session.evaluate(dismissExpr).catch(() => {});
+      }
+    }
+    return { ok: true, action: 'storage-snooze', hours, snoozeUntilMs };
+  }
+
+  async _handleGoMemLimitAction(action, rawInput = {}) {
+    const testOpts = rawInput?._testOverrides && typeof rawInput._testOverrides === 'object' ? rawInput._testOverrides : {};
+    if (action === 'gomemlimit-set') {
+      const res = await setGoMemLimit(rawInput?.value, testOpts);
+      return { ...res, action };
+    }
+    if (action === 'gomemlimit-clear') {
+      const res = await clearGoMemLimit(testOpts);
+      return { ...res, action };
+    }
+    const res = await getGoMemLimitStatus(testOpts);
+    return { ...res, action: 'gomemlimit-status' };
+  }
+
+  async _handleAddonsAction(action, rawInput = {}) {
+    const envOverride = rawInput?._testOverrides?.env || process.env;
+    if (!isAddonsLabEnabled(envOverride)) {
+      return { ok: false, action, error: 'addons_lab_disabled' };
+    }
+    const registry = rawInput?._testOverrides?.addonRegistry || this.addonRegistry;
+    if (!registry) {
+      return { ok: false, action, error: 'addon_registry_unavailable' };
+    }
+    if (action === 'addons-list') {
+      const res = registry.listAddons();
+      return { ...res, action, labEnabled: true };
+    }
+    if (action === 'addons-status') {
+      const targetId = rawInput?.id || rawInput?.addonId || '';
+      if (typeof targetId === 'string' && targetId.trim()) {
+        const res = registry.getAddonStatus(targetId.trim());
+        return { ...res, action, labEnabled: true };
+      }
+      const res = registry.listAddons();
+      return { ...res, action, labEnabled: true };
+    }
+    if (action === 'addons-install') {
+      const res = await registry.install({
+        manifestUrl: rawInput?.manifestUrl,
+        expectedManifestSha256: rawInput?.expectedManifestSha256 ?? null,
+        id: rawInput?.id || rawInput?.addonId || null,
+      });
+      return { ...res, action, labEnabled: true };
+    }
+    if (action === 'addons-remove') {
+      const res = registry.remove(rawInput?.id || rawInput?.addonId);
+      return { ...res, action, labEnabled: true };
+    }
+    return { ok: false, action, error: 'unknown_addons_action' };
+  }
+
+  async _resolveStorageGuardLanguage(targetEntry, cfg = null, _testOverrides = null) {
+    let i18nCore = null;
+    try {
+      i18nCore = require(path.join(this.rootDir, 'i18n-core.js'));
+    } catch {}
+    const normalizeLang = (raw, fallback = 'en') => {
+      if (typeof i18nCore?.normalizeLanguage === 'function') {
+        return i18nCore.normalizeLanguage(raw, fallback);
+      }
+      const s = String(raw || '').trim().toLowerCase().replace(/_/g, '-').split(/[.@]/)[0];
+      if (!s) return fallback;
+      if (s === 'en' || s.startsWith('en-')) return 'en';
+      if (s === 'ja' || s.startsWith('ja-')) return 'ja';
+      if (s === 'ko' || s.startsWith('ko-')) return 'ko';
+      if (s === 'es' || s.startsWith('es-')) return 'es';
+      if (s === 'fr' || s.startsWith('fr-')) return 'fr';
+      if (s === 'de' || s.startsWith('de-')) return 'de';
+      if (s === 'yue' || s.startsWith('yue-') || s === 'zh-yue') return 'zh-CN';
+      if (/^zh-(?:tw|hk|mo|hant)(?:-|$)/.test(s)) return 'zh-TW';
+      if (s === 'zh' || s.startsWith('zh-')) return 'zh-CN';
+      return fallback;
+    };
+
+    const rawCfgLang = String((cfg && (cfg.language || cfg.lang)) || '').trim();
+    if (rawCfgLang && rawCfgLang.toLowerCase() !== 'auto') {
+      return normalizeLang(rawCfgLang, 'en');
+    }
+
+    // language 为 'auto' 或缺省时，按与 ui-runtime.js 一致的优先级探测目标页面：
+    // data-ag-cs-lang（排除 'auto'）-> navigator.language / navigator.languages[0] -> html[lang]
+    let pageLang = '';
+    if (typeof _testOverrides?.pageLang === 'string') {
+      const ovLang = _testOverrides.pageLang.trim();
+      if (ovLang && ovLang.toLowerCase() !== 'auto') pageLang = ovLang;
+    } else if (targetEntry?.session && !targetEntry.session.closed && typeof targetEntry.session.send === 'function') {
+      try {
+        const langProbeExpr =
+          "(() => { try { const pick = (v) => (typeof v === 'string' && v.trim() && v.trim().toLowerCase() !== 'auto' ? v.trim() : ''); const r = typeof document !== 'undefined' ? document.documentElement : null; const nav = typeof navigator !== 'undefined' ? navigator : null; return pick(r && r.getAttribute && r.getAttribute('data-ag-cs-lang')) || pick(nav && nav.language) || pick(nav && Array.isArray(nav.languages) && nav.languages[0]) || pick(r && r.lang) || ''; } catch { return ''; } })()";
+        const probeRes = await targetEntry.session.send(
+          'Runtime.evaluate',
+          { expression: langProbeExpr, returnByValue: true },
+          1500
+        );
+        const val = probeRes?.result?.value;
+        if (typeof val === 'string' && val.trim() && val.trim().toLowerCase() !== 'auto') {
+          pageLang = val.trim();
+        }
+      } catch {}
+    }
+    if (pageLang) {
+      const normPage = normalizeLang(pageLang, '');
+      if (normPage) return normPage;
+    }
+
+    // 页面尚未标注语言时回退至系统 locale（与 cdp.js detectSystemUiLocale / resolveSystemLangNode 保持一致）
+    let sysLocale = typeof _testOverrides?.systemLocale === 'string' ? _testOverrides.systemLocale.trim() : '';
+    if (!sysLocale) {
+      if (typeof this.cdp?.detectSystemUiLocale === 'function') {
+        try {
+          sysLocale = String(this.cdp.detectSystemUiLocale() || '').trim();
+        } catch {
+          sysLocale = '';
+        }
+      }
+      if (!sysLocale) {
+        try {
+          const candidates = [process.env.LC_ALL, process.env.LC_MESSAGES, process.env.LANG];
+          for (let i = 0; i < candidates.length; i += 1) {
+            const val = String(candidates[i] || '').trim();
+            if (val && !/^(?:c|posix)(?:[.@]|$)/i.test(val)) {
+              sysLocale = val;
+              break;
+            }
+          }
+          if (!sysLocale) {
+            sysLocale = Intl.DateTimeFormat().resolvedOptions().locale || '';
+          }
+        } catch {
+          sysLocale = '';
+        }
+      }
+    }
+    return normalizeLang(sysLocale, 'en');
+  }
+
+  async _checkStorageGuardAndNotify(_testOverrides = null) {
+    if (!this.running && !_testOverrides) return { shown: false, reason: 'not-running' };
+    const now = Number.isFinite(_testOverrides?.now) ? _testOverrides.now : Date.now();
+    const state = this._readStorageGuardState();
+    if (state.snoozeUntilMs > now) {
+      return { shown: false, reason: 'snoozed', snoozeUntilMs: state.snoozeUntilMs };
+    }
+    if (!_testOverrides && this._storageGuardBannerShownAt > 0 && now - this._storageGuardBannerShownAt < 1800000) {
+      return { shown: false, reason: 'cooldown' };
+    }
+    const localEntries = [];
+    for (const entry of this.sessions.values()) {
+      if (!entry || entry.session?.closed) continue;
+      const sc = resolveUsageScopeKey({ entry });
+      if (sc === 'local') localEntries.push(entry);
+    }
+    if (localEntries.length === 0) {
+      return { shown: false, reason: 'no-local-window' };
+    }
+
+    const health = await this._handleStorageAction('storage-health', _testOverrides, { force: Boolean(_testOverrides) });
+    if (!health?.ok || !health.warn) {
+      return { shown: false, reason: 'healthy', health };
+    }
+
+    const idleState = await this._checkActiveHostIdleState(_testOverrides);
+    if (!idleState?.idle) {
+      return { shown: false, reason: 'host-busy', idleState, health };
+    }
+
+    const targetEntry = localEntries[0];
+    let ui = {};
+    let resolvedLang = 'en';
+    try {
+      const cfg =
+        _testOverrides?.config && typeof _testOverrides.config === 'object'
+          ? _testOverrides.config
+          : this.cdp?.readConfig?.() || {};
+      resolvedLang = await this._resolveStorageGuardLanguage(targetEntry, cfg, _testOverrides);
+      const locales = require(path.join(this.rootDir, 'i18n-locales.js'));
+      ui = locales.getUiStrings(resolvedLang) || {};
+    } catch {}
+
+    const fmtMb = (v) => (Number(v) >= 1024 ? `${(Number(v) / 1024).toFixed(2)} GB` : `${Math.round(Number(v) || 0)} MB`);
+    const tpl = ui.storageGuardSummaryTpl || 'DB {0} · Subagents {1} ({2}) · LS Memory {3}';
+    const summaryText = tpl
+      .replace(/\{0\}/g, fmtMb(health.totalMb))
+      .replace(/\{1\}/g, String(health.archivableSubagentCount || 0))
+      .replace(/\{2\}/g, fmtMb(health.archivableSubagentMb || health.subagentMb || 0))
+      .replace(/\{3\}/g, health.lsMemoryMb ? fmtMb(health.lsMemoryMb) : '—');
+
+    const closeLabels = {
+      'zh-CN': '关闭',
+      'zh-TW': '關閉',
+      en: 'Close',
+      ja: '閉じる',
+      ko: '닫기',
+      es: 'Cerrar',
+      fr: 'Fermer',
+      de: 'Schließen',
+    };
+    const expr = buildStorageGuardBannerExpression({
+      autoArchiveOnExit: Boolean(health.autoArchiveOnExit),
+      copy: {
+        title: ui.storageGuardTitle || 'Memory & Conversation DB Guard',
+        close: closeLabels[resolvedLang] || 'Close',
+        summary: summaryText,
+        archiveRestartBtn: ui.storageArchiveRestartBtn || 'Archive & Restart',
+        enableAutoExitBtn: ui.storageGuardEnableAutoExitBtn || 'Enable Auto-Archive on Exit',
+        autoExitEnabledMsg: ui.storageAutoExitEnabledMsg || 'Auto-archive on exit enabled',
+        snooze24hBtn: ui.storageGuardSnooze24hBtn || 'Snooze 24h',
+        confirmDesc:
+          ui.storageArchiveRestartConfirmDesc ||
+          'Will save token ledger, close Antigravity gracefully, move finished subagents (>2h) without deleting any files, keep all main chats, and restart.',
+        cancelBtn: ui.uninstallCancelBtn || 'Cancel',
+        confirmBtn: ui.storageArchiveRestartConfirmBtn || 'Confirm Archive & Restart',
+        runningMsg: ui.storageArchiveRestartRunning || 'Saving token ledger & starting safe archiver...',
+        scheduledMsg: ui.storageArchiveRestartScheduled || 'Safe offline archive & restart scheduled.',
+        busyBlockedMsg: ui.storageGuardBusyMsg || 'AI or Swarm is running; retry when idle.',
+      },
+    });
+
+    const evalRes = await targetEntry.session
+      .send('Runtime.evaluate', { expression: expr, returnByValue: true }, 4000)
+      .catch(() => null);
+    const mounted = Boolean(evalRes?.result?.value?.mounted);
+    if (mounted) {
+      this._storageGuardBannerShownAt = now;
+      if (!state.firstPromptShownAt) {
+        this._writeStorageGuardState({ firstPromptShownAt: now });
+      }
+    }
+    return { shown: mounted, lang: resolvedLang, health, idleState };
+  }
+
+  async _maybeRunAutoArchiveOnExit(_testOverrides = null) {
+    if (this._autoArchiveInFlight || this._autoArchiveExitRan) return { ran: false, reason: 'already-ran' };
+    if (this._archiveScheduledAt > 0 && Date.now() - this._archiveScheduledAt < 60000) {
+      return { ran: false, reason: 'manual-archive-scheduled' };
+    }
+    if (!this._sawLiveHost && !_testOverrides?.forceSawHost) return { ran: false, reason: 'no-prior-host' };
+    const enabled =
+      _testOverrides?.autoArchiveOnExit !== undefined
+        ? Boolean(_testOverrides.autoArchiveOnExit)
+        : this._getAutoArchiveOnExitSetting();
+    if (!enabled) return { ran: false, reason: 'disabled-by-default' };
+
+    this._autoArchiveInFlight = true;
+    try {
+      const arch = conversationArchive;
+      const sleepFn =
+        typeof _testOverrides?.sleep === 'function' ? _testOverrides.sleep : (ms) => new Promise((r) => setTimeout(r, ms));
+      const checkRunning =
+        typeof _testOverrides?.checkRunning === 'function' ? _testOverrides.checkRunning : arch.isLanguageServerRunning;
+      const safeRunning = () => {
+        try { return Boolean(checkRunning()); } catch { return true; }
+      };
+      const settleMs = Number.isFinite(_testOverrides?.settleMs) ? _testOverrides.settleMs : 4000;
+      const recheckGapMs = Number.isFinite(_testOverrides?.recheckGapMs) ? _testOverrides.recheckGapMs : 1500;
+
+      // 首次静置 3~5 秒并确认宿主与 language_server 已完全退出
+      if (settleMs > 0) await sleepFn(settleMs);
+      if (safeRunning() || (!_testOverrides && discoverActivePort(this.overridePort, this.portFile))) {
+        return { ran: false, reason: 'host-still-running' };
+      }
+      // 二次 fail-closed 复检
+      if (recheckGapMs > 0) await sleepFn(recheckGapMs);
+      if (safeRunning() || (!_testOverrides && discoverActivePort(this.overridePort, this.portFile))) {
+        return { ran: false, reason: 'host-restarted' };
+      }
+
+      const convDir = _testOverrides?.convDir || arch.getDefaultConversationsDir();
+      const archiveDir = _testOverrides?.archiveDir || arch.getDefaultArchiveDir();
+      // 独立 Daemon 退出归档前同步把内存中最新发现的子代理/摘要增量合并落盘，避免新子代理落入 unknown 漏归档
+      this._flushCatalogIndexFromMemory(arch, convDir, archiveDir);
+      const res = arch.archiveConversations({
+        convDir,
+        archiveDir,
+        mode: 'subagents',
+        subagentMaxAgeHours: arch.AUTO_ARCHIVE_SUBAGENT_MAX_AGE_HOURS,
+        checkRunning: safeRunning,
+      });
+      arch.writeLastArchiveResult(archiveDir, { ...res, action: 'auto-exit-archive', relaunched: false });
+      this._autoArchiveExitRan = true;
+      this._sawLiveHost = false;
+      this._storageHealthCache = null;
+      this._storageHealthAt = 0;
+      this.log(`[storage-guard] Auto-archive on exit finished (ok=${res.ok}, moved=${res.movedCount || 0}, mb=${res.movedMb || 0})`);
+      return { ran: true, result: res };
+    } catch (err) {
+      this.log(`[storage-guard] Auto-archive on exit error: ${sanitizeSecretText(err?.message || err)}`);
+      return { ran: false, reason: 'error', error: sanitizeSecretText(err?.message || err) };
+    } finally {
+      this._autoArchiveInFlight = false;
     }
   }
 
@@ -2281,6 +3421,7 @@ export class PrismDaemon {
     if (rawInput?.confirm !== true) {
       return { ok: false, action: 'uninstall', error: 'confirmation_required' };
     }
+    this._isUninstalling = true;
     const purgeData = rawInput?.purgeData === true;
     const ov = rawInput?._testOverrides && typeof rawInput._testOverrides === 'object' ? rawInput._testOverrides : null;
     const platform = ov?.platform || process.platform;
@@ -2617,7 +3758,7 @@ export class PrismDaemon {
   }
 
   _buildCombinedUpdateStatus({ relState = null, gitState = null, action = 'update-status', channelOverride = null } = {}) {
-    const currentVersion = this.cdp?.PLUGIN_VERSION || this.updateService?.currentVersion || '1.0.7';
+    const currentVersion = this.cdp?.PLUGIN_VERSION || this.updateService?.currentVersion || '1.0.8-beta.3';
     const rel = relState || this.updateService?.getStatus?.() || {};
     const autoUpdate = this._getAutoUpdateSetting();
     const explicitChannel = channelOverride === 'beta' || channelOverride === 'stable' ? channelOverride : null;
@@ -2742,11 +3883,48 @@ export class PrismDaemon {
             : {};
       rawInput = { ...extra, action: rawInput };
     }
-    if (rawInput?.action === 'storage-health' || rawInput?.action === 'prepare-archive') {
-      return this._handleStorageAction(rawInput.action);
+    if (
+      rawInput?.action === 'storage-health' ||
+      rawInput?.action === 'storage-detail' ||
+      rawInput?.action === 'prepare-archive' ||
+      rawInput?.action === 'prepare-restore' ||
+      rawInput?.action === 'archive-and-restart'
+    ) {
+      return this._handleStorageAction(rawInput.action, rawInput?._testOverrides || null, rawInput);
+    }
+    if (rawInput?.action === 'restore-archive') {
+      return this._handleRestoreArchiveAction(rawInput, rawInput?._testOverrides || null);
+    }
+    if (rawInput?.action === 'storage-snooze') {
+      return this._handleStorageSnoozeAction(rawInput);
+    }
+    if (rawInput?.action === 'storage-auto-exit') {
+      const enabled = rawInput?.autoArchiveOnExit === true || rawInput?.value === true || rawInput?.value === 'on';
+      const updated = this.updateConfigSetting('autoArchiveOnExit', enabled);
+      if (updated) {
+        this._storageHealthCache = null;
+        this._storageHealthAt = 0;
+        await this.broadcastConfigRefresh().catch(() => {});
+      }
+      return { ok: Boolean(updated), action: 'storage-auto-exit', autoArchiveOnExit: enabled };
+    }
+    if (
+      rawInput?.action === 'gomemlimit-status' ||
+      rawInput?.action === 'gomemlimit-set' ||
+      rawInput?.action === 'gomemlimit-clear'
+    ) {
+      return this._handleGoMemLimitAction(rawInput.action, rawInput);
     }
     if (rawInput?.action === 'uninstall') {
       return this._handleUninstallAction(rawInput);
+    }
+    if (
+      rawInput?.action === 'addons-list' ||
+      rawInput?.action === 'addons-status' ||
+      rawInput?.action === 'addons-install' ||
+      rawInput?.action === 'addons-remove'
+    ) {
+      return this._handleAddonsAction(rawInput.action, rawInput);
     }
     if (rawInput?.action === 'update-status') {
       const explicitChannel = this._extractExplicitUpdateChannel(rawInput);
@@ -2822,7 +4000,7 @@ export class PrismDaemon {
           ),
         };
       }
-      if (!baseState.checkedAt) {
+      if (!baseState.checkedAt && this._getAutoUpdateSetting() === 'on') {
         void this.runUpdateCheck({ force: false, manual: false, allowAutoApply: false, channel }).catch(() => {});
         return { ...baseState, checking: true };
       }
@@ -2865,7 +4043,7 @@ export class PrismDaemon {
         ...applyRes,
         action: 'apply-update',
         channel,
-        currentVersion: this.cdp?.PLUGIN_VERSION || this.updateService?.currentVersion || '1.0.7',
+        currentVersion: this.cdp?.PLUGIN_VERSION || this.updateService?.currentVersion || '1.0.8-beta.3',
       };
     }
 
@@ -3116,9 +4294,19 @@ export class PrismDaemon {
     } else {
       this.hostI18nExpr = '';
     }
+    // Issue #18 层 B：Swarm 侧栏汉化延后按需构建（仅在检测到 Swarm Target 或已有 swarmSessions 时编译，保持原 9 通道冷/热盘缓存统计不回归）
+    this.swarmI18nExpr = '';
+    this.swarmI18nCodeHash = '';
     this._buildThoughtExprForConfig(cfg, cacheOpts);
     this._buildInlineDiffExprForConfig(cfg, cacheOpts);
     this._buildWallpaperExprForConfig(cfg, cacheOpts);
+    this._buildPeriodicPickerExprForConfig(cfg, cacheOpts);
+    this.settingsExpr = '';
+    this.settingsCodeHash = '';
+    this._settingsHashSource = '';
+    this._buildMascotExprForConfig(cfg, cacheOpts);
+    this._buildSuggesterExprForConfig(cfg, cacheOpts);
+    this._buildHomeStudioExprForConfig(cfg, cacheOpts);
 
     if (bundleCachePath) {
       if (deferDiskCacheWrite) {
@@ -3209,7 +4397,7 @@ export class PrismDaemon {
   _getHostI18nCfgSig(cfgOverride = null) {
     try {
       const cfg = cfgOverride || this.cdp?.readConfig?.() || {};
-      return `${cfg.hostLocalization || 'auto'}:${cfg.language || cfg.lang || 'zh-CN'}`;
+      return `${cfg.hostLocalization || 'auto'}:${cfg.language || cfg.lang || 'auto'}`;
     } catch {
       return '';
     }
@@ -3220,6 +4408,498 @@ export class PrismDaemon {
       this.cdp?.HOST_I18N_REMOVE_EXPRESSION ||
       "(() => { try { window.__agPrismHostI18n?.destroy?.(); } catch {} return { ok: true, status: 'off' }; })()"
     );
+  }
+
+  _redactSensitiveText(text) {
+    const base =
+      typeof this.cdp?.redactSensitiveUrl === 'function'
+        ? this.cdp.redactSensitiveUrl(text)
+        : String(text || '');
+    return sanitizeSecretText(base);
+  }
+
+  _isSwarmI18nEnabled(cfgOverride = null) {
+    try {
+      const cfg = cfgOverride || this.cdp?.readConfig?.();
+      if (typeof this.cdp?.shouldEnableSwarmI18n === 'function') {
+        return Boolean(this.cdp.shouldEnableSwarmI18n(cfg));
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  }
+
+  _isSwarmTargetInfo(info) {
+    if (!info || typeof info !== 'object') return false;
+    if (info.type !== 'iframe' && info.type !== 'page') return false;
+    if (typeof this.cdp?.isSwarmSidecarUrl !== 'function') return false;
+    return Boolean(this.cdp.isSwarmSidecarUrl(info.url));
+  }
+
+  _getSwarmI18nCleanupExpression() {
+    return (
+      this.cdp?.SWARM_I18N_REMOVE_EXPRESSION ||
+      "(() => { try { window.__agPrismSwarmI18n?.destroy?.(); } catch {} try { document.documentElement?.removeAttribute?.('data-ag-prism-swarm-i18n'); } catch {} return { ok: true, status: 'off' }; })()"
+    );
+  }
+
+  _ensureSwarmI18nExpr(cfgOverride = null) {
+    const cfg = cfgOverride || (typeof this.cdp?.readConfig === 'function' ? this.cdp.readConfig() : null);
+    if (!this._isSwarmI18nEnabled(cfg) || typeof this.cdp?.buildSwarmI18nExpression !== 'function') {
+      this.swarmI18nExpr = '';
+      this.swarmI18nCodeHash = '';
+      return '';
+    }
+    if (this.swarmI18nExpr) return this.swarmI18nExpr;
+    const chOpts = this._getChannelCacheOpts(true);
+    const expr = chOpts
+      ? this.cdp.buildSwarmI18nExpression(cfg, null, chOpts)
+      : this.cdp.buildSwarmI18nExpression(cfg);
+    if (chOpts && this.running) this._scheduleBundleCacheFlush();
+    this.swarmI18nExpr = expr || '';
+    const hm = this.swarmI18nExpr.match(/targetHash\s*=\s*"([^"]+)"/);
+    this.swarmI18nCodeHash = hm ? hm[1] : '';
+    return this.swarmI18nExpr;
+  }
+
+  _cleanupSwarmSessionLocal(targetId) {
+    if (!targetId) return;
+    this._swarmAttaching.delete(targetId);
+    const entry = this.swarmSessions.get(targetId);
+    if (!entry) return;
+    this.swarmSessions.delete(targetId);
+    if (entry._reloadTimer) {
+      clearTimeout(entry._reloadTimer);
+      this._managedTimers?.delete(entry._reloadTimer);
+      entry._reloadTimer = null;
+    }
+    try {
+      if (typeof entry.session?.detachLocal === 'function') {
+        entry.session.detachLocal();
+      } else if (typeof this.browserSession?.offSession === 'function' && entry.sessionId) {
+        this.browserSession.offSession(entry.sessionId);
+      }
+    } catch {}
+  }
+
+  async _detachSwarmSession(targetId, cleanDom = true) {
+    if (!targetId) return;
+    this._swarmAttaching.delete(targetId);
+    const entry = this.swarmSessions.get(targetId);
+    if (!entry) return;
+    this.swarmSessions.delete(targetId);
+    if (entry._reloadTimer) {
+      clearTimeout(entry._reloadTimer);
+      this._managedTimers?.delete(entry._reloadTimer);
+      entry._reloadTimer = null;
+    }
+    const child = entry.session;
+    const parent = entry.parentSession || this.browserSession;
+    try {
+      if (child && !child.closed) {
+        if (entry.scriptId) {
+          await child
+            .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.scriptId }, 1800)
+            .catch(() => {});
+          entry.scriptId = null;
+        }
+        if (cleanDom) {
+          await child.evaluate(this._getSwarmI18nCleanupExpression(), false, 2500).catch(() => {});
+        }
+      }
+    } catch {}
+    try {
+      if (typeof child?.detachLocal === 'function') {
+        child.detachLocal();
+      } else if (typeof parent?.offSession === 'function' && entry.sessionId) {
+        parent.offSession(entry.sessionId);
+      }
+    } catch {}
+    try {
+      if (parent && !parent.closed && entry.sessionId) {
+        await parent.send('Target.detachFromTarget', { sessionId: entry.sessionId }, 1500).catch(() => {});
+      }
+    } catch {}
+  }
+
+  async _detachAllSwarmSessions(cleanDom = false) {
+    const ids = [...this.swarmSessions.keys()];
+    this._swarmAttaching.clear();
+    if (ids.length === 0) return;
+    await Promise.allSettled(ids.map((tid) => this._detachSwarmSession(tid, cleanDom)));
+    this.swarmSessions.clear();
+  }
+
+  _createSwarmChildSession(bSession, sessionId, targetId) {
+    if (typeof bSession.createChildSession === 'function') {
+      return bSession.createChildSession(sessionId, targetId);
+    }
+    let closed = false;
+    return {
+      sessionId,
+      targetId,
+      onClose: null,
+      get closed() {
+        return closed || Boolean(bSession.closed);
+      },
+      send(method, params = {}, timeoutMs = 5000) {
+        if (closed || bSession.closed) return Promise.reject(new Error('CDP child session closed'));
+        return bSession.send(method, params, timeoutMs, sessionId);
+      },
+      on(method, cb) {
+        if (typeof bSession.onSessionEvent === 'function') {
+          bSession.onSessionEvent(sessionId, method, cb);
+        }
+      },
+      async evaluate(expression, awaitPromise = false, timeoutMs = 4000) {
+        const res = await this.send(
+          'Runtime.evaluate',
+          { expression, returnByValue: true, awaitPromise },
+          timeoutMs
+        );
+        if (res && res.exceptionDetails) {
+          throw new Error(res.exceptionDetails.exception?.description || res.exceptionDetails.text);
+        }
+        return res && res.result ? res.result.value : undefined;
+      },
+      detachLocal() {
+        closed = true;
+        if (typeof bSession.offSession === 'function') bSession.offSession(sessionId);
+      },
+      close() {
+        if (closed) return;
+        this.detachLocal();
+        if (!bSession.closed) {
+          bSession.send('Target.detachFromTarget', { sessionId }, 1500).catch(() => {});
+        }
+      },
+    };
+  }
+
+  async _attachSwarmTarget(info, cfgOverride = null) {
+    const bSession = this.browserSession;
+    if (!bSession || bSession.closed || !this.running) return null;
+    const targetId = String(info?.targetId || info?.id || '').trim();
+    if (!targetId || !this._isSwarmTargetInfo(info)) return null;
+
+    const cfg = cfgOverride || (typeof this.cdp?.readConfig === 'function' ? this.cdp.readConfig() : null);
+    if (!this._isSwarmI18nEnabled(cfg)) {
+      if (this.swarmSessions.has(targetId)) {
+        await this._detachSwarmSession(targetId, true);
+      }
+      return null;
+    }
+
+    const safeUrl = this._redactSensitiveText(info.url || '');
+    const safeTitle = this._redactSensitiveText(info.title || info.url || 'Swarm');
+
+    const existing = this.swarmSessions.get(targetId);
+    if (existing && !existing.session.closed) {
+      existing.url = safeUrl;
+      existing.title = safeTitle;
+      const swarmExpr = this._ensureSwarmI18nExpr(cfg);
+      if (swarmExpr && existing.codeHash !== this.swarmI18nCodeHash) {
+        if (existing.scriptId) {
+          await existing.session
+            .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: existing.scriptId }, 1800)
+            .catch(() => {});
+          existing.scriptId = null;
+        }
+        const addRes = await existing.session
+          .send('Page.addScriptToEvaluateOnNewDocument', { source: swarmExpr }, 2000)
+          .catch(() => null);
+        if (addRes && addRes.identifier) existing.scriptId = addRes.identifier;
+        await existing.session.evaluate(swarmExpr, false, 3500).catch(() => null);
+        existing.codeHash = this.swarmI18nCodeHash;
+      }
+      return existing;
+    }
+
+    if (this._swarmAttaching.has(targetId)) return null;
+    this._swarmAttaching.add(targetId);
+    let sessionId = '';
+    let child = null;
+    try {
+      const swarmExpr = this._ensureSwarmI18nExpr(cfg);
+      if (!swarmExpr) return null;
+
+      const attached = await bSession.send('Target.attachToTarget', { targetId, flatten: true }, 2500);
+      sessionId = String(attached?.sessionId || '').trim();
+      if (!sessionId || !this.running || bSession.closed) {
+        if (sessionId && !bSession.closed) {
+          await bSession.send('Target.detachFromTarget', { sessionId }, 1500).catch(() => {});
+        }
+        return null;
+      }
+
+      // 再次检查最新配置，防止附着期间已切换为 off
+      const liveCfg = typeof this.cdp?.readConfig === 'function' ? this.cdp.readConfig() : cfg;
+      if (!this._isSwarmI18nEnabled(liveCfg)) {
+        await bSession.send('Target.detachFromTarget', { sessionId }, 1500).catch(() => {});
+        return null;
+      }
+
+      child = this._createSwarmChildSession(bSession, sessionId, targetId);
+      // 严格仅启用 Page 域：0 Runtime.addBinding、0 主包注入
+      await child.send('Page.enable', {}, 2000).catch(() => {});
+      const addRes = await child
+        .send('Page.addScriptToEvaluateOnNewDocument', { source: swarmExpr }, 2200)
+        .catch(() => null);
+
+      const entry = {
+        targetId,
+        sessionId,
+        parentSession: bSession,
+        session: child,
+        url: safeUrl,
+        title: safeTitle,
+        scriptId: addRes && addRes.identifier ? addRes.identifier : null,
+        codeHash: this.swarmI18nCodeHash,
+        _reloadTimer: null,
+      };
+      this.swarmSessions.set(targetId, entry);
+
+      const reapplyOnReload = () => {
+        if (!this.running || child.closed || this.swarmSessions.get(targetId) !== entry) return;
+        if (entry._reloadTimer) {
+          clearTimeout(entry._reloadTimer);
+          this._managedTimers?.delete(entry._reloadTimer);
+          entry._reloadTimer = null;
+        }
+        const t = setTimeout(() => {
+          entry._reloadTimer = null;
+          this._managedTimers?.delete(t);
+          if (!this.running || child.closed || this.swarmSessions.get(targetId) !== entry) return;
+          const reloadCfg = typeof this.cdp?.readConfig === 'function' ? this.cdp.readConfig() : null;
+          if (!this._isSwarmI18nEnabled(reloadCfg)) {
+            void this._detachSwarmSession(targetId, true).catch(() => {});
+            return;
+          }
+          const exprNow = this._ensureSwarmI18nExpr(reloadCfg);
+          if (exprNow) {
+            void child.evaluate(exprNow, false, 3500).catch(() => {});
+          }
+        }, 60);
+        if (typeof t.unref === 'function') t.unref();
+        entry._reloadTimer = t;
+        this._managedTimers?.add(t);
+      };
+      child.on('Page.domContentLoadedEventFired', reapplyOnReload);
+      child.on('Page.loadEventFired', reapplyOnReload);
+
+      const evalRes = await child.evaluate(swarmExpr, false, 3500).catch(() => null);
+      this.log(`[✓] Attached Swarm board i18n: ${safeTitle} (${evalRes?.status || 'ok'})`);
+      return entry;
+    } catch {
+      if (child) {
+        try { child.detachLocal(); } catch {}
+      }
+      if (sessionId && !bSession.closed && !this.swarmSessions.has(targetId)) {
+        await bSession.send('Target.detachFromTarget', { sessionId }, 1500).catch(() => {});
+      }
+      return null;
+    } finally {
+      this._swarmAttaching.delete(targetId);
+    }
+  }
+
+  async _handleSwarmTargetEvent(info) {
+    if (!info || typeof info !== 'object') return;
+    const tid = String(info.targetId || info.id || '').trim();
+    if (!tid) return;
+    if (!this._isSwarmTargetInfo(info)) {
+      if (this.swarmSessions.has(tid)) {
+        await this._detachSwarmSession(tid, true);
+      }
+      return;
+    }
+    const cfg = typeof this.cdp?.readConfig === 'function' ? this.cdp.readConfig() : null;
+    if (!this._isSwarmI18nEnabled(cfg)) {
+      if (this.swarmSessions.has(tid)) {
+        await this._detachSwarmSession(tid, true);
+      }
+      return;
+    }
+    await this._attachSwarmTarget(info, cfg);
+  }
+
+  async _scanExistingSwarmTargets(bSession = null) {
+    const bs = bSession || this.browserSession;
+    if (!bs || bs.closed || !this.running) return 0;
+    const cfg = typeof this.cdp?.readConfig === 'function' ? this.cdp.readConfig() : null;
+    if (!this._isSwarmI18nEnabled(cfg)) return 0;
+    const res = await bs.send('Target.getTargets', {}, 2000).catch(() => null);
+    const infos = Array.isArray(res?.targetInfos) ? res.targetInfos : [];
+    const swarmInfos = infos.filter((info) => this._isSwarmTargetInfo(info));
+    if (swarmInfos.length === 0) return 0;
+    await Promise.allSettled(swarmInfos.map((info) => this._attachSwarmTarget(info, cfg)));
+    return swarmInfos.length;
+  }
+
+  async _injectSwarmIntoSubFrame(entry, frameId, ctxId, cfgOverride = null) {
+    if (!entry || entry.session.closed || !frameId || typeof ctxId !== 'number') return;
+    if (frameId === entry.mainFrameId) return;
+    // 若该目标已被 OOPIF Path A 接管，则不重复注入
+    if (this.swarmSessions.has(frameId)) return;
+    const cfg = cfgOverride || (typeof this.cdp?.readConfig === 'function' ? this.cdp.readConfig() : null);
+    if (!this._isSwarmI18nEnabled(cfg)) return;
+    const expr = this._ensureSwarmI18nExpr(cfg);
+    if (!expr) return;
+    const sub = entry.swarmSubFrames?.get(frameId);
+    const evalRes = await entry.session
+      .send('Runtime.evaluate', { contextId: ctxId, expression: expr, returnByValue: true }, 3500)
+      .catch(() => null);
+    if (sub && evalRes && evalRes.result && evalRes.result.value && evalRes.result.value.ok) {
+      sub.mounted = true;
+      sub.codeHash = this.swarmI18nCodeHash;
+    }
+  }
+
+  async _cleanupSwarmSubFrames(entry, cleanDom = true) {
+    if (!entry || !(entry.swarmSubFrames instanceof Map) || entry.swarmSubFrames.size === 0) return;
+    if (cleanDom && !entry.session.closed) {
+      const cleanupExpr = this._getSwarmI18nCleanupExpression();
+      for (const sub of entry.swarmSubFrames.values()) {
+        if (sub && typeof sub.contextId === 'number') {
+          await entry.session
+            .send('Runtime.evaluate', { contextId: sub.contextId, expression: cleanupExpr, returnByValue: true }, 2500)
+            .catch(() => {});
+          sub.mounted = false;
+        }
+      }
+    }
+  }
+
+  async _syncSwarmSessionsForConfig(cfgOverride = null) {
+    const cfg = cfgOverride || (typeof this.cdp?.readConfig === 'function' ? this.cdp.readConfig() : null);
+    const enabled = this._isSwarmI18nEnabled(cfg);
+    if (!enabled) {
+      this.swarmI18nExpr = '';
+      this.swarmI18nCodeHash = '';
+      await this._detachAllSwarmSessions(true);
+      for (const entry of this.sessions.values()) {
+        await this._cleanupSwarmSubFrames(entry, true).catch(() => {});
+      }
+      return;
+    }
+    if (this.swarmSessions.size > 0) {
+      const swarmExpr = this._ensureSwarmI18nExpr(cfg);
+      if (swarmExpr) {
+        const entries = [...this.swarmSessions.values()];
+        await Promise.allSettled(
+          entries.map(async (entry) => {
+            if (!entry || entry.session.closed) return;
+            if (entry.scriptId) {
+              await entry.session
+                .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.scriptId }, 1800)
+                .catch(() => {});
+              entry.scriptId = null;
+            }
+            const addRes = await entry.session
+              .send('Page.addScriptToEvaluateOnNewDocument', { source: swarmExpr }, 2000)
+              .catch(() => null);
+            if (addRes && addRes.identifier) entry.scriptId = addRes.identifier;
+            await entry.session.evaluate(swarmExpr, false, 3500).catch(() => {});
+            entry.codeHash = this.swarmI18nCodeHash;
+          })
+        );
+      }
+    } else if (this.browserSession && !this.browserSession.closed) {
+      await this._scanExistingSwarmTargets(this.browserSession).catch(() => {});
+    }
+    // 同步 Path B 同进程子 Frame
+    for (const entry of this.sessions.values()) {
+      if (!entry || entry.session.closed || !(entry.swarmSubFrames instanceof Map)) continue;
+      for (const [fid, sub] of entry.swarmSubFrames.entries()) {
+        if (sub && typeof sub.contextId === 'number') {
+          await this._injectSwarmIntoSubFrame(entry, fid, sub.contextId, cfg).catch(() => {});
+        }
+      }
+    }
+  }
+
+  _getMainFrameIsolatedContextIds(entry, filterIds = null) {
+    if (!entry || !(entry.contextFrames instanceof Map) || !entry.mainFrameId) return [];
+    const allowSet = Array.isArray(filterIds) ? new Set(filterIds) : null;
+    const ids = [];
+    for (const [ctxId, meta] of entry.contextFrames.entries()) {
+      if (typeof ctxId !== 'number' || !meta) continue;
+      if (allowSet && !allowSet.has(ctxId)) continue;
+      if (meta.frameId !== entry.mainFrameId) continue;
+      if (meta.isDefault === true) continue;
+      if (meta.type !== 'isolated') continue;
+      ids.push(ctxId);
+    }
+    return ids;
+  }
+
+  async _syncIsolatedHostI18n(entry, shouldPause, opts = null) {
+    const empty = { attempted: 0, pausedAny: false, newlyPaused: false, resumedAny: false };
+    if (!entry || !entry.session || entry.session.closed) return empty;
+    const pauseExpr = this.cdp?.ISOLATED_HOST_I18N_PAUSE_EXPRESSION || '';
+    const resumeExpr = this.cdp?.ISOLATED_HOST_I18N_RESUME_EXPRESSION || '';
+    const expr = shouldPause ? pauseExpr : resumeExpr;
+    if (!expr) return empty;
+    if (!shouldPause && !entry.isolatedHostI18nPaused && !(opts && opts.force)) return empty;
+    const ctxIds = this._getMainFrameIsolatedContextIds(entry, opts && opts.contextIds);
+    if (ctxIds.length === 0) {
+      if (!shouldPause) entry.isolatedHostI18nPaused = false;
+      return empty;
+    }
+    if (!(entry.isolatedHostI18nNoExtCtxs instanceof Set)) {
+      entry.isolatedHostI18nNoExtCtxs = new Set();
+    }
+    const skipCheckedNoExt = Boolean(shouldPause && opts && opts.skipNoExt);
+    let attempted = 0;
+    let pausedAny = false;
+    let newlyPaused = false;
+    let resumedAny = false;
+    for (const ctxId of ctxIds) {
+      if (entry.session.closed) break;
+      if (skipCheckedNoExt && entry.isolatedHostI18nNoExtCtxs.has(ctxId)) continue;
+      attempted += 1;
+      const res = await entry.session
+        .send(
+          'Runtime.evaluate',
+          {
+            contextId: ctxId,
+            expression: expr,
+            returnByValue: true,
+          },
+          1800
+        )
+        .catch(() => null);
+      const val = res && res.result ? res.result.value : null;
+      if (shouldPause) {
+        if (val && val.ok && val.paused) {
+          pausedAny = true;
+          entry.isolatedHostI18nNoExtCtxs.delete(ctxId);
+          if (!val.alreadyPaused) newlyPaused = true;
+        } else if (val && val.ok && val.detected === false) {
+          entry.isolatedHostI18nNoExtCtxs.add(ctxId);
+        }
+      } else if (val && val.ok && val.resumed) {
+        resumedAny = true;
+      }
+    }
+    if (shouldPause) {
+      if (pausedAny) entry.isolatedHostI18nPaused = true;
+    } else {
+      entry.isolatedHostI18nPaused = false;
+    }
+    return { attempted, pausedAny, newlyPaused, resumedAny };
+  }
+
+  async _forceMainWorldHostI18nOffRescan(entry) {
+    if (!entry || !entry.session || entry.session.closed) return;
+    await entry.session
+      .evaluate(
+        "(() => { try { window.__agPrismHostI18n?.setMode?.('off', true); (window.__agPrism || window.__agClaudeStyle)?.sync?.(); } catch {} return true; })()",
+        false,
+        2500
+      )
+      .catch(() => {});
   }
 
   _setThoughtExpr(expr) {
@@ -3418,6 +5098,681 @@ export class PrismDaemon {
     );
   }
 
+  _hasSuggesterClientFile() {
+    try {
+      return fs.existsSync(path.join(this.rootDir, 'vendor', 'prompt-suggester', 'suggester-client.js'));
+    } catch {
+      return false;
+    }
+  }
+
+  _extractSuggesterCodeHash(expr) {
+    const str = typeof expr === 'string' ? expr : '';
+    if (!str) return '';
+    const m = /const targetHash = "([^"]+)"/.exec(str);
+    if (m && m[1]) return m[1];
+    return crypto.createHash('sha256').update(str).digest('hex').slice(0, 16);
+  }
+
+  _setSuggesterExpr(expr) {
+    const next = typeof expr === 'string' ? expr : '';
+    this.suggesterExpr = next;
+    this._suggesterHashSource = next;
+    this.suggesterCodeHash = this._extractSuggesterCodeHash(next);
+    return next;
+  }
+
+  _buildSuggesterExprForConfig(cfgOverride = null, cacheOpts = undefined) {
+    const cfg = cfgOverride || (typeof this.cdp?.readConfig === 'function' ? this.cdp.readConfig() : null);
+    if (typeof this.cdp?.buildSuggesterExpression !== 'function') {
+      return this._setSuggesterExpr('');
+    }
+    const rawOpts = cacheOpts !== undefined ? cacheOpts : this._getChannelCacheOpts(true);
+    const expr = rawOpts
+      ? this.cdp.buildSuggesterExpression(cfg, rawOpts)
+      : this.cdp.buildSuggesterExpression(cfg);
+    if (cacheOpts === undefined && rawOpts && this.running) {
+      this._scheduleBundleCacheFlush();
+    }
+    return this._setSuggesterExpr(expr);
+  }
+
+  _getSuggesterExprHash(expr = this.suggesterExpr) {
+    const str = typeof expr === 'string' ? expr : '';
+    if (!str) return '';
+    if (str === this._suggesterHashSource && this.suggesterCodeHash) {
+      return this.suggesterCodeHash;
+    }
+    const hash = this._extractSuggesterCodeHash(str);
+    if (str === this.suggesterExpr) {
+      this._suggesterHashSource = str;
+      this.suggesterCodeHash = hash;
+    }
+    return hash;
+  }
+
+  _getSuggesterCleanupExpression() {
+    return (
+      this.cdp?.SUGGESTER_REMOVE_EXPRESSION ||
+      "(() => { try { window.__agPrismSuggester?.destroy?.(); } catch {} try { document.getElementById('ag-prism-suggester-css')?.remove(); } catch {} try { document.getElementById('ag-prism-model-dd-css')?.remove(); } catch {} try { document.querySelectorAll('[data-testid=\"prism-suggest-trigger\"], [data-testid=\"prism-ghost-overlay\"]').forEach((n) => n.remove()); } catch {} try { document.documentElement?.removeAttribute?.('data-ag-prism-suggester'); } catch {} try { delete window.__agPrismSuggester; } catch {} try { delete globalThis.__agPrismSuggester; } catch {} try { delete window.__prismMountSuggesterUi; } catch {} try { delete globalThis.__prismMountSuggesterUi; } catch {} try { delete window.__agPrismSuggesterResolve; } catch {} return { ok: true, status: 'off' }; })()"
+    );
+  }
+
+  _hasPeriodicPickerFile() {
+    try {
+      return fs.existsSync(path.join(this.rootDir, 'vendor', 'periodic-picker', 'periodic-picker.js'));
+    } catch {
+      return false;
+    }
+  }
+
+  _isPeriodicPickerEnabled(cfgOverride = null) {
+    try {
+      const cfg = cfgOverride || this.cdp?.readConfig?.();
+      if (typeof this.cdp?.shouldEnablePeriodicPicker === 'function') {
+        return Boolean(this.cdp.shouldEnablePeriodicPicker(cfg));
+      }
+      return cfg?.periodicModelPicker !== 'off' && cfg?.periodicModelPicker !== false;
+    } catch {
+      return true;
+    }
+  }
+
+  _getPeriodicPickerCfgSig(cfgOverride = null) {
+    try {
+      const cfg = cfgOverride || this.cdp?.readConfig?.() || {};
+      return cfg.periodicModelPicker === 'off' || cfg.periodicModelPicker === false ? 'off' : 'on';
+    } catch {
+      return 'on';
+    }
+  }
+
+  _extractPeriodicPickerCodeHash(expr) {
+    const str = typeof expr === 'string' ? expr : '';
+    if (!str) return '';
+    const m = /const targetHash = "([^"]+)"/.exec(str);
+    if (m && m[1]) return m[1];
+    return crypto.createHash('sha256').update(str).digest('hex').slice(0, 16);
+  }
+
+  _setPeriodicPickerExpr(expr) {
+    const next = typeof expr === 'string' ? expr : '';
+    this.periodicPickerExpr = next;
+    this._periodicPickerHashSource = next;
+    this.periodicPickerCodeHash = this._extractPeriodicPickerCodeHash(next);
+    return next;
+  }
+
+  _buildPeriodicPickerExprForConfig(cfgOverride = null, cacheOpts = undefined) {
+    const cfg = cfgOverride || (typeof this.cdp?.readConfig === 'function' ? this.cdp.readConfig() : null);
+    if (
+      typeof this.cdp?.buildPeriodicPickerExpression !== 'function' ||
+      !this._hasPeriodicPickerFile() ||
+      !this._isPeriodicPickerEnabled(cfg)
+    ) {
+      return this._setPeriodicPickerExpr('');
+    }
+    const opts = cacheOpts !== undefined ? cacheOpts : this._getChannelCacheOpts(true);
+    const expr = opts
+      ? this.cdp.buildPeriodicPickerExpression(cfg, opts)
+      : this.cdp.buildPeriodicPickerExpression(cfg);
+    if (cacheOpts === undefined && opts && this.running) {
+      this._scheduleBundleCacheFlush();
+    }
+    return this._setPeriodicPickerExpr(expr);
+  }
+
+  _getPeriodicPickerExprHash(expr = this.periodicPickerExpr) {
+    const str = typeof expr === 'string' ? expr : '';
+    if (!str) return '';
+    if (str === this._periodicPickerHashSource && this.periodicPickerCodeHash) {
+      return this.periodicPickerCodeHash;
+    }
+    const hash = this._extractPeriodicPickerCodeHash(str);
+    if (str === this.periodicPickerExpr) {
+      this._periodicPickerHashSource = str;
+      this.periodicPickerCodeHash = hash;
+    }
+    return hash;
+  }
+
+  _getPeriodicPickerCleanupExpression() {
+    return (
+      this.cdp?.PERIODIC_PICKER_REMOVE_EXPRESSION ||
+      "(() => { try { window.__agPrismPeriodicPicker?.destroy?.(); document.documentElement?.removeAttribute?.('data-ag-prism-periodic-picker'); document.documentElement?.removeAttribute?.('data-ag-pp-open'); document.documentElement?.removeAttribute?.('data-ag-pp-holding'); document.querySelectorAll?.('#ag-prism-periodic-picker-css,#ag-prism-periodic-picker-root,.ag-pp-hold-ring,.ag-pp-mini-keycap').forEach((n) => n.remove()); for (const k of ['__agPrismPeriodicPicker','__agPrismPeriodicPickerFactory','__agPrismKeyboard3D','__agPrismPeriodicKeyboard3D','__agPrismOledScreen','__agPrismGrainAssets','__agPeriodicAudioFx','__agPeriodicModelCatalog','__agPeriodicHostBridge','__agPeriodicBentoUi','__agPeriodicPbrGrainAssets','__agPeriodicOledScreen','__agPeriodicKeyboard3D']) { try { delete window[k]; } catch {} try { delete globalThis[k]; } catch {} } } catch {} return { ok: true, status: 'off' }; })()"
+    );
+  }
+
+  async _resetPeriodicPickerEntryState(entry, session = entry?.session) {
+    if (!entry) return;
+    if (entry.periodicPickerScriptId && session && !session.closed) {
+      await session
+        .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.periodicPickerScriptId })
+        .catch(() => {});
+    }
+    entry.periodicPickerScriptId = null;
+    entry.periodicPickerMounted = false;
+    entry.lastPeriodicPickerSig = '';
+    entry.lastPeriodicPickerScriptSig = '';
+  }
+
+  async _syncPeriodicPickerOnEntry(
+    entry,
+    cfgNow,
+    {
+      expr = null,
+      hash = '',
+      enabled = null,
+      probe = null,
+      forceReplaceScript = false,
+      forceEval = false,
+      runCleanup = false,
+      evalTimeoutMs = 4500,
+      cleanupTimeoutMs = 3500,
+    } = {}
+  ) {
+    if (!entry || entry.session.closed) return;
+    const isEnabled = enabled !== null ? Boolean(enabled) : this._hasPeriodicPickerFile() && this._isPeriodicPickerEnabled(cfgNow);
+    if (isEnabled) {
+      const activeExpr = expr || this.periodicPickerExpr || this._buildPeriodicPickerExprForConfig(cfgNow);
+      if (!activeExpr) return;
+      const ppHash = hash || this._getPeriodicPickerExprHash(activeExpr);
+      const ppSig = `${this._getPeriodicPickerCfgSig(cfgNow)}:${ppHash}`;
+      if (forceReplaceScript || !entry.periodicPickerScriptId || entry.lastPeriodicPickerScriptSig !== ppSig) {
+        if (entry.periodicPickerScriptId) {
+          await entry.session
+            .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.periodicPickerScriptId })
+            .catch(() => {});
+          entry.periodicPickerScriptId = null;
+        }
+        const ppAdd = await entry.session
+          .send('Page.addScriptToEvaluateOnNewDocument', { source: activeExpr })
+          .catch(() => null);
+        if (ppAdd && ppAdd.identifier) {
+          entry.periodicPickerScriptId = ppAdd.identifier;
+          entry.lastPeriodicPickerScriptSig = ppSig;
+        } else {
+          entry.lastPeriodicPickerScriptSig = '';
+        }
+      }
+      const needsEval = forceEval || !probe || !probe.hasPeriodicPicker || Boolean(ppHash && probe.periodicPickerCodeHash !== ppHash);
+      if (needsEval && !entry.session.closed) {
+        const evalRes =
+          evalTimeoutMs > 0
+            ? await entry.session.evaluate(activeExpr, false, evalTimeoutMs).catch(() => null)
+            : await entry.session.evaluate(activeExpr).catch(() => null);
+        if (evalRes && evalRes.ok) {
+          entry.periodicPickerMounted = true;
+          entry.lastPeriodicPickerSig = ppSig;
+        }
+      }
+      return;
+    }
+
+    const hadBefore = Boolean(entry.periodicPickerScriptId || entry.periodicPickerMounted);
+    if (entry.periodicPickerScriptId) {
+      await entry.session
+        .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.periodicPickerScriptId })
+        .catch(() => {});
+      entry.periodicPickerScriptId = null;
+    }
+    if ((runCleanup || hadBefore || probe?.hasPeriodicPicker) && !entry.session.closed) {
+      if (cleanupTimeoutMs > 0) {
+        await entry.session.evaluate(this._getPeriodicPickerCleanupExpression(), false, cleanupTimeoutMs).catch(() => null);
+      } else {
+        await entry.session.evaluate(this._getPeriodicPickerCleanupExpression()).catch(() => null);
+      }
+    }
+    entry.periodicPickerMounted = false;
+    entry.lastPeriodicPickerSig = '';
+    entry.lastPeriodicPickerScriptSig = '';
+  }
+
+  // ── 第九通道：设置面板 + 全量 8 语言词典按需下发（仅当设置弹窗打开时触发） ──────────
+  _extractSettingsCodeHash(expr) {
+    const str = typeof expr === 'string' ? expr : '';
+    if (!str) return '';
+    const m = /const targetHash = "([^"]+)"/.exec(str);
+    if (m && m[1]) return m[1];
+    return crypto.createHash('sha256').update(str).digest('hex').slice(0, 16);
+  }
+
+  _getSettingsExprHash(expr = this.settingsExpr) {
+    const str = typeof expr === 'string' ? expr : '';
+    if (!str) return '';
+    if (str === this._settingsHashSource && this.settingsCodeHash) {
+      return this.settingsCodeHash;
+    }
+    const hash = this._extractSettingsCodeHash(str);
+    if (str === this.settingsExpr) {
+      this._settingsHashSource = str;
+      this.settingsCodeHash = hash;
+    }
+    return hash;
+  }
+
+  _ensureSettingsExpr(cacheOpts = undefined) {
+    if (this.settingsExpr) return this.settingsExpr;
+    if (typeof this.cdp?.buildSettingsChannelExpression !== 'function') return '';
+    const opts = cacheOpts !== undefined ? cacheOpts : this._getChannelCacheOpts(true);
+    const expr = opts
+      ? this.cdp.buildSettingsChannelExpression(null, opts)
+      : this.cdp.buildSettingsChannelExpression();
+    if (cacheOpts === undefined && opts && this.running) {
+      this._scheduleBundleCacheFlush();
+    }
+    this.settingsExpr = typeof expr === 'string' ? expr : '';
+    this._settingsHashSource = this.settingsExpr;
+    this.settingsCodeHash = this._extractSettingsCodeHash(this.settingsExpr);
+    return this.settingsExpr;
+  }
+
+  async _deliverSettingsChannelToEntry(entry, executionContextId = null) {
+    if (!entry || entry.session.closed) return false;
+    if (entry._settingsChannelInFlight) return false;
+    const expr = this._ensureSettingsExpr();
+    if (!expr) return false;
+    entry._settingsChannelInFlight = true;
+    try {
+      const evalParams = { expression: expr, returnByValue: true };
+      if (typeof executionContextId === 'number' && executionContextId > 0) {
+        evalParams.contextId = executionContextId;
+      }
+      const res = await entry.session.send('Runtime.evaluate', evalParams, 5000).catch(() => null);
+      if (res && res.result && res.result.value && res.result.value.ok) {
+        entry.settingsChannelDelivered = true;
+        return true;
+      }
+      return false;
+    } finally {
+      entry._settingsChannelInFlight = false;
+    }
+  }
+
+  // ── 第十通道：双桌宠按配置门控独立注入（mascot === 'off' 时零注入） ─────────────────
+  _hasMascotFile() {
+    try {
+      return fs.existsSync(path.join(this.rootDir, 'dual-mascot-rig.js'));
+    } catch {
+      return false;
+    }
+  }
+
+  _isMascotEnabled(cfgOverride = null) {
+    try {
+      const cfg = cfgOverride || this.cdp?.readConfig?.();
+      if (typeof this.cdp?.shouldEnableMascot === 'function') {
+        return Boolean(this.cdp.shouldEnableMascot(cfg));
+      }
+      return cfg?.mascot !== 'off' && cfg?.mascot !== false;
+    } catch {
+      return true;
+    }
+  }
+
+  _getMascotCfgSig(cfgOverride = null) {
+    try {
+      const cfg = cfgOverride || this.cdp?.readConfig?.() || {};
+      return cfg.mascot === 'off' || cfg.mascot === false ? 'off' : String(cfg.mascot || 'crab');
+    } catch {
+      return 'crab';
+    }
+  }
+
+  _extractMascotCodeHash(expr) {
+    const str = typeof expr === 'string' ? expr : '';
+    if (!str) return '';
+    const m = /const targetHash = "([^"]+)"/.exec(str);
+    if (m && m[1]) return m[1];
+    return crypto.createHash('sha256').update(str).digest('hex').slice(0, 16);
+  }
+
+  _setMascotExpr(expr) {
+    const next = typeof expr === 'string' ? expr : '';
+    this.mascotExpr = next;
+    this._mascotHashSource = next;
+    this.mascotCodeHash = this._extractMascotCodeHash(next);
+    return next;
+  }
+
+  _buildMascotExprForConfig(cfgOverride = null, cacheOpts = undefined) {
+    const cfg = cfgOverride || (typeof this.cdp?.readConfig === 'function' ? this.cdp.readConfig() : null);
+    if (
+      typeof this.cdp?.buildMascotChannelExpression !== 'function' ||
+      !this._hasMascotFile() ||
+      !this._isMascotEnabled(cfg)
+    ) {
+      return this._setMascotExpr('');
+    }
+    const opts = cacheOpts !== undefined ? cacheOpts : this._getChannelCacheOpts(true);
+    const expr = opts
+      ? this.cdp.buildMascotChannelExpression(cfg, opts)
+      : this.cdp.buildMascotChannelExpression(cfg);
+    if (cacheOpts === undefined && opts && this.running) {
+      this._scheduleBundleCacheFlush();
+    }
+    return this._setMascotExpr(expr);
+  }
+
+  _getMascotExprHash(expr = this.mascotExpr) {
+    const str = typeof expr === 'string' ? expr : '';
+    if (!str) return '';
+    if (str === this._mascotHashSource && this.mascotCodeHash) {
+      return this.mascotCodeHash;
+    }
+    const hash = this._extractMascotCodeHash(str);
+    if (str === this.mascotExpr) {
+      this._mascotHashSource = str;
+      this.mascotCodeHash = hash;
+    }
+    return hash;
+  }
+
+  _getMascotCleanupExpression() {
+    return (
+      this.cdp?.MASCOT_REMOVE_EXPRESSION ||
+      "(() => { try { window.__agDualMascotRig?.dispose?.(); } catch {} try { (window.__agPrism || window.__agClaudeStyle)?.sync?.(); } catch {} try { document.querySelectorAll?.('.ag-cs-crab, .ag-cs-dual-stage, .ag-cs-crab-stage, .ag-cs-mascot-stage, .ag-v2-mascot-stage, .ag-v2-habitat-prop').forEach((n) => { try { n.__agMascotApi?.dispose?.(); } catch {} n.remove?.(); }); } catch {} try { document.querySelectorAll?.('[data-ag-cs-crab-anchor]').forEach((n) => n.removeAttribute?.('data-ag-cs-crab-anchor')); } catch {} try { document.documentElement?.removeAttribute?.('data-ag-cs-has-crab'); document.documentElement?.removeAttribute?.('data-ag-cs-mascot-drag'); } catch {} try { delete window.__agDualMascotRig; delete globalThis.__agDualMascotRig; delete window.__agPrismMascotArt; delete globalThis.__agPrismMascotArt; } catch {} return { ok: true, status: 'off' }; })()"
+    );
+  }
+
+  async _resetMascotEntryState(entry, session = entry?.session) {
+    if (!entry) return;
+    if (entry.mascotScriptId && session && !session.closed) {
+      await session
+        .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.mascotScriptId })
+        .catch(() => {});
+    }
+    entry.mascotScriptId = null;
+    entry.mascotMounted = false;
+    entry.lastMascotSig = '';
+    entry.lastMascotScriptSig = '';
+  }
+
+  async _syncMascotOnEntry(
+    entry,
+    cfgNow,
+    {
+      expr = null,
+      hash = '',
+      enabled = null,
+      probe = null,
+      forceReplaceScript = false,
+      forceEval = false,
+      runCleanup = false,
+      evalTimeoutMs = 4500,
+      cleanupTimeoutMs = 3500,
+    } = {}
+  ) {
+    if (!entry || entry.session.closed) return;
+    const isEnabled = enabled !== null ? Boolean(enabled) : this._hasMascotFile() && this._isMascotEnabled(cfgNow);
+    if (isEnabled) {
+      const activeExpr = expr || this.mascotExpr || this._buildMascotExprForConfig(cfgNow);
+      if (!activeExpr) return;
+      const mHash = hash || this._getMascotExprHash(activeExpr);
+      const mSig = `${this._getMascotCfgSig(cfgNow)}:${mHash}`;
+      if (forceReplaceScript || !entry.mascotScriptId || entry.lastMascotScriptSig !== mSig) {
+        if (entry.mascotScriptId) {
+          await entry.session
+            .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.mascotScriptId })
+            .catch(() => {});
+          entry.mascotScriptId = null;
+        }
+        const mAdd = await entry.session
+          .send('Page.addScriptToEvaluateOnNewDocument', { source: activeExpr })
+          .catch(() => null);
+        if (mAdd && mAdd.identifier) {
+          entry.mascotScriptId = mAdd.identifier;
+          entry.lastMascotScriptSig = mSig;
+        } else {
+          entry.lastMascotScriptSig = '';
+        }
+      }
+      const needsEval = forceEval || !probe || !probe.hasMascot || Boolean(mHash && probe.mascotCodeHash !== mHash);
+      if (needsEval && !entry.session.closed) {
+        const evalRes =
+          evalTimeoutMs > 0
+            ? await entry.session.evaluate(activeExpr, false, evalTimeoutMs).catch(() => null)
+            : await entry.session.evaluate(activeExpr).catch(() => null);
+        if (evalRes && evalRes.ok) {
+          entry.mascotMounted = true;
+          entry.lastMascotSig = mSig;
+        }
+      }
+      return;
+    }
+
+    const hadBefore = Boolean(entry.mascotScriptId || entry.mascotMounted);
+    if (entry.mascotScriptId) {
+      await entry.session
+        .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.mascotScriptId })
+        .catch(() => {});
+      entry.mascotScriptId = null;
+    }
+    if ((runCleanup || hadBefore || probe?.hasMascot) && !entry.session.closed) {
+      if (cleanupTimeoutMs > 0) {
+        await entry.session.evaluate(this._getMascotCleanupExpression(), false, cleanupTimeoutMs).catch(() => null);
+      } else {
+        await entry.session.evaluate(this._getMascotCleanupExpression()).catch(() => null);
+      }
+    }
+    entry.mascotMounted = false;
+    entry.lastMascotSig = '';
+    entry.lastMascotScriptSig = '';
+  }
+
+  // ── 第十二通道：Studio 首页仪表盘按配置门控独立延迟注入（homeLayout !== 'studio' 时零注入） ──
+  _hasHomeStudioFile() {
+    try {
+      return fs.existsSync(path.join(this.rootDir, 'home-studio-panel.js'));
+    } catch {
+      return false;
+    }
+  }
+
+  _isHomeStudioEnabled(cfgOverride = null) {
+    try {
+      const cfg = cfgOverride || this.cdp?.readConfig?.();
+      if (typeof this.cdp?.shouldEnableHomeStudio === 'function') {
+        return Boolean(this.cdp.shouldEnableHomeStudio(cfg));
+      }
+      return (cfg?.homeLayout || cfg?.homeMode || 'studio') === 'studio';
+    } catch {
+      return true;
+    }
+  }
+
+  _getHomeStudioCfgSig(cfgOverride = null) {
+    try {
+      const cfg = cfgOverride || this.cdp?.readConfig?.() || {};
+      return (cfg.homeLayout || cfg.homeMode || 'studio') === 'studio' ? 'studio' : 'off';
+    } catch {
+      return 'studio';
+    }
+  }
+
+  _extractHomeStudioCodeHash(expr) {
+    const str = typeof expr === 'string' ? expr : '';
+    if (!str) return '';
+    const m = /const targetHash = "([^"]+)"/.exec(str);
+    if (m && m[1]) return m[1];
+    return crypto.createHash('sha256').update(str).digest('hex').slice(0, 16);
+  }
+
+  _setHomeStudioExpr(expr) {
+    const next = typeof expr === 'string' ? expr : '';
+    this.homeStudioExpr = next;
+    this._homeStudioHashSource = next;
+    this.homeStudioCodeHash = this._extractHomeStudioCodeHash(next);
+    return next;
+  }
+
+  _buildHomeStudioExprForConfig(cfgOverride = null, cacheOpts = undefined) {
+    const cfg = cfgOverride || (typeof this.cdp?.readConfig === 'function' ? this.cdp.readConfig() : null);
+    if (
+      typeof this.cdp?.buildHomeStudioChannelExpression !== 'function' ||
+      !this._hasHomeStudioFile() ||
+      !this._isHomeStudioEnabled(cfg)
+    ) {
+      return this._setHomeStudioExpr('');
+    }
+    const opts = cacheOpts !== undefined ? cacheOpts : this._getChannelCacheOpts(true);
+    const expr = opts
+      ? this.cdp.buildHomeStudioChannelExpression(cfg, opts)
+      : this.cdp.buildHomeStudioChannelExpression(cfg);
+    if (cacheOpts === undefined && opts && this.running) {
+      this._scheduleBundleCacheFlush();
+    }
+    return this._setHomeStudioExpr(expr);
+  }
+
+  _getHomeStudioExprHash(expr = this.homeStudioExpr) {
+    const str = typeof expr === 'string' ? expr : '';
+    if (!str) return '';
+    if (str === this._homeStudioHashSource && this.homeStudioCodeHash) {
+      return this.homeStudioCodeHash;
+    }
+    const hash = this._extractHomeStudioCodeHash(str);
+    if (str === this.homeStudioExpr) {
+      this._homeStudioHashSource = str;
+      this.homeStudioCodeHash = hash;
+    }
+    return hash;
+  }
+
+  _getHomeStudioCleanupExpression() {
+    return (
+      this.cdp?.HOME_STUDIO_REMOVE_EXPRESSION ||
+      "(() => { try { (window.__agPrism || window.__agClaudeStyle)?.detachHomeStudio?.(); } catch {} try { document.getElementById?.('ag-prism-studio-v101-css')?.remove?.(); } catch {} try { document.querySelectorAll?.('.ag-cs-home-panel-seat, .ag-cs-home-panel')?.forEach?.((n) => n.remove()); } catch {} try { document.documentElement?.removeAttribute?.('data-ag-prism-scope'); } catch {} try { delete window.__agPrismHomeStudioPanel; delete globalThis.__agPrismHomeStudioPanel; delete window.__agHomeStudioPanel; delete globalThis.__agHomeStudioPanel; } catch {} return { ok: true, status: 'off' }; })()"
+    );
+  }
+
+  async _resetHomeStudioEntryState(entry, session = entry?.session) {
+    if (!entry) return;
+    if (entry.homeStudioScriptId && session && !session.closed) {
+      await session
+        .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.homeStudioScriptId })
+        .catch(() => {});
+    }
+    entry.homeStudioScriptId = null;
+    entry.homeStudioMounted = false;
+    entry.lastHomeStudioSig = '';
+    entry.lastHomeStudioScriptSig = '';
+  }
+
+  async _syncHomeStudioOnEntry(
+    entry,
+    cfgNow,
+    {
+      expr = null,
+      hash = '',
+      enabled = null,
+      probe = null,
+      forceReplaceScript = false,
+      forceEval = false,
+      runCleanup = false,
+      evalTimeoutMs = 4500,
+      cleanupTimeoutMs = 3500,
+    } = {}
+  ) {
+    if (!entry || entry.session.closed) return;
+    const isEnabled = enabled !== null ? Boolean(enabled) : this._hasHomeStudioFile() && this._isHomeStudioEnabled(cfgNow);
+    if (isEnabled) {
+      const activeExpr = expr || this.homeStudioExpr || this._buildHomeStudioExprForConfig(cfgNow);
+      if (!activeExpr) return;
+      const hsHash = hash || this._getHomeStudioExprHash(activeExpr);
+      const hsSig = `${this._getHomeStudioCfgSig(cfgNow)}:${hsHash}`;
+      if (forceReplaceScript || !entry.homeStudioScriptId || entry.lastHomeStudioScriptSig !== hsSig) {
+        if (entry.homeStudioScriptId) {
+          await entry.session
+            .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.homeStudioScriptId })
+            .catch(() => {});
+          entry.homeStudioScriptId = null;
+        }
+        const hsAdd = await entry.session
+          .send('Page.addScriptToEvaluateOnNewDocument', { source: activeExpr })
+          .catch(() => null);
+        if (hsAdd && hsAdd.identifier) {
+          entry.homeStudioScriptId = hsAdd.identifier;
+          entry.lastHomeStudioScriptSig = hsSig;
+        } else {
+          entry.lastHomeStudioScriptSig = '';
+        }
+      }
+      const needsEval = forceEval || !probe || !probe.hasHomeStudio || Boolean(hsHash && probe.homeStudioCodeHash !== hsHash);
+      if (needsEval && !entry.session.closed) {
+        const evalRes =
+          evalTimeoutMs > 0
+            ? await entry.session.evaluate(activeExpr, false, evalTimeoutMs).catch(() => null)
+            : await entry.session.evaluate(activeExpr).catch(() => null);
+        if (evalRes && evalRes.ok) {
+          entry.homeStudioMounted = !evalRes.skippedByLiveCfg;
+          entry.lastHomeStudioSig = hsSig;
+        }
+      }
+      return;
+    }
+
+    const hadBefore = Boolean(entry.homeStudioScriptId || entry.homeStudioMounted);
+    if (entry.homeStudioScriptId) {
+      await entry.session
+        .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.homeStudioScriptId })
+        .catch(() => {});
+      entry.homeStudioScriptId = null;
+    }
+    if ((runCleanup || hadBefore || probe?.hasHomeStudio) && !entry.session.closed) {
+      if (cleanupTimeoutMs > 0) {
+        await entry.session.evaluate(this._getHomeStudioCleanupExpression(), false, cleanupTimeoutMs).catch(() => null);
+      } else {
+        await entry.session.evaluate(this._getHomeStudioCleanupExpression()).catch(() => null);
+      }
+    }
+    entry.homeStudioMounted = false;
+    entry.lastHomeStudioSig = '';
+    entry.lastHomeStudioScriptSig = '';
+  }
+
+  async _deliverHomeStudioChannelToEntry(entry, executionContextId = null) {
+    if (!entry || entry.session.closed) return false;
+    if (entry._homeStudioChannelInFlight) return false;
+    const cfgNow = typeof this.cdp?.readConfig === 'function' ? this.cdp.readConfig() : null;
+    if (!this._hasHomeStudioFile() || !this._isHomeStudioEnabled(cfgNow)) return false;
+    const expr = this.homeStudioExpr || this._buildHomeStudioExprForConfig(cfgNow);
+    if (!expr) return false;
+    const hsHash = this._getHomeStudioExprHash(expr);
+    const hsSig = `${this._getHomeStudioCfgSig(cfgNow)}:${hsHash}`;
+    entry._homeStudioChannelInFlight = true;
+    try {
+      if (!entry.homeStudioScriptId || entry.lastHomeStudioScriptSig !== hsSig) {
+        if (entry.homeStudioScriptId) {
+          await entry.session
+            .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.homeStudioScriptId })
+            .catch(() => {});
+          entry.homeStudioScriptId = null;
+        }
+        const hsAdd = await entry.session
+          .send('Page.addScriptToEvaluateOnNewDocument', { source: expr })
+          .catch(() => null);
+        if (hsAdd && hsAdd.identifier) {
+          entry.homeStudioScriptId = hsAdd.identifier;
+          entry.lastHomeStudioScriptSig = hsSig;
+        }
+      }
+      const evalParams = { expression: expr, returnByValue: true };
+      if (typeof executionContextId === 'number' && executionContextId > 0) {
+        evalParams.contextId = executionContextId;
+      }
+      const res = await entry.session.send('Runtime.evaluate', evalParams, 5000).catch(() => null);
+      if (res && res.result && res.result.value && res.result.value.ok) {
+        entry.homeStudioMounted = !res.result.value.skippedByLiveCfg;
+        entry.lastHomeStudioSig = hsSig;
+        return true;
+      }
+      return false;
+    } finally {
+      entry._homeStudioChannelInFlight = false;
+    }
+  }
+
   _isTelemetryDisabled(cfgOverride = null) {
     try {
       const cfg = cfgOverride || this.cdp?.readConfig?.();
@@ -3553,7 +5908,7 @@ export class PrismDaemon {
   _getSidebarServerMeta() {
     return {
       binding: SIDEBAR_BINDING,
-      version: this.cdp?.PLUGIN_VERSION || '1.0.7',
+      version: this.cdp?.PLUGIN_VERSION || '1.0.8-beta.3',
       schemaVersion: 2,
       serviceReady: !this._sidebarStopped && typeof this.sidebarService?.handleRpc === 'function' &&
         !this.sidebarService.getBootDiagnostic?.(),
@@ -3691,6 +6046,120 @@ export class PrismDaemon {
     } finally {
       this._wallpaperServicePromise = null;
     }
+  }
+
+  async _ensureSuggesterBinding(entry, timeoutMs = 2600, force = false) {
+    if (!entry || entry.session.closed) return false;
+    if (!force && entry.suggesterBindingAdded) return true;
+    const bindingName = this.cdp?.SUGGESTER_BINDING || SUGGESTER_BINDING;
+    const ok = await entry.session
+      .send('Runtime.addBinding', { name: bindingName }, timeoutMs)
+      .then(() => true)
+      .catch(() => false);
+    if (ok) entry.suggesterBindingAdded = true;
+    return ok;
+  }
+
+  async _removeSuggesterBinding(entry, timeoutMs = 2000) {
+    if (!entry || entry.session.closed) return;
+    const bindingName = this.cdp?.SUGGESTER_BINDING || SUGGESTER_BINDING;
+    await entry.session
+      .send('Runtime.removeBinding', { name: bindingName }, timeoutMs)
+      .catch(() => {});
+    entry.suggesterBindingAdded = false;
+  }
+
+  async _recordSuggesterEvalOutcome(entry, evalRes, suggesterHash) {
+    const isSkipped = Boolean(
+      evalRes && typeof evalRes.status === 'string' && evalRes.status.startsWith('skipped-')
+    );
+    if (evalRes && evalRes.ok) {
+      entry.suggesterMounted = true;
+      entry.suggesterSkipped = false;
+      entry.lastSuggesterHash = suggesterHash;
+    } else if (isSkipped) {
+      entry.suggesterMounted = false;
+      entry.suggesterSkipped = true;
+      entry.lastSuggesterHash = suggesterHash;
+      if (evalRes.status === 'skipped-non-host') {
+        await this._removeSuggesterBinding(entry);
+      }
+    } else {
+      entry.suggesterMounted = false;
+      entry.suggesterSkipped = false;
+      entry.lastSuggesterHash = '';
+    }
+  }
+
+  async ensureSuggesterService() {
+    if (this._suggesterStopped) return null;
+    if (this._lazySuggesterService) return this._lazySuggesterService;
+    if (this._suggesterServicePromise) return this._suggesterServicePromise;
+    this._suggesterServicePromise = (async () => {
+      const svcPath = path.join(this.rootDir, 'vendor', 'prompt-suggester', 'suggester-service.mjs');
+      if (!fs.existsSync(svcPath)) {
+        return null;
+      }
+      const mod = await import(pathToFileURL(svcPath).href);
+      const factory = mod?.createPromptSuggesterService || mod?.default;
+      if (this._suggesterStopped || typeof factory !== 'function') return null;
+      const svc = factory({
+        getTranslatorService: () => this.ensureThoughtService(),
+      });
+      if (this._suggesterStopped) {
+        try {
+          if (typeof svc?.dispose === 'function') await svc.dispose();
+        } catch {}
+        return null;
+      }
+      this._lazySuggesterService = svc;
+      return svc;
+    })();
+    try {
+      return await this._suggesterServicePromise;
+    } finally {
+      this._suggesterServicePromise = null;
+    }
+  }
+
+  // 校验目标窗口是否具备受信任的主帧默认上下文，供跨窗口双向同步广播复用
+  _resolveTrustedBroadcastContextId(other) {
+    if (!other || other.session?.closed) return { ok: false, contextId: undefined };
+    if (other.sidebarHostVerified !== true) return { ok: false, contextId: undefined };
+    const hasTrackedFrames = Boolean(
+      other.hasFrameTree || other.mainFrameId || (other.contextFrames instanceof Map && other.contextFrames.size > 0)
+    );
+    if (!hasTrackedFrames) {
+      return isAutomatedTestRuntime()
+        ? { ok: true, contextId: typeof other.sidebarHostContextId === 'number' ? other.sidebarHostContextId : undefined }
+        : { ok: false, contextId: undefined };
+    }
+    if (typeof other.sidebarHostContextId !== 'number') return { ok: false, contextId: undefined };
+    if (
+      typeof other.sidebarDocument === 'number' &&
+      typeof other.sidebarVerifiedDocument === 'number' &&
+      other.sidebarVerifiedDocument !== other.sidebarDocument
+    ) {
+      return { ok: false, contextId: undefined };
+    }
+    const otherCtx = other.contextFrames instanceof Map ? other.contextFrames.get(other.sidebarHostContextId) : null;
+    if (
+      !otherCtx ||
+      otherCtx.isDefault !== true ||
+      (otherCtx.type && otherCtx.type !== 'default') ||
+      !other.mainFrameId ||
+      otherCtx.frameId !== other.mainFrameId
+    ) {
+      return { ok: false, contextId: undefined };
+    }
+    if (
+      typeof other.sidebarDocument === 'number' &&
+      typeof otherCtx.docGen === 'number' &&
+      otherCtx.docGen !== other.sidebarDocument
+    ) {
+      return { ok: false, contextId: undefined };
+    }
+    return { ok: true, contextId: other.sidebarHostContextId };
   }
 
   async ensureSidebarService() {
@@ -4125,25 +6594,38 @@ export class PrismDaemon {
         const id = String(rawId || sum?.cascadeId || sum?.id || '').trim();
         if (!GUID_RE.test(id) || !sum || typeof sum !== 'object') continue;
         const meta = sum.trajectoryMetadata && typeof sum.trajectoryMetadata === 'object' ? sum.trajectoryMetadata : {};
-        const parentId = String(
+        const rawParentId = String(
           sum.parentConversationId ||
             meta.parentConversationId ||
+            sum.parentId ||
             sum.parentCascadeId ||
             sum.parentTrajectoryId ||
             meta.parentCascadeId ||
             meta.parentTrajectoryId ||
             ''
         ).trim();
-        const rootId = String(
-          sum.rootConversationId || meta.rootConversationId || sum.rootCascadeId || meta.rootCascadeId || ''
+        const lowId = id.toLowerCase();
+        const parentId = rawParentId && rawParentId.toLowerCase() !== lowId ? rawParentId : '';
+        const rawRootId = String(
+          sum.rootConversationId || meta.rootConversationId || sum.rootId || sum.rootCascadeId || meta.rootCascadeId || ''
         ).trim();
+        const rootId = rawRootId && rawRootId.toLowerCase() !== lowId ? rawRootId : '';
+        const selfPoisonSum = Boolean(
+          (rawParentId && rawParentId.toLowerCase() === lowId) ||
+            (!parentId && rawRootId && rawRootId.toLowerCase() === lowId)
+        );
         const subagent = Boolean(
-          (typeof usageCore?.isSubagentSummary === 'function' && usageCore.isSubagentSummary(sum)) ||
+          (typeof usageCore?.isSubagentSummary === 'function' && usageCore.isSubagentSummary(sum, id)) ||
             parentId ||
+            rootId ||
             Number(meta.nestingDepth || sum.nestingDepth || 0) > 0 ||
-            sum.isSubagent ||
-            meta.isSubagent ||
-            meta.subagentName
+            (!selfPoisonSum && sum.subagent === true) ||
+            sum.isSubagent === true ||
+            meta.isSubagent === true ||
+            sum.subagentName ||
+            meta.subagentName ||
+            sum.swarmId ||
+            meta.swarmId
         );
         const stepCount = Math.max(0, Number(sum.stepCount ?? sum.numTotalSteps ?? 0) || 0);
         const lastModifiedSec = toSec(sum.lastModifiedTime || sum.modifiedAt || sum.updatedAt);
@@ -4201,23 +6683,94 @@ export class PrismDaemon {
         const allowLocalDiskScan = scopeKey === 'local' && (!entry || entry._usageScopeVerified === true);
         if (allowLocalDiskScan) {
           try {
+            const diskCache = this._getUsageDiskCacheScope(scopeKey, false);
             const localRes = await this._discoverLocalAppConversations();
+            const coldCandidates = [];
             for (const localEntry of localRes?.conversations || []) {
               const lid = String(localEntry?.id || '').toLowerCase();
-              if (!GUID_RE.test(lid) || byId.has(lid)) continue;
-              // 直接复用 discoverLocalConversations 并发 lstat 返回的 mtimeMs，省去二次串行 lstat
-              const rawMtimeMs = Number.isFinite(localEntry?.dbMtimeMs)
+              if (!GUID_RE.test(lid)) continue;
+              // 严格以主 .db 的 mtime 与 size 作指纹（绝不看 .db-shm），防重启刷 mtime 穿透缓存
+              const hasDbMtime = Number.isFinite(localEntry?.dbMtimeMs) && localEntry.dbMtimeMs > 0;
+              const rawMtimeMs = hasDbMtime
                 ? localEntry.dbMtimeMs
                 : Number.isFinite(localEntry?.mtimeMs)
                 ? localEntry.mtimeMs
                 : 0;
               const mtimeSec = rawMtimeMs > 0 ? Math.floor(rawMtimeMs / 1000) : 0;
+              const dbSize = Number.isFinite(localEntry?.dbSize) && localEntry.dbSize > 0 ? Math.floor(localEntry.dbSize) : 0;
               const knownSub = subMap?.get(lid) || null;
+              const diskHit = diskCache.get(lid) || null;
+
+              const diskUnchanged = Boolean(
+                diskHit &&
+                  diskHit.record?.days &&
+                  ((diskHit.dbMtimeSec > 0 &&
+                    diskHit.dbSize > 0 &&
+                    mtimeSec > 0 &&
+                    dbSize > 0 &&
+                    diskHit.dbMtimeSec === mtimeSec &&
+                    diskHit.dbSize === dbSize) ||
+                    (dbSize === 0 && diskHit.lastModifiedSec > 0 && mtimeSec > 0 && diskHit.lastModifiedSec === mtimeSec) ||
+                    (!diskHit.dbSize && diskHit.lastModifiedSec > 0 && mtimeSec > 0 && mtimeSec <= diskHit.lastModifiedSec))
+              );
+
+              const existingItem = byId.get(lid);
+              if (existingItem) {
+                // v2.34+ searchConversations/Redux 摘要常返回 stepCount:0：为其补齐主 .db 指纹并直接回填缓存步数，根除缓存穿透
+                if (mtimeSec > 0 && !existingItem.dbMtimeSec) existingItem.dbMtimeSec = mtimeSec;
+                if (dbSize > 0 && !existingItem.dbSize) existingItem.dbSize = dbSize;
+                const sameRpcMod = Boolean(
+                  diskHit &&
+                    diskHit.record?.days &&
+                    existingItem.lastModifiedSec > 0 &&
+                    diskHit.lastModifiedSec === existingItem.lastModifiedSec &&
+                    (diskHit.stepCount > 0 || hasRealUsageRecord(diskHit.record))
+                );
+                if (existingItem.stepCount === 0 && (diskUnchanged || sameRpcMod)) {
+                  existingItem.stepCount = Math.max(0, Number(diskHit.stepCount || diskHit.record?.stepCount || 0));
+                  existingItem.diskUnchanged = true;
+                }
+                continue;
+              }
+
+              if (diskUnchanged) {
+                // 文件未变：直接用 diskCache 中的真实 stepCount 与 lastModifiedSec 回填，0 穿透、0 GetCascadeTrajectory RPC
+                const cleanDiskRec = sanitizeUsageRecord(lid, diskHit.record);
+                const rawCachedPid = String(knownSub?.parentId || cleanDiskRec?.parentId || '').trim();
+                const safeCachedPid = rawCachedPid && rawCachedPid.toLowerCase() !== lid ? rawCachedPid : '';
+                const cachedItem = {
+                  id: lid,
+                  stepCount: Math.max(0, Number(diskHit.stepCount || cleanDiskRec?.stepCount || 0)),
+                  lastModifiedSec: Number(diskHit.lastModifiedSec || mtimeSec),
+                  createdSec: Number(diskHit.lastModifiedSec || mtimeSec),
+                  ...(mtimeSec > 0 ? { dbMtimeSec: mtimeSec } : {}),
+                  ...(dbSize > 0 ? { dbSize } : {}),
+                  diskUnchanged: true,
+                  subagent: Boolean(knownSub || cleanDiskRec?.subagent),
+                  ...(safeCachedPid ? { parentId: safeCachedPid } : {}),
+                  ...(knownSub?.workspace || cleanDiskRec?.workspace ? { workspace: knownSub?.workspace || cleanDiskRec?.workspace } : {}),
+                  title: '',
+                  status: '',
+                };
+                list.push(cachedItem);
+                byId.set(lid, cachedItem);
+              } else {
+                coldCandidates.push({ lid, mtimeSec, dbSize, knownSub });
+              }
+            }
+            // 取消首页无上限全盘唤醒：未缓存沉睡 .db 按最新时间排序，单轮仅放行前 LOCAL_COLD_WAKEUP_CAP 个，其余标 dormant 不强唤 LS
+            coldCandidates.sort((a, b) => (b.mtimeSec || 0) - (a.mtimeSec || 0));
+            for (let i = 0; i < coldCandidates.length; i += 1) {
+              const { lid, mtimeSec, dbSize, knownSub } = coldCandidates[i];
+              const isDormant = i >= LOCAL_COLD_WAKEUP_CAP;
               const localItem = {
                 id: lid,
                 stepCount: 0,
                 lastModifiedSec: mtimeSec,
                 createdSec: mtimeSec,
+                ...(mtimeSec > 0 ? { dbMtimeSec: mtimeSec } : {}),
+                ...(dbSize > 0 ? { dbSize } : {}),
+                ...(isDormant ? { dormant: true } : {}),
                 subagent: Boolean(knownSub),
                 ...(knownSub?.parentId ? { parentId: knownSub.parentId } : {}),
                 ...(knownSub?.workspace ? { workspace: knownSub.workspace } : {}),
@@ -4302,16 +6855,31 @@ export class PrismDaemon {
     if (this._usageDiskCache instanceof Map) return this._usageDiskCache;
     const scopesMap = new Map();
     const cacheFile = this._resolveUsageCachePath();
+    let healedAny = false;
     const parseScopeEntries = (obj) => {
       const m = new Map();
       if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return m;
       for (const [k, v] of Object.entries(obj)) {
         if (m.size >= USAGE_CACHE_MAX_PER_SCOPE) break;
-        if (GUID_RE.test(k) && v && v.record?.days && Number(v.stepCount) > 0 && Number(v.lastModifiedSec) > 0) {
+        const sc = Number(v?.stepCount || 0);
+        const lm = Number(v?.lastModifiedSec || 0);
+        const dbMtimeSec = Number(v?.dbMtimeSec || 0);
+        const dbSize = Number(v?.dbSize || 0);
+        if (
+          GUID_RE.test(k) &&
+          v &&
+          v.record?.days &&
+          lm > 0 &&
+          (sc > 0 || (dbMtimeSec > 0 && dbSize > 0) || hasRealUsageRecord(v.record))
+        ) {
+          const clean = sanitizeUsageRecord(k, v.record);
+          if (clean !== v.record) healedAny = true;
           m.set(k.toLowerCase(), {
-            stepCount: Number(v.stepCount),
-            lastModifiedSec: Number(v.lastModifiedSec),
-            record: v.record,
+            stepCount: Math.max(0, sc),
+            lastModifiedSec: lm,
+            ...(dbMtimeSec > 0 ? { dbMtimeSec } : {}),
+            ...(dbSize > 0 ? { dbSize } : {}),
+            record: clean,
           });
         }
       }
@@ -4350,6 +6918,16 @@ export class PrismDaemon {
       }
     } catch {}
     this._usageDiskCache = scopesMap;
+    if (healedAny) {
+      this._usageCacheDirty = true;
+      if (!this._usageCacheTimer) {
+        this._usageCacheTimer = setTimeout(() => {
+          this._usageCacheTimer = null;
+          this._flushUsageDiskCache();
+        }, 1500);
+        this._usageCacheTimer.unref?.();
+      }
+    }
     return scopesMap;
   }
 
@@ -4369,20 +6947,47 @@ export class PrismDaemon {
     return bucket || new Map();
   }
 
-  _putUsageDiskCache(id, stepCount, lastModifiedSec, record, scopeKey = 'local') {
+  _putUsageDiskCache(id, stepCount, lastModifiedSec, record, scopeKey = 'local', diskMeta = null) {
     if (!id || !GUID_RE.test(id) || !record?.days) return;
-    const sc = Math.max(0, Number(stepCount || record.stepCount || 0));
-    const lm = Math.max(0, Number(lastModifiedSec || record.lastModifiedSec || 0));
-    if (sc <= 0 || lm <= 0) return;
+    const cleanRec = sanitizeUsageRecord(id, record);
+    const sc = Math.max(0, Number(stepCount || cleanRec.stepCount || 0));
+    const lm = Math.max(0, Number(lastModifiedSec || cleanRec.lastModifiedSec || 0));
+    const dbMtimeSec = Math.max(0, Number(diskMeta?.dbMtimeSec || cleanRec.dbMtimeSec || 0));
+    const dbSize = Math.max(0, Number(diskMeta?.dbSize || cleanRec.dbSize || 0));
+    if (lm <= 0 || (sc <= 0 && !(dbMtimeSec > 0 && dbSize > 0) && !hasRealUsageRecord(cleanRec))) return;
     const safeScope = normalizeUsageScopeKey(scopeKey) || 'local';
     const bucket = this._getUsageDiskCacheScope(safeScope, true);
     const key = id.toLowerCase();
     const existing = bucket.get(key);
-    // 保护：绝不用空统计覆盖已有真实非空统计
-    if (existing && hasRealUsageRecord(existing.record) && !hasRealUsageRecord(record)) {
+    // 保护：绝不用空统计覆盖已有真实非空统计；若仅补充主 .db 指纹则保留原真实记录
+    if (existing && hasRealUsageRecord(existing.record) && !hasRealUsageRecord(cleanRec)) {
+      const cleanExisting = sanitizeUsageRecord(id, existing.record);
+      if (
+        cleanExisting !== existing.record ||
+        (dbMtimeSec > 0 && existing.dbMtimeSec !== dbMtimeSec) ||
+        (dbSize > 0 && existing.dbSize !== dbSize)
+      ) {
+        bucket.set(key, {
+          ...existing,
+          ...(dbMtimeSec > 0 ? { dbMtimeSec } : {}),
+          ...(dbSize > 0 ? { dbSize } : {}),
+          record: cleanExisting,
+        });
+        this._usageCacheDirty = true;
+      }
       return;
     }
-    bucket.set(key, { stepCount: sc, lastModifiedSec: lm, record });
+    const nextRecord =
+      dbMtimeSec > 0 || dbSize > 0
+        ? { ...cleanRec, ...(dbMtimeSec > 0 ? { dbMtimeSec } : {}), ...(dbSize > 0 ? { dbSize } : {}) }
+        : cleanRec;
+    bucket.set(key, {
+      stepCount: sc,
+      lastModifiedSec: lm,
+      ...(dbMtimeSec > 0 ? { dbMtimeSec } : existing?.dbMtimeSec > 0 ? { dbMtimeSec: existing.dbMtimeSec } : {}),
+      ...(dbSize > 0 ? { dbSize } : existing?.dbSize > 0 ? { dbSize: existing.dbSize } : {}),
+      record: nextRecord,
+    });
     this._usageCacheDirty = true;
     if (!this._usageCacheTimer) {
       this._usageCacheTimer = setTimeout(() => {
@@ -4533,12 +7138,23 @@ export class PrismDaemon {
 
       if (action === 'list-summaries') {
         const cachedRecords = [];
+        const presentIds = new Set();
         for (const s of backendPack.list) {
           const sid = String(s?.id || '').trim();
           if (!sid) continue;
-          const hit = diskCache.get(sid.toLowerCase());
+          const lowerId = sid.toLowerCase();
+          presentIds.add(lowerId);
+          const hit = diskCache.get(lowerId);
           if (hit?.record?.days) {
-            cachedRecords.push({ id: sid, mode: 'full', record: hit.record });
+            cachedRecords.push({ id: sid, mode: 'full', record: sanitizeUsageRecord(sid, hit.record) });
+          }
+        }
+        // PR #41 (Co-authored-by: @OyatsuSuki): 同步返回同 scopeKey 下已删除/已归档但有真实消耗的历史账本记录（零 RPC、严格 scope 隔离）
+        for (const [key, hit] of diskCache.entries()) {
+          if (presentIds.has(key)) continue;
+          if (hit?.record?.days && hasRealUsageRecord(hit.record)) {
+            const cleanArchived = sanitizeUsageRecord(hit.record.cascadeId || key, hit.record);
+            cachedRecords.push({ id: cleanArchived.cascadeId || key, mode: 'full', archived: true, record: cleanArchived });
           }
         }
         return { ok: true, scopeKey, records: cachedRecords, summaries: backendPack.list };
@@ -4559,24 +7175,46 @@ export class PrismDaemon {
         const stepCount = Math.max(0, Number(item.stepCount || backendSum?.stepCount || 0));
         const lastModifiedSec = Math.max(0, Number(item.lastModifiedSec || backendSum?.lastModifiedSec || 0));
         const createdSec = Math.max(0, Number(item.createdSec || backendSum?.createdSec || lastModifiedSec || 0));
-        const subagent = Boolean(item.subagent || backendSum?.subagent);
-        const parentId = String(item.parentId || backendSum?.parentId || '').trim();
-        const rootId = String(item.rootId || backendSum?.rootId || '').trim();
+        const itemDbMtimeSec = Math.max(0, Number(item.dbMtimeSec || backendSum?.dbMtimeSec || 0));
+        const itemDbSize = Math.max(0, Number(item.dbSize || backendSum?.dbSize || 0));
+        const diskMeta = itemDbMtimeSec > 0 || itemDbSize > 0 ? { dbMtimeSec: itemDbMtimeSec, dbSize: itemDbSize } : null;
+        const lowId = id.toLowerCase();
+        const rawItemPid = String(item.parentId || '').trim();
+        const rawItemRid = String(item.rootId || '').trim();
+        const itemSelfPoison = Boolean(
+          (rawItemPid && rawItemPid.toLowerCase() === lowId) ||
+            (!rawItemPid && rawItemRid && rawItemRid.toLowerCase() === lowId)
+        );
+        const rawPid = String((itemSelfPoison ? '' : rawItemPid) || backendSum?.parentId || '').trim();
+        const parentId = rawPid && rawPid.toLowerCase() !== lowId ? rawPid : '';
+        const rawRid = String((itemSelfPoison ? '' : rawItemRid) || backendSum?.rootId || '').trim();
+        const rootId = rawRid && rawRid.toLowerCase() !== lowId ? rawRid : '';
+        const subagent = Boolean((itemSelfPoison ? false : item.subagent) || backendSum?.subagent || parentId || rootId);
         const workspace = String(item.workspace || backendSum?.workspace || '');
         const workspaces = Array.isArray(item.workspaces) && item.workspaces.length
           ? item.workspaces
           : backendSum?.workspaces || [];
         const gmOffset = Math.max(0, Math.floor(Number(item.gmOffset || 0)));
-        const diskHit = diskCache.get(id.toLowerCase()) || null;
-        if (!opts?.force && stepCount > 0 && lastModifiedSec > 0) {
-          if (diskHit && diskHit.stepCount === stepCount && diskHit.lastModifiedSec === lastModifiedSec && diskHit.record?.days) {
+        const diskHit = diskCache.get(lowId) || null;
+        if (!opts?.force && diskHit && diskHit.record?.days) {
+          const hitByStepAndMtime =
+            stepCount > 0 && lastModifiedSec > 0 && diskHit.stepCount === stepCount && diskHit.lastModifiedSec === lastModifiedSec;
+          const hitByDbFingerprint =
+            itemDbMtimeSec > 0 && itemDbSize > 0 && diskHit.dbMtimeSec === itemDbMtimeSec && diskHit.dbSize === itemDbSize;
+          const hitByLegacyZeroStep =
+            stepCount === 0 &&
+            lastModifiedSec > 0 &&
+            diskHit.lastModifiedSec === lastModifiedSec &&
+            (diskHit.stepCount > 0 || hasRealUsageRecord(diskHit.record));
+          if (hitByStepAndMtime || hitByDbFingerprint || hitByLegacyZeroStep) {
+            const cleanHitRec = sanitizeUsageRecord(id, diskHit.record);
             records.push({
               id,
               mode: 'full',
-              subagent: Boolean(diskHit.record.subagent || subagent),
+              subagent: Boolean(cleanHitRec.subagent || subagent),
               ...(parentId ? { parentId } : {}),
               ...(workspace ? { workspace } : {}),
-              record: diskHit.record,
+              record: cleanHitRec,
             });
             continue;
           }
@@ -4631,10 +7269,12 @@ export class PrismDaemon {
               if (workspace && deltaRec && typeof deltaRec === 'object' && !deltaRec.workspace) deltaRec.workspace = workspace;
               if (parentId && deltaRec && typeof deltaRec === 'object' && !deltaRec.parentId) deltaRec.parentId = parentId;
               if (allowDiskCache && diskHit?.record?.days && typeof usageCore.mergeUsageRecordDelta === 'function') {
-                const merged = usageCore.mergeUsageRecordDelta(diskHit.record, deltaRec, {
+                const effSteps = Math.max(stepCount, realStepCount);
+                const effModSec = Math.max(lastModifiedSec, realLastModSec);
+                const merged = usageCore.mergeUsageRecordDelta(sanitizeUsageRecord(id, diskHit.record), deltaRec, {
                   cascadeId: id,
-                  stepCount: Number(item.stepCount || realStepCount),
-                  lastModifiedSec: Number(item.lastModifiedSec || realLastModSec),
+                  stepCount: effSteps,
+                  lastModifiedSec: effModSec,
                   gmCount: totalGm,
                   subagent,
                   workspace,
@@ -4642,10 +7282,11 @@ export class PrismDaemon {
                 });
                 this._putUsageDiskCache(
                   id,
-                  Number(item.stepCount || realStepCount),
-                  Number(item.lastModifiedSec || realLastModSec),
+                  effSteps,
+                  effModSec,
                   merged,
-                  scopeKey
+                  scopeKey,
+                  diskMeta
                 );
               }
               records.push({
@@ -4663,13 +7304,16 @@ export class PrismDaemon {
               const fullRec = usageCore.analyzeTrajectoryForUsage(fullTraj, enrichedStub, id);
               if (workspace && fullRec && typeof fullRec === 'object' && !fullRec.workspace) fullRec.workspace = workspace;
               if (parentId && fullRec && typeof fullRec === 'object' && !fullRec.parentId) fullRec.parentId = parentId;
+              if (diskMeta?.dbMtimeSec > 0 && fullRec && typeof fullRec === 'object') fullRec.dbMtimeSec = diskMeta.dbMtimeSec;
+              if (diskMeta?.dbSize > 0 && fullRec && typeof fullRec === 'object') fullRec.dbSize = diskMeta.dbSize;
               if (allowDiskCache) {
                 this._putUsageDiskCache(
                   id,
-                  Number(item.stepCount || realStepCount),
-                  Number(item.lastModifiedSec || realLastModSec),
+                  Math.max(stepCount, realStepCount),
+                  Math.max(lastModifiedSec, realLastModSec),
                   fullRec,
-                  scopeKey
+                  scopeKey,
+                  diskMeta
                 );
               }
               records.push({
@@ -4703,10 +7347,13 @@ export class PrismDaemon {
             if (totalGm !== null && totalGm < gmOffset) {
               // Rewound/reverted conversation: rebuild cleanly from offset 0
               const fullMeta = await this._fetchFullGeneratorMetadata(client, id);
-              const fullRec = usageCore.analyzeTrajectoryForUsage(fullMeta, summaryStub, id);
+              const realStepCount = Math.max(stepCount, Number(fullMeta?.numTotalSteps || 0));
+              const fullRec = usageCore.analyzeTrajectoryForUsage(fullMeta, { ...summaryStub, stepCount: realStepCount }, id);
               if (workspace && fullRec && typeof fullRec === 'object' && !fullRec.workspace) fullRec.workspace = workspace;
               if (parentId && fullRec && typeof fullRec === 'object' && !fullRec.parentId) fullRec.parentId = parentId;
-              if (allowDiskCache) this._putUsageDiskCache(id, stepCount, lastModifiedSec, fullRec, scopeKey);
+              if (diskMeta?.dbMtimeSec > 0 && fullRec && typeof fullRec === 'object') fullRec.dbMtimeSec = diskMeta.dbMtimeSec;
+              if (diskMeta?.dbSize > 0 && fullRec && typeof fullRec === 'object') fullRec.dbSize = diskMeta.dbSize;
+              if (allowDiskCache) this._putUsageDiskCache(id, realStepCount, lastModifiedSec, fullRec, scopeKey, diskMeta);
               records.push({
                 id,
                 mode: 'full',
@@ -4739,7 +7386,7 @@ export class PrismDaemon {
               if (workspace && deltaRec && typeof deltaRec === 'object' && !deltaRec.workspace) deltaRec.workspace = workspace;
               if (parentId && deltaRec && typeof deltaRec === 'object' && !deltaRec.parentId) deltaRec.parentId = parentId;
               if (allowDiskCache && diskHit?.record?.days && typeof usageCore.mergeUsageRecordDelta === 'function') {
-                const merged = usageCore.mergeUsageRecordDelta(diskHit.record, deltaRec, {
+                const merged = usageCore.mergeUsageRecordDelta(sanitizeUsageRecord(id, diskHit.record), deltaRec, {
                   cascadeId: id,
                   stepCount,
                   lastModifiedSec,
@@ -4748,7 +7395,7 @@ export class PrismDaemon {
                   workspace,
                   parentId,
                 });
-                this._putUsageDiskCache(id, stepCount, lastModifiedSec, merged, scopeKey);
+                this._putUsageDiskCache(id, stepCount, lastModifiedSec, merged, scopeKey, diskMeta);
               }
               records.push({
                 id,
@@ -4764,10 +7411,13 @@ export class PrismDaemon {
             }
           } else {
             const fullMeta = await this._fetchFullGeneratorMetadata(client, id);
-            const fullRec = usageCore.analyzeTrajectoryForUsage(fullMeta, summaryStub, id);
+            const realStepCount = Math.max(stepCount, Number(fullMeta?.numTotalSteps || 0));
+            const fullRec = usageCore.analyzeTrajectoryForUsage(fullMeta, { ...summaryStub, stepCount: realStepCount }, id);
             if (workspace && fullRec && typeof fullRec === 'object' && !fullRec.workspace) fullRec.workspace = workspace;
             if (parentId && fullRec && typeof fullRec === 'object' && !fullRec.parentId) fullRec.parentId = parentId;
-            if (allowDiskCache) this._putUsageDiskCache(id, stepCount, lastModifiedSec, fullRec, scopeKey);
+            if (diskMeta?.dbMtimeSec > 0 && fullRec && typeof fullRec === 'object') fullRec.dbMtimeSec = diskMeta.dbMtimeSec;
+            if (diskMeta?.dbSize > 0 && fullRec && typeof fullRec === 'object') fullRec.dbSize = diskMeta.dbSize;
+            if (allowDiskCache) this._putUsageDiskCache(id, realStepCount, lastModifiedSec, fullRec, scopeKey, diskMeta);
             records.push({
               id,
               mode: 'full',
@@ -4806,6 +7456,10 @@ export class PrismDaemon {
     this._selfConfigWriteUntil = Date.now() + 650;
     writeFileAtomicSync(cfgPath, JSON.stringify(next, null, 2) + '\n', { mode: 0o600 });
     this.cdp?.invalidateConfigCache?.();
+    if (Object.prototype.hasOwnProperty.call(expandedPatch, 'autoArchiveOnExit')) {
+      this._storageHealthCache = null;
+      this._storageHealthAt = 0;
+    }
     this._configSeq += 1;
     return true;
   }
@@ -4968,12 +7622,16 @@ export class PrismDaemon {
         let thoughtSnap = this.thoughtExpr;
         let inlineDiffSnap = this.inlineDiffExpr;
         let wallpaperSnap = this.wallpaperExpr;
+        let periodicPickerSnap = this.periodicPickerExpr;
+        let mascotSnap = this.mascotExpr;
+        let suggesterSnap = this.suggesterExpr;
+        let homeStudioSnap = this.homeStudioExpr;
         const currentCfg = typeof this.cdp.readConfig === 'function' ? this.cdp.readConfig() : {};
         if (currentCfg?.telemetryModule === 'off') {
           this._releaseIdleTelemetry(true);
         }
         const { channel: syncedUpdateChannel, changed: updateChannelChanged } = this._syncUpdateServiceChannel(currentCfg);
-        if (updateChannelChanged && this.running) {
+        if (updateChannelChanged && this.running && this._getAutoUpdateSetting() === 'on') {
           void this.runUpdateCheck({ force: true, manual: false, allowAutoApply: false, channel: syncedUpdateChannel }).catch(() => {});
         }
         const omniEnabled = this._isOmniEnabled(currentCfg);
@@ -4993,8 +7651,33 @@ export class PrismDaemon {
           wallpaperSnap = this._buildWallpaperExprForConfig(currentCfg);
         }
         const wallpaperHash = wallpaperSnap ? this._getWallpaperExprHash(wallpaperSnap) : '';
+        const periodicPickerEnabled = this._hasPeriodicPickerFile() && this._isPeriodicPickerEnabled(currentCfg);
+        if (periodicPickerEnabled && !periodicPickerSnap && typeof this.cdp.buildPeriodicPickerExpression === 'function') {
+          periodicPickerSnap = this._buildPeriodicPickerExprForConfig(currentCfg);
+        }
+        const periodicPickerHash = periodicPickerSnap ? this._getPeriodicPickerExprHash(periodicPickerSnap) : '';
+        const periodicPickerSig = periodicPickerEnabled
+          ? `${this._getPeriodicPickerCfgSig(currentCfg)}:${periodicPickerHash}`
+          : '';
+        const mascotEnabled = this._hasMascotFile() && this._isMascotEnabled(currentCfg);
+        if (mascotEnabled && !mascotSnap && typeof this.cdp.buildMascotChannelExpression === 'function') {
+          mascotSnap = this._buildMascotExprForConfig(currentCfg);
+        }
+        const mascotHash = mascotSnap ? this._getMascotExprHash(mascotSnap) : '';
+        const mascotSig = mascotEnabled ? `${this._getMascotCfgSig(currentCfg)}:${mascotHash}` : '';
+        if (!suggesterSnap && typeof this.cdp.buildSuggesterExpression === 'function') {
+          suggesterSnap = this._buildSuggesterExprForConfig(currentCfg);
+        }
+        const suggesterHash = suggesterSnap ? this._getSuggesterExprHash(suggesterSnap) : '';
+        const homeStudioEnabled = this._hasHomeStudioFile() && this._isHomeStudioEnabled(currentCfg);
+        if (homeStudioEnabled && !homeStudioSnap && typeof this.cdp.buildHomeStudioChannelExpression === 'function') {
+          homeStudioSnap = this._buildHomeStudioExprForConfig(currentCfg);
+        }
+        const homeStudioHash = homeStudioSnap ? this._getHomeStudioExprHash(homeStudioSnap) : '';
+        const homeStudioSig = homeStudioEnabled ? `${this._getHomeStudioCfgSig(currentCfg)}:${homeStudioHash}` : '';
         const canFastRefresh = typeof this.cdp.buildConfigRefreshExpression === 'function';
         const baseRefreshExpr = canFastRefresh ? this.cdp.buildConfigRefreshExpression() : null;
+        await this._syncSwarmSessionsForConfig(currentCfg).catch(() => {});
         if (activeItems.length === 0) continue;
 
         await Promise.allSettled(
@@ -5012,6 +7695,13 @@ export class PrismDaemon {
                 }
                 return entry.session.closed;
               };
+              if (abortIfStale()) return;
+
+              const hostI18nOffNow = currentCfg?.hostLocalization === 'off';
+              let isoPauseRes = null;
+              if (hostI18nOffNow && !entry.session.closed) {
+                isoPauseRes = await this._syncIsolatedHostI18n(entry, true);
+              }
               if (abortIfStale()) return;
 
               const refreshExpr =
@@ -5065,23 +7755,39 @@ export class PrismDaemon {
               }
               if (abortIfStale()) return;
               const hadHostI18n = Boolean(entry.hostI18nScriptId || entry.hostI18nMounted);
+              const hostI18nSkippedSameSig = Boolean(entry.hostI18nSkippedByLiveCfg && entry.lastHostI18nSig === hostI18nSig);
               const hostI18nChanged = Boolean(
                 hostI18nEnabled &&
                   hostI18nSnap &&
+                  !hostI18nSkippedSameSig &&
                   (entry.lastHostI18nSig !== hostI18nSig || !entry.hostI18nScriptId || !entry.hostI18nMounted)
               );
               if (hostI18nEnabled && hostI18nSnap) {
+                let evaluatedHostI18nFresh = false;
                 if (!skippedStale && !entry.session.closed && (!refreshedFast || hostI18nChanged)) {
                   const evalRes = await entry.session.evaluate(hostI18nSnap).catch(() => null);
-                  if (evalRes && evalRes.ok) {
-                    entry.hostI18nMounted = true;
+                  if (evalRes?.skippedByLiveCfg) {
+                    entry.hostI18nMounted = false;
+                    entry.hostI18nSkippedByLiveCfg = true;
                     entry.lastHostI18nSig = hostI18nSig;
+                  } else if (evalRes && evalRes.ok) {
+                    entry.hostI18nMounted = true;
+                    entry.hostI18nSkippedByLiveCfg = false;
+                    entry.lastHostI18nSig = hostI18nSig;
+                    evaluatedHostI18nFresh = !evalRes.reused;
                   }
+                }
+                if (hostI18nOffNow && isoPauseRes && isoPauseRes.newlyPaused && !evaluatedHostI18nFresh && !skippedStale && !entry.session.closed) {
+                  await this._forceMainWorldHostI18nOffRescan(entry);
                 }
               } else if (hadHostI18n && !skippedStale && !entry.session.closed) {
                 await entry.session.evaluate(this._getHostI18nCleanupExpression()).catch(() => {});
                 entry.hostI18nMounted = false;
+                entry.hostI18nSkippedByLiveCfg = false;
                 entry.lastHostI18nSig = '';
+              }
+              if (!hostI18nOffNow && entry.isolatedHostI18nPaused && !skippedStale && !entry.session.closed) {
+                await this._syncIsolatedHostI18n(entry, false);
               }
               if (abortIfStale()) return;
               const hadThought = Boolean(entry.thoughtScriptId || entry.thoughtMounted);
@@ -5142,6 +7848,92 @@ export class PrismDaemon {
                 entry.wallpaperMounted = false;
                 entry.wallpaperSkipped = false;
                 entry.lastWallpaperHash = '';
+              }
+              if (abortIfStale()) return;
+              const hadPeriodicPicker = Boolean(entry.periodicPickerScriptId || entry.periodicPickerMounted);
+              const periodicPickerChanged = Boolean(
+                periodicPickerEnabled &&
+                  periodicPickerSnap &&
+                  (entry.lastPeriodicPickerSig !== periodicPickerSig || !entry.periodicPickerScriptId || !entry.periodicPickerMounted)
+              );
+              if (periodicPickerEnabled && periodicPickerSnap) {
+                if (!skippedStale && !entry.session.closed && (!refreshedFast || periodicPickerChanged)) {
+                  const evalRes = await entry.session.evaluate(periodicPickerSnap).catch(() => null);
+                  if (evalRes && evalRes.ok) {
+                    entry.periodicPickerMounted = true;
+                    entry.lastPeriodicPickerSig = periodicPickerSig;
+                  }
+                }
+              } else if ((hadPeriodicPicker || !this._isPeriodicPickerEnabled(currentCfg)) && !skippedStale && !entry.session.closed) {
+                if (hadPeriodicPicker) {
+                  await entry.session.evaluate(this._getPeriodicPickerCleanupExpression()).catch(() => {});
+                }
+                entry.periodicPickerMounted = false;
+                entry.lastPeriodicPickerSig = '';
+              }
+              if (abortIfStale()) return;
+              const hadMascot = Boolean(entry.mascotScriptId || entry.mascotMounted);
+              const mascotChanged = Boolean(
+                mascotEnabled &&
+                  mascotSnap &&
+                  (entry.lastMascotSig !== mascotSig || !entry.mascotScriptId || !entry.mascotMounted)
+              );
+              if (mascotEnabled && mascotSnap) {
+                if (!skippedStale && !entry.session.closed && (!refreshedFast || mascotChanged)) {
+                  const evalRes = await entry.session.evaluate(mascotSnap).catch(() => null);
+                  if (evalRes && evalRes.ok) {
+                    entry.mascotMounted = true;
+                    entry.lastMascotSig = mascotSig;
+                  }
+                }
+              } else if ((hadMascot || !this._isMascotEnabled(currentCfg)) && !skippedStale && !entry.session.closed) {
+                if (hadMascot) {
+                  await entry.session.evaluate(this._getMascotCleanupExpression()).catch(() => {});
+                }
+                entry.mascotMounted = false;
+                entry.lastMascotSig = '';
+              }
+              if (abortIfStale()) return;
+              const hadSuggester = Boolean(entry.suggesterScriptId || entry.suggesterMounted);
+              const suggesterChanged = Boolean(
+                suggesterSnap &&
+                  !entry.suggesterSkipped &&
+                  (entry.lastSuggesterHash !== suggesterHash || !entry.suggesterScriptId || !entry.suggesterMounted)
+              );
+              if (suggesterSnap) {
+                if (!skippedStale && !entry.session.closed && !entry.suggesterSkipped && (!refreshedFast || suggesterChanged)) {
+                  await this._ensureSuggesterBinding(entry);
+                  const evalRes = await entry.session.evaluate(suggesterSnap).catch(() => null);
+                  await this._recordSuggesterEvalOutcome(entry, evalRes, suggesterHash);
+                }
+              } else if (hadSuggester && !skippedStale && !entry.session.closed) {
+                await this._removeSuggesterBinding(entry);
+                await entry.session.evaluate(this._getSuggesterCleanupExpression()).catch(() => {});
+                entry.suggesterMounted = false;
+                entry.suggesterSkipped = false;
+                entry.lastSuggesterHash = '';
+              }
+              if (abortIfStale()) return;
+              const hadHomeStudio = Boolean(entry.homeStudioScriptId || entry.homeStudioMounted);
+              const homeStudioChanged = Boolean(
+                homeStudioEnabled &&
+                  homeStudioSnap &&
+                  (entry.lastHomeStudioSig !== homeStudioSig || !entry.homeStudioScriptId || !entry.homeStudioMounted)
+              );
+              if (homeStudioEnabled && homeStudioSnap) {
+                if (!skippedStale && !entry.session.closed && (!refreshedFast || homeStudioChanged)) {
+                  const evalRes = await entry.session.evaluate(homeStudioSnap).catch(() => null);
+                  if (evalRes && evalRes.ok) {
+                    entry.homeStudioMounted = !evalRes.skippedByLiveCfg;
+                    entry.lastHomeStudioSig = homeStudioSig;
+                  }
+                }
+              } else if ((hadHomeStudio || !this._isHomeStudioEnabled(currentCfg)) && !skippedStale && !entry.session.closed) {
+                if (hadHomeStudio) {
+                  await entry.session.evaluate(this._getHomeStudioCleanupExpression()).catch(() => {});
+                }
+                entry.homeStudioMounted = false;
+                entry.lastHomeStudioSig = '';
               }
 
               // Coalesce persistent NewDocument script replacement if a newer mutation is already queued!
@@ -5289,6 +8081,98 @@ export class PrismDaemon {
                   entry.lastWallpaperScriptHash = wallpaperHash;
                 }
               }
+              if (!periodicPickerEnabled || !periodicPickerSnap) {
+                if (entry.periodicPickerScriptId) {
+                  await entry.session
+                    .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.periodicPickerScriptId })
+                    .catch(() => {});
+                  entry.periodicPickerScriptId = null;
+                }
+                entry.lastPeriodicPickerScriptSig = '';
+              } else if ((entry.lastPeriodicPickerScriptSig !== periodicPickerSig || !entry.periodicPickerScriptId) && !entry.session.closed) {
+                if (entry.periodicPickerScriptId) {
+                  await entry.session
+                    .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.periodicPickerScriptId })
+                    .catch(() => {});
+                  entry.periodicPickerScriptId = null;
+                }
+                const ppAdd = await entry.session
+                  .send('Page.addScriptToEvaluateOnNewDocument', { source: periodicPickerSnap })
+                  .catch(() => null);
+                if (ppAdd && ppAdd.identifier) {
+                  entry.periodicPickerScriptId = ppAdd.identifier;
+                  entry.lastPeriodicPickerScriptSig = periodicPickerSig;
+                }
+              }
+              if (!mascotEnabled || !mascotSnap) {
+                if (entry.mascotScriptId) {
+                  await entry.session
+                    .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.mascotScriptId })
+                    .catch(() => {});
+                  entry.mascotScriptId = null;
+                }
+                entry.lastMascotScriptSig = '';
+              } else if ((entry.lastMascotScriptSig !== mascotSig || !entry.mascotScriptId) && !entry.session.closed) {
+                if (entry.mascotScriptId) {
+                  await entry.session
+                    .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.mascotScriptId })
+                    .catch(() => {});
+                  entry.mascotScriptId = null;
+                }
+                const mAdd = await entry.session
+                  .send('Page.addScriptToEvaluateOnNewDocument', { source: mascotSnap })
+                  .catch(() => null);
+                if (mAdd && mAdd.identifier) {
+                  entry.mascotScriptId = mAdd.identifier;
+                  entry.lastMascotScriptSig = mascotSig;
+                }
+              }
+              if (!suggesterSnap) {
+                if (entry.suggesterScriptId) {
+                  await entry.session
+                    .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.suggesterScriptId })
+                    .catch(() => {});
+                  entry.suggesterScriptId = null;
+                }
+                entry.lastSuggesterScriptHash = '';
+              } else if ((entry.lastSuggesterScriptHash !== suggesterHash || !entry.suggesterScriptId) && !entry.session.closed) {
+                if (entry.suggesterScriptId) {
+                  await entry.session
+                    .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.suggesterScriptId })
+                    .catch(() => {});
+                  entry.suggesterScriptId = null;
+                }
+                const suggesterAdd = await entry.session
+                  .send('Page.addScriptToEvaluateOnNewDocument', { source: suggesterSnap })
+                  .catch(() => null);
+                if (suggesterAdd && suggesterAdd.identifier) {
+                  entry.suggesterScriptId = suggesterAdd.identifier;
+                  entry.lastSuggesterScriptHash = suggesterHash;
+                }
+              }
+              if (!homeStudioEnabled || !homeStudioSnap) {
+                if (entry.homeStudioScriptId) {
+                  await entry.session
+                    .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.homeStudioScriptId })
+                    .catch(() => {});
+                  entry.homeStudioScriptId = null;
+                }
+                entry.lastHomeStudioScriptSig = '';
+              } else if ((entry.lastHomeStudioScriptSig !== homeStudioSig || !entry.homeStudioScriptId) && !entry.session.closed) {
+                if (entry.homeStudioScriptId) {
+                  await entry.session
+                    .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.homeStudioScriptId })
+                    .catch(() => {});
+                  entry.homeStudioScriptId = null;
+                }
+                const hsAdd = await entry.session
+                  .send('Page.addScriptToEvaluateOnNewDocument', { source: homeStudioSnap })
+                  .catch(() => null);
+                if (hsAdd && hsAdd.identifier) {
+                  entry.homeStudioScriptId = hsAdd.identifier;
+                  entry.lastHomeStudioScriptSig = homeStudioSig;
+                }
+              }
             })
           )
         );
@@ -5407,6 +8291,18 @@ export class PrismDaemon {
           this._buildWallpaperExprForConfig(curCfg, chOpts);
           if (chOpts && this.wallpaperExpr) usedChCache = true;
         }
+        if (!this.periodicPickerExpr && this._hasPeriodicPickerFile() && this._isPeriodicPickerEnabled(curCfg) && typeof this.cdp.buildPeriodicPickerExpression === 'function') {
+          this._buildPeriodicPickerExprForConfig(curCfg, chOpts);
+          if (chOpts && this.periodicPickerExpr) usedChCache = true;
+        }
+        if (!this.suggesterExpr && typeof this.cdp.buildSuggesterExpression === 'function') {
+          this._buildSuggesterExprForConfig(curCfg, chOpts);
+          if (chOpts && this.suggesterExpr) usedChCache = true;
+        }
+        if (!this.homeStudioExpr && this._hasHomeStudioFile() && this._isHomeStudioEnabled(curCfg) && typeof this.cdp.buildHomeStudioChannelExpression === 'function') {
+          this._buildHomeStudioExprForConfig(curCfg, chOpts);
+          if (chOpts && this.homeStudioExpr) usedChCache = true;
+        }
         if (usedChCache && this.running) {
           this._scheduleBundleCacheFlush();
         }
@@ -5470,11 +8366,19 @@ export class PrismDaemon {
             .catch(() => {});
           entry.wallpaperScriptId = null;
         }
+        if (entry.suggesterScriptId) {
+          await entry.session
+            .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.suggesterScriptId })
+            .catch(() => {});
+          entry.suggesterScriptId = null;
+        }
         await this._removeSidebarBinding(entry);
         await this._removeInlineDiffBinding(entry);
         await this._removeWallpaperBinding(entry);
+        await this._removeSuggesterBinding(entry);
         entry.sidebarMounted = false;
         entry.hostI18nMounted = false;
+        entry.hostI18nSkippedByLiveCfg = false;
         entry.lastHostI18nSig = '';
         entry.lastHostI18nScriptSig = '';
         entry.thoughtMounted = false;
@@ -5488,6 +8392,12 @@ export class PrismDaemon {
         entry.wallpaperSkipped = true;
         entry.lastWallpaperHash = '';
         entry.lastWallpaperScriptHash = '';
+        entry.suggesterMounted = false;
+        entry.suggesterSkipped = true;
+        entry.lastSuggesterHash = '';
+        entry.lastSuggesterScriptHash = '';
+        await this._resetPeriodicPickerEntryState(entry);
+        await this._resetHomeStudioEntryState(entry);
         return mainRes;
       }
 
@@ -5556,6 +8466,10 @@ export class PrismDaemon {
         entry.hostI18nScriptId = null;
       }
       const hostI18nEnabledNow = this._isHostI18nEnabled(cfgNow);
+      const hostI18nOffAtInject = cfgNow?.hostLocalization === 'off';
+      if (hostI18nOffAtInject && !entry.session.closed) {
+        await this._syncIsolatedHostI18n(entry, true);
+      }
       if (hostI18nEnabledNow) {
         if (!this.hostI18nExpr && typeof this.cdp.buildHostI18nExpression === 'function') {
           const chOpts = this._getChannelCacheOpts(true);
@@ -5573,8 +8487,13 @@ export class PrismDaemon {
           }
           const evalRes = await entry.session.evaluate(this.hostI18nExpr).catch(() => null);
           const hiSig = this._getHostI18nCfgSig(cfgNow);
-          if (evalRes && evalRes.ok) {
+          if (evalRes?.skippedByLiveCfg) {
+            entry.hostI18nMounted = false;
+            entry.hostI18nSkippedByLiveCfg = true;
+            entry.lastHostI18nSig = hiSig;
+          } else if (evalRes && evalRes.ok) {
             entry.hostI18nMounted = true;
+            entry.hostI18nSkippedByLiveCfg = false;
             entry.lastHostI18nSig = hiSig;
           }
           if (hiAdd && hiAdd.identifier) {
@@ -5586,8 +8505,12 @@ export class PrismDaemon {
           await entry.session.evaluate(this._getHostI18nCleanupExpression()).catch(() => null);
         }
         entry.hostI18nMounted = false;
+        entry.hostI18nSkippedByLiveCfg = false;
         entry.lastHostI18nSig = '';
         entry.lastHostI18nScriptSig = '';
+      }
+      if (!hostI18nOffAtInject && entry.isolatedHostI18nPaused && !entry.session.closed) {
+        await this._syncIsolatedHostI18n(entry, false);
       }
       const hadThoughtBefore = Boolean(entry.thoughtScriptId || entry.thoughtMounted);
       if (entry.thoughtScriptId) {
@@ -5706,6 +8629,61 @@ export class PrismDaemon {
         entry.lastWallpaperHash = '';
         entry.lastWallpaperScriptHash = '';
       }
+      await this._syncPeriodicPickerOnEntry(entry, getCurrentCfg(), {
+        forceReplaceScript: true,
+        forceEval: true,
+        evalTimeoutMs: 0,
+        cleanupTimeoutMs: 0,
+      });
+      await this._syncMascotOnEntry(entry, getCurrentCfg(), {
+        forceReplaceScript: true,
+        forceEval: true,
+        evalTimeoutMs: 0,
+        cleanupTimeoutMs: 0,
+      });
+      await this._syncHomeStudioOnEntry(entry, getCurrentCfg(), {
+        forceReplaceScript: true,
+        forceEval: true,
+        evalTimeoutMs: 0,
+        cleanupTimeoutMs: 0,
+      });
+      const hadSuggesterBefore = Boolean(entry.suggesterScriptId || entry.suggesterMounted);
+      if (entry.suggesterScriptId) {
+        await entry.session
+          .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.suggesterScriptId })
+          .catch(() => {});
+        entry.suggesterScriptId = null;
+      }
+      const suggesterCfgNow = getCurrentCfg();
+      if (!this.suggesterExpr && typeof this.cdp.buildSuggesterExpression === 'function') {
+        this._buildSuggesterExprForConfig(suggesterCfgNow);
+      }
+      if (this.suggesterExpr) {
+        await this._ensureSuggesterBinding(entry);
+        const suggesterAdd = await entry.session
+          .send('Page.addScriptToEvaluateOnNewDocument', { source: this.suggesterExpr })
+          .catch(() => null);
+        if (suggesterAdd && suggesterAdd.identifier) {
+          entry.suggesterScriptId = suggesterAdd.identifier;
+        }
+        const evalRes = await entry.session.evaluate(this.suggesterExpr).catch(() => null);
+        const suggesterHash = this._getSuggesterExprHash(this.suggesterExpr);
+        await this._recordSuggesterEvalOutcome(entry, evalRes, suggesterHash);
+        if (suggesterAdd && suggesterAdd.identifier) {
+          entry.lastSuggesterScriptHash = suggesterHash;
+        } else {
+          entry.lastSuggesterScriptHash = '';
+        }
+      } else {
+        if (hadSuggesterBefore) {
+          await this._removeSuggesterBinding(entry);
+          await entry.session.evaluate(this._getSuggesterCleanupExpression()).catch(() => null);
+        }
+        entry.suggesterMounted = false;
+        entry.suggesterSkipped = false;
+        entry.lastSuggesterHash = '';
+        entry.lastSuggesterScriptHash = '';
+      }
       entry.lastVerifyAt = Date.now();
       entry.healthyStreak = 1;
       entry.verifyDirty = false;
@@ -5728,6 +8706,14 @@ export class PrismDaemon {
       try {
         const parsed = JSON.parse(payload);
         if (!parsed || typeof parsed !== 'object') return;
+        if (parsed.action === 'request-settings-panel') {
+          await this._deliverSettingsChannelToEntry(entry, executionContextId);
+          return;
+        }
+        if (parsed.action === 'request-home-studio-panel') {
+          await this._deliverHomeStudioChannelToEntry(entry, executionContextId);
+          return;
+        }
         const updated =
           parsed.action === 'patch-batch' && parsed.entries && typeof parsed.entries === 'object'
             ? this.updateConfigBatch(parsed.entries)
@@ -5765,6 +8751,9 @@ export class PrismDaemon {
             ? { ...parsed.payload }
             : {};
       delete inputPayload._testOverrides;
+      delete inputPayload.forceBusy;
+      delete inputPayload.convDir;
+      delete inputPayload.archiveDir;
       if (inputPayload.confirm === undefined && parsed?.confirm !== undefined) inputPayload.confirm = parsed.confirm;
       if (inputPayload.purgeData === undefined && parsed?.purgeData !== undefined) inputPayload.purgeData = parsed.purgeData;
       if (inputPayload.force === undefined && parsed?.force !== undefined) inputPayload.force = parsed.force;
@@ -5773,6 +8762,27 @@ export class PrismDaemon {
       if (inputPayload.updateChannel === undefined && parsed?.updateChannel !== undefined) inputPayload.updateChannel = parsed.updateChannel;
       if (inputPayload.version === undefined && parsed?.version !== undefined) inputPayload.version = parsed.version;
       if (inputPayload.version === undefined && typeof parsed?.input === 'string') inputPayload.version = parsed.input;
+      if (inputPayload.value === undefined && parsed?.value !== undefined) inputPayload.value = parsed.value;
+      if (inputPayload.batchName === undefined && parsed?.batchName !== undefined) inputPayload.batchName = parsed.batchName;
+      if (inputPayload.batch === undefined && parsed?.batch !== undefined) inputPayload.batch = parsed.batch;
+      if (inputPayload.lang === undefined && parsed?.lang !== undefined) inputPayload.lang = parsed.lang;
+      if (inputPayload.mode === undefined && parsed?.mode !== undefined) inputPayload.mode = parsed.mode;
+      if (inputPayload.oldMain === undefined && parsed?.oldMain !== undefined) inputPayload.oldMain = parsed.oldMain;
+      if (inputPayload.hours === undefined && parsed?.hours !== undefined) inputPayload.hours = parsed.hours;
+      if (inputPayload.listOnly === undefined && parsed?.listOnly !== undefined) inputPayload.listOnly = parsed.listOnly;
+      if (inputPayload.autoArchiveOnExit === undefined && parsed?.autoArchiveOnExit !== undefined) {
+        inputPayload.autoArchiveOnExit = parsed.autoArchiveOnExit;
+      }
+      if (inputPayload.addonId === undefined && parsed?.addonId !== undefined) inputPayload.addonId = parsed.addonId;
+      if (inputPayload.manifestUrl === undefined && parsed?.manifestUrl !== undefined) {
+        inputPayload.manifestUrl = parsed.manifestUrl;
+      }
+      if (
+        inputPayload.expectedManifestSha256 === undefined &&
+        parsed?.expectedManifestSha256 !== undefined
+      ) {
+        inputPayload.expectedManifestSha256 = parsed.expectedManifestSha256;
+      }
 
       const result = await this.executeRepoAction({ ...inputPayload, action });
       if (reqId !== null) {
@@ -5956,6 +8966,28 @@ export class PrismDaemon {
         const evalParams = { expression: resolveExpr, returnByValue: true };
         if (executionContextId) evalParams.contextId = executionContextId;
         await entry.session.send('Runtime.evaluate', evalParams).catch(() => {});
+      }
+      // P0 双向凭据同步：思考转译保存渠道/密钥后，反向通知当前窗口及其他受信任主窗口的 Suggester UI 重载 profiles，杜绝陈旧状态覆写新密钥
+      if (action === 'save-config' && result && result.ok) {
+        const selfNotifyExpr = `(() => { try { window.__agPrismSuggesterSettingsUi?.reloadProfiles?.(); } catch {} try { window.__agPrismSuggester?.sync?.(); } catch {} })()`;
+        const peerNotifyExpr = `(() => { try { window.__agPrismSuggesterSettingsUi?.reloadProfiles?.(); } catch {} try { window.__agPrismSuggester?.sync?.(); } catch {} try { const sec = document.getElementById?.('ag-cs-settings-sec') || document.getElementById?.('ag-prism-settings-sec'); sec?.__prismThoughtUiHandle?.reloadConfig?.(); } catch {} })()`;
+        const notifyTasks = [];
+        if (!entry.session.closed) {
+          const selfParams = { expression: selfNotifyExpr, returnByValue: true, awaitPromise: false };
+          if (typeof executionContextId === 'number') selfParams.contextId = executionContextId;
+          notifyTasks.push(entry.session.send('Runtime.evaluate', selfParams, 2000).catch(() => {}));
+        }
+        for (const other of this.sessions.values()) {
+          if (!other || other === entry) continue;
+          const target = this._resolveTrustedBroadcastContextId(other);
+          if (!target.ok) continue;
+          const peerParams = { expression: peerNotifyExpr, returnByValue: true, awaitPromise: false };
+          if (typeof target.contextId === 'number') peerParams.contextId = target.contextId;
+          notifyTasks.push(other.session.send('Runtime.evaluate', peerParams, 2000).catch(() => {}));
+        }
+        if (notifyTasks.length > 0) {
+          await Promise.allSettled(notifyTasks);
+        }
       }
       return;
     }
@@ -6320,6 +9352,146 @@ export class PrismDaemon {
       }
       return result;
     }
+
+    const activeSuggesterBinding = this.cdp?.SUGGESTER_BINDING || SUGGESTER_BINDING;
+    if (name === SUGGESTER_BINDING || name === activeSuggesterBinding) {
+      const context = typeof executionContextId === 'number' ? entry.contextFrames?.get(executionContextId) : undefined;
+      const expectedDocGen = typeof entry.sidebarDocument === 'number' ? entry.sidebarDocument : null;
+      const hasTrackedFrames = Boolean(
+        entry.hasFrameTree || entry.mainFrameId || (entry.contextFrames instanceof Map && entry.contextFrames.size > 0)
+      );
+      const isCurrentContext = () => {
+        if (this._suggesterStopped || !entry || entry.session?.closed) return false;
+        if (entry.sidebarHostVerified !== true) return false;
+        if (!this._isTrustedMainFrameBindingCall(entry, executionContextId)) return false;
+        if (hasTrackedFrames) {
+          if (typeof executionContextId !== 'number' || !context) return false;
+          if (context.isDefault !== true || (context.type && context.type !== 'default')) return false;
+          if (!entry.mainFrameId || context.frameId !== entry.mainFrameId) return false;
+          if (!(entry.contextFrames instanceof Map) || entry.contextFrames.get(executionContextId) !== context) {
+            return false;
+          }
+          if (typeof entry.sidebarDocument === 'number') {
+            if (typeof entry.sidebarVerifiedDocument === 'number' && entry.sidebarVerifiedDocument !== entry.sidebarDocument) {
+              return false;
+            }
+            if (expectedDocGen !== null && entry.sidebarDocument !== expectedDocGen) {
+              return false;
+            }
+            if (typeof context.docGen === 'number' && context.docGen !== entry.sidebarDocument) {
+              return false;
+            }
+          }
+          if (typeof entry.sidebarHostContextId === 'number' && entry.sidebarHostContextId !== executionContextId) {
+            return false;
+          }
+        } else {
+          if (!isAutomatedTestRuntime()) return false;
+        }
+        return true;
+      };
+      if (!isCurrentContext()) return;
+      if (typeof payload !== 'string') return;
+      if (payload.length > SUGGESTER_MAX_PAYLOAD_BYTES) return;
+      if (Buffer.byteLength(payload, 'utf8') > SUGGESTER_MAX_PAYLOAD_BYTES) return;
+      let parsed;
+      try {
+        parsed = JSON.parse(payload);
+      } catch {
+        return;
+      }
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return;
+      const reqId = Number.isSafeInteger(parsed.id) && parsed.id >= 0 ? parsed.id : null;
+      if (reqId === null) return;
+      const action = typeof parsed.action === 'string' ? parsed.action.trim() : '';
+      if (!SUGGESTER_ALLOWED_ACTIONS.has(action)) {
+        const errRes = { ok: false, error: `Unknown suggester action: ${action || 'empty'}` };
+        if (isCurrentContext()) {
+          const safeId = Number(reqId) | 0;
+          const resolveExpr = `(() => { const r = ${serializeJsonForEval(errRes)}; if (typeof window.__agPrismSuggesterResolve === 'function') window.__agPrismSuggesterResolve(${safeId}, r); else if (window.__agPrismSuggesterBridge && typeof window.__agPrismSuggesterBridge.resolve === 'function') window.__agPrismSuggesterBridge.resolve(${safeId}, r); })()`;
+          const evalParams = { expression: resolveExpr, returnByValue: true };
+          if (typeof executionContextId === 'number') evalParams.contextId = executionContextId;
+          await entry.session.send('Runtime.evaluate', evalParams).catch(() => {});
+        }
+        return errRes;
+      }
+      const actionPayload =
+        parsed.payload && typeof parsed.payload === 'object' && !Array.isArray(parsed.payload)
+          ? parsed.payload
+          : parsed.input && typeof parsed.input === 'object' && !Array.isArray(parsed.input)
+          ? parsed.input
+          : {};
+
+      let result;
+      let svc = null;
+      try {
+        svc = await this.ensureSuggesterService();
+        if (!svc || typeof svc.handleAction !== 'function') {
+          result = { ok: false, error: 'suggester_service_unavailable' };
+        } else {
+          result = await svc.handleAction(action, actionPayload);
+        }
+      } catch (err) {
+        result = { ok: false, error: sanitizeSecretText(err?.message || err) };
+      }
+
+      if (isCurrentContext()) {
+        const safeId = Number(reqId) | 0;
+        const safeJson = serializeJsonForEval(result);
+        const payloadExpr = safeJson.length > 4096 ? `JSON.parse(${serializeJsonForEval(safeJson)})` : safeJson;
+        const resolveExpr = `(() => { const r = ${payloadExpr}; if (typeof window.__agPrismSuggesterResolve === 'function') window.__agPrismSuggesterResolve(${safeId}, r); else if (window.__agPrismSuggesterBridge && typeof window.__agPrismSuggesterBridge.resolve === 'function') window.__agPrismSuggesterBridge.resolve(${safeId}, r); })()`;
+        const evalParams = { expression: resolveExpr, returnByValue: true };
+        if (typeof executionContextId === 'number') evalParams.contextId = executionContextId;
+        await entry.session.send('Runtime.evaluate', evalParams).catch(() => {});
+      }
+
+      // P0 跨卡片/跨窗口凭据同步：save-config 成功或 test-connection（内含 saveWorkbenchConfig）完成后，同步全部受信任主窗口并通知思考转译 UI
+      const shouldBroadcastSync =
+        (action === 'save-config' && Boolean(result && result.ok)) ||
+        (action === 'test-connection' && Boolean(Array.isArray(actionPayload?.profiles) || (result && result.ok)));
+      if (shouldBroadcastSync) {
+        let syncConfig = result?.config && typeof result.config === 'object' ? result.config : null;
+        let syncBackend = result?.backend !== undefined ? result.backend : null;
+        if (!syncConfig && svc) {
+          try {
+            if (typeof svc.getPublicState === 'function') {
+              const pub = await svc.getPublicState();
+              if (pub && typeof pub === 'object') {
+                syncConfig = pub.config && typeof pub.config === 'object' ? pub.config : null;
+                syncBackend = pub.backend !== undefined ? pub.backend : null;
+              }
+            } else if (typeof svc.getConfigSync === 'function') {
+              syncConfig = svc.getConfigSync();
+            }
+          } catch {}
+        }
+        const applyStmt = syncConfig
+          ? `try { window.__agPrismSuggester?.applyConfig?.(${serializeJsonForEval(syncConfig)}, ${serializeJsonForEval(syncBackend)}); } catch {}`
+          : '';
+        const thoughtReloadStmt =
+          "try { const sec = document.getElementById?.('ag-cs-settings-sec') || document.getElementById?.('ag-prism-settings-sec'); sec?.__prismThoughtUiHandle?.reloadConfig?.(); } catch {}";
+        const selfSyncExpr = `(() => { ${thoughtReloadStmt} ${applyStmt} })()`;
+        const peerSyncExpr = `(() => { ${applyStmt} try { window.__agPrismSuggesterSettingsUi?.reloadProfiles?.(); } catch {} ${thoughtReloadStmt} })()`;
+        const broadcastTasks = [];
+        if (isCurrentContext()) {
+          const selfParams = { expression: selfSyncExpr, returnByValue: true, awaitPromise: false };
+          if (typeof executionContextId === 'number') selfParams.contextId = executionContextId;
+          broadcastTasks.push(entry.session.send('Runtime.evaluate', selfParams, 2000).catch(() => {}));
+        }
+        for (const other of this.sessions.values()) {
+          if (!other || other === entry || other.suggesterSkipped) continue;
+          const target = this._resolveTrustedBroadcastContextId(other);
+          if (!target.ok) continue;
+          const peerParams = { expression: peerSyncExpr, returnByValue: true, awaitPromise: false };
+          if (typeof target.contextId === 'number') peerParams.contextId = target.contextId;
+          broadcastTasks.push(other.session.send('Runtime.evaluate', peerParams, 2000).catch(() => {}));
+        }
+        if (broadcastTasks.length > 0) {
+          await Promise.allSettled(broadcastTasks);
+        }
+      }
+      return result;
+    }
   }
 
   async attachTarget(target) {
@@ -6343,8 +9515,12 @@ export class PrismDaemon {
       sidebarMounted: false,
       hostI18nScriptId: null,
       hostI18nMounted: false,
+      hostI18nSkippedByLiveCfg: false,
       lastHostI18nSig: '',
       lastHostI18nScriptSig: '',
+      isolatedHostI18nPaused: false,
+      isolatedHostI18nNoExtCtxs: new Set(),
+      _isoPauseTimers: new Set(),
       thoughtScriptId: null,
       thoughtMounted: false,
       lastThoughtSig: '',
@@ -6361,6 +9537,20 @@ export class PrismDaemon {
       wallpaperSkipped: false,
       lastWallpaperHash: '',
       lastWallpaperScriptHash: '',
+      suggesterScriptId: null,
+      suggesterBindingAdded: false,
+      suggesterMounted: false,
+      suggesterSkipped: false,
+      lastSuggesterHash: '',
+      lastSuggesterScriptHash: '',
+      periodicPickerScriptId: null,
+      periodicPickerMounted: false,
+      lastPeriodicPickerSig: '',
+      lastPeriodicPickerScriptSig: '',
+      homeStudioScriptId: null,
+      homeStudioMounted: false,
+      lastHomeStudioSig: '',
+      lastHomeStudioScriptSig: '',
       sidebarHostVerified: false,
       sidebarVerifiedDocument: -1,
       sidebarHostContextId: null,
@@ -6373,6 +9563,7 @@ export class PrismDaemon {
       mainFrameId: null,
       hasFrameTree: false,
       contextFrames: new Map(),
+      swarmSubFrames: new Map(),
       pendingAckEpoch: 0,
       _healTimer: null,
       _opChain: Promise.resolve(),
@@ -6427,12 +9618,68 @@ export class PrismDaemon {
           type,
           docGen: entry.sidebarDocument,
         });
+        const isMainIsolated = Boolean(entry.mainFrameId && frameId === entry.mainFrameId && !isDefault && type === 'isolated');
+        if (isMainIsolated) {
+          const cfgOnCtx = typeof this.cdp?.readConfig === 'function' ? this.cdp.readConfig() : null;
+          if (cfgOnCtx?.hostLocalization === 'off' && this.running && !entry.session.closed) {
+            const targetCtxId = ctx.id;
+            const pauseIsoCtx = () => {
+              if (!this.running || entry.session.closed || !entry.contextFrames.has(targetCtxId)) return;
+              const liveCfgNow = typeof this.cdp?.readConfig === 'function' ? this.cdp.readConfig() : null;
+              if (liveCfgNow?.hostLocalization !== 'off') return;
+              void this._syncIsolatedHostI18n(entry, true, { contextIds: [targetCtxId] })
+                .then((r) => {
+                  if (r && r.newlyPaused && !entry.session.closed) {
+                    return this._forceMainWorldHostI18nOffRescan(entry);
+                  }
+                })
+                .catch(() => {});
+            };
+            pauseIsoCtx();
+            const retryTid = setTimeout(() => {
+              entry._isoPauseTimers?.delete(retryTid);
+              pauseIsoCtx();
+            }, 350);
+            if (typeof retryTid.unref === 'function') retryTid.unref();
+            entry._isoPauseTimers?.add(retryTid);
+          }
+        }
+        // Path B：同进程子 Frame Swarm 兜底（严格仅针对非主 Frame，绝不放宽 isTrustedMainFrameContext）
+        if (!isMainDefault && isDefault && type === 'default' && frameId && frameId !== entry.mainFrameId) {
+          const ctxOriginOrUrl = String(ctx.origin || aux.url || '').trim();
+          const existingSub = entry.swarmSubFrames?.get(frameId);
+          const isSwarmSub = Boolean(existingSub) || (ctxOriginOrUrl && typeof this.cdp?.isSwarmSidecarUrl === 'function' && this.cdp.isSwarmSidecarUrl(ctxOriginOrUrl));
+          if (isSwarmSub && !this.swarmSessions.has(frameId)) {
+            if (!existingSub) {
+              entry.swarmSubFrames.set(frameId, {
+                url: this._redactSensitiveText(ctxOriginOrUrl),
+                contextId: ctx.id,
+                mounted: false,
+                codeHash: '',
+              });
+            } else {
+              existingSub.contextId = ctx.id;
+            }
+            if (this.running && !entry.session.closed) {
+              void this._injectSwarmIntoSubFrame(entry, frameId, ctx.id).catch(() => {});
+            }
+          }
+        }
       });
       session.on('Runtime.executionContextDestroyed', (params) => {
         if (typeof params?.executionContextId === 'number') {
           const destroyedId = params.executionContextId;
           const destroyedMeta = entry.contextFrames.get(destroyedId);
           entry.contextFrames.delete(destroyedId);
+          entry.isolatedHostI18nNoExtCtxs?.delete(destroyedId);
+          if (entry.swarmSubFrames instanceof Map) {
+            for (const sub of entry.swarmSubFrames.values()) {
+              if (sub && sub.contextId === destroyedId) {
+                sub.contextId = null;
+                sub.mounted = false;
+              }
+            }
+          }
           const wasMainDefault = Boolean(
             destroyedMeta &&
             destroyedMeta.isDefault === true &&
@@ -6449,6 +9696,9 @@ export class PrismDaemon {
       });
       session.on('Runtime.executionContextsCleared', () => {
         entry.contextFrames.clear();
+        entry.swarmSubFrames?.clear();
+        entry.isolatedHostI18nNoExtCtxs?.clear();
+        entry.isolatedHostI18nPaused = false;
         revokeSidebarHost();
         entry.pendingAckEpoch = 0;
       });
@@ -6463,6 +9713,28 @@ export class PrismDaemon {
           entry.healthyStreak = 0;
           if (typeof frame.url === 'string' && frame.url) {
             entry.url = frame.url;
+          }
+        } else if (frame && frame.parentId && typeof frame.id === 'string' && frame.id) {
+          const fid = frame.id;
+          if (this._isSwarmTargetInfo({ type: 'iframe', url: frame.url }) && !this.swarmSessions.has(fid)) {
+            let subCtxId = null;
+            for (const [cid, meta] of entry.contextFrames.entries()) {
+              if (meta && meta.frameId === fid && meta.isDefault === true && meta.type === 'default') {
+                subCtxId = cid;
+                break;
+              }
+            }
+            entry.swarmSubFrames.set(fid, {
+              url: this._redactSensitiveText(frame.url || ''),
+              contextId: subCtxId,
+              mounted: false,
+              codeHash: '',
+            });
+            if (typeof subCtxId === 'number' && this.running && !entry.session.closed) {
+              void this._injectSwarmIntoSubFrame(entry, fid, subCtxId).catch(() => {});
+            }
+          } else if (entry.swarmSubFrames.has(fid)) {
+            entry.swarmSubFrames.delete(fid);
           }
         }
       });
@@ -6515,10 +9787,10 @@ export class PrismDaemon {
         this._markTargetIgnored(target, entry.url || target.url);
         session.close();
         this.sessions.delete(wsUrl);
-        this.log(`[↷] Ignored non-host target: ${entry.title}`);
+        this.log(`[↷] Ignored non-host target: ${this._redactSensitiveText(entry.title)}`);
         return null;
       }
-      this.log(`[✓] Attached & injected Obsidian Prism v${this.cdp.PLUGIN_VERSION}: ${entry.title} (${res?.status || 'ok'})`);
+      this.log(`[✓] Attached & injected Obsidian Prism v${this.cdp.PLUGIN_VERSION}: ${this._redactSensitiveText(entry.title)} (${res?.status || 'ok'})`);
       return entry;
     } catch (err) {
       try {
@@ -6555,6 +9827,15 @@ export class PrismDaemon {
         entry.wallpaperMounted = false;
         entry.lastWallpaperHash = '';
         entry.lastWallpaperScriptHash = '';
+        if (entry.suggesterScriptId) {
+          await session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.suggesterScriptId });
+          entry.suggesterScriptId = null;
+        }
+        entry.suggesterMounted = false;
+        entry.lastSuggesterHash = '';
+        entry.lastSuggesterScriptHash = '';
+        await this._resetPeriodicPickerEntryState(entry, session);
+        await this._resetMascotEntryState(entry, session);
       } catch {}
       session.close();
       this.sessions.delete(wsUrl);
@@ -6584,6 +9865,40 @@ export class PrismDaemon {
     const wallpaperNeedsSync = wallpaperAvailable
       ? !entry.wallpaperSkipped && (!entry.wallpaperScriptId || !entry.wallpaperMounted)
       : Boolean(entry.wallpaperScriptId || entry.wallpaperMounted);
+    const suggesterAvailable = Boolean(this.suggesterExpr || this._hasSuggesterClientFile());
+    const suggesterNeedsSync = suggesterAvailable
+      ? !entry.suggesterSkipped && (!entry.suggesterScriptId || !entry.suggesterMounted)
+      : Boolean(entry.suggesterScriptId || entry.suggesterMounted);
+    const periodicPickerAvailable = this._isPeriodicPickerEnabled(cfg) && this._hasPeriodicPickerFile();
+    const expectedPeriodicEarlySig =
+      periodicPickerAvailable && this.periodicPickerExpr
+        ? `${this._getPeriodicPickerCfgSig(cfg)}:${this._getPeriodicPickerExprHash(this.periodicPickerExpr)}`
+        : '';
+    const periodicPickerNeedsSync = periodicPickerAvailable
+      ? !entry.periodicPickerScriptId ||
+        !entry.periodicPickerMounted ||
+        Boolean(expectedPeriodicEarlySig && (entry.lastPeriodicPickerSig !== expectedPeriodicEarlySig || entry.lastPeriodicPickerScriptSig !== expectedPeriodicEarlySig))
+      : Boolean(entry.periodicPickerScriptId || entry.periodicPickerMounted);
+    const mascotAvailable = this._isMascotEnabled(cfg) && this._hasMascotFile();
+    const expectedMascotEarlySig =
+      mascotAvailable && this.mascotExpr
+        ? `${this._getMascotCfgSig(cfg)}:${this._getMascotExprHash(this.mascotExpr)}`
+        : '';
+    const mascotNeedsSync = mascotAvailable
+      ? !entry.mascotScriptId ||
+        !entry.mascotMounted ||
+        Boolean(expectedMascotEarlySig && (entry.lastMascotSig !== expectedMascotEarlySig || entry.lastMascotScriptSig !== expectedMascotEarlySig))
+      : Boolean(entry.mascotScriptId || entry.mascotMounted);
+    const homeStudioAvailable = this._isHomeStudioEnabled(cfg) && this._hasHomeStudioFile();
+    const expectedHomeStudioEarlySig =
+      homeStudioAvailable && this.homeStudioExpr
+        ? `${this._getHomeStudioCfgSig(cfg)}:${this._getHomeStudioExprHash(this.homeStudioExpr)}`
+        : '';
+    const homeStudioNeedsSync = homeStudioAvailable
+      ? !entry.homeStudioScriptId ||
+        !entry.homeStudioMounted ||
+        Boolean(expectedHomeStudioEarlySig && (entry.lastHomeStudioSig !== expectedHomeStudioEarlySig || entry.lastHomeStudioScriptSig !== expectedHomeStudioEarlySig))
+      : Boolean(entry.homeStudioScriptId || entry.homeStudioMounted);
     const now = Date.now();
     const hashMatches = !this.codeHash || entry.lastVerifiedCodeHash === this.codeHash;
     if (
@@ -6592,6 +9907,10 @@ export class PrismDaemon {
       !thoughtNeedsSync &&
       !inlineDiffNeedsSync &&
       !wallpaperNeedsSync &&
+      !suggesterNeedsSync &&
+      !periodicPickerNeedsSync &&
+      !mascotNeedsSync &&
+      !homeStudioNeedsSync &&
       !entry.verifyDirty &&
       hashMatches &&
       entry.lastVerifyAt > 0 &&
@@ -6665,11 +9984,42 @@ export class PrismDaemon {
           hasSidebar: Boolean(window.__agPrismSidebar),
           sidebarMode,
           hasHostI18n: Boolean(window.__agPrismHostI18n),
+          hostI18nMode: String(window.__agPrismHostI18n?.getStatus?.()?.mode || ''),
+          hostI18nCodeHash: String(window.__agPrismHostI18n?.__prismCodeHash || ''),
+          hasMascot: Boolean(window.__agDualMascotRig || globalThis.__agDualMascotRig),
+          mascotCodeHash: String((window.__agDualMascotRig || globalThis.__agDualMascotRig)?.__prismCodeHash || ''),
+          hasHomeStudio: Boolean(window.__agPrismHomeStudioPanel || globalThis.__agPrismHomeStudioPanel || window.__agHomeStudioPanel || globalThis.__agHomeStudioPanel),
+          homeStudioCodeHash: String((window.__agPrismHomeStudioPanel || globalThis.__agPrismHomeStudioPanel || window.__agHomeStudioPanel || globalThis.__agHomeStudioPanel)?.__prismCodeHash || ''),
+          needsHomeStudioChannel: Boolean(
+            st?.cfg?.homeLayout === 'studio' &&
+              document.querySelector('.agy-home') &&
+              !(window.__agPrismHomeStudioPanel || globalThis.__agPrismHomeStudioPanel || window.__agHomeStudioPanel || globalThis.__agHomeStudioPanel)
+          ),
+          hasSettingsPanel: Boolean(
+            (window.__agPrismSettingsPanel || globalThis.__agPrismSettingsPanel) &&
+              window.__agCsLocales &&
+              window.__agCsLocales.__isFullLocales
+          ),
+          hasSettingsDialog: Boolean(document.querySelector('[role="dialog"]') || document.getElementById('ag-cs-settings-sec')),
+          settingsCodeHash: String((window.__agPrismSettingsPanel || globalThis.__agPrismSettingsPanel)?.__prismCodeHash || ''),
+          needsSettingsChannel: Boolean(
+            (document.querySelector('[role="dialog"]') || document.getElementById('ag-cs-settings-sec')) &&
+              (!window.__agPrismSettingsPanel || !(window.__agCsLocales && window.__agCsLocales.__isFullLocales))
+          ),
           hasThought: Boolean(window.__agPrismThought),
           hasThoughtSettingsUi: Boolean(window.__agPrismThoughtSettingsUi),
           hasInlineDiff: Boolean(window.__agPrismInlineDiff && !window.__agPrismInlineDiff.getDebugState?.()?.destroyed),
           hasWallpaper: Boolean(window.__agPrismWallpaper && !window.__agPrismWallpaper.getDebugState?.()?.destroyed),
           hasWallpaperUi: Boolean(typeof window.__prismMountWallpaperUi === 'function'),
+          wallpaperCodeHash: String((window.__agPrismWallpaper || globalThis.__agPrismWallpaper)?.__prismCodeHash || ''),
+          hasSuggester: Boolean(window.__agPrismSuggester && !window.__agPrismSuggester.getDebugState?.()?.destroyed),
+          hasSuggesterUi: Boolean(typeof window.__prismMountSuggesterUi === 'function'),
+          hasPeriodicPicker: Boolean(
+            window.__agPrismPeriodicPicker &&
+            window.__agPrismPeriodicPicker.getStatus?.()?.status !== 'destroyed' &&
+            window.__agPrismPeriodicPicker.getStatus?.()?.status !== 'off'
+          ),
+          periodicPickerCodeHash: String(window.__agPrismPeriodicPicker?.__prismCodeHash || ''),
           codeHash: (api && api.codeHash) || '',
           hasLegacyCss: Boolean(document.getElementById('ag-claude-style-css')),
           needsDashboardSync: Boolean(api && telMode !== 'off' && !isHome && hasModelBtn && !hasPulseBar),
@@ -6701,9 +10051,25 @@ export class PrismDaemon {
       const needsSidebarCleanup =
         !sidebarEnabled && Boolean(probe.hasSidebar || entry.sidebarScriptId || entry.sidebarMounted || entry.sidebarBindingAdded);
       const hostI18nEnabled = this._isHostI18nEnabled(cfg);
-      const needsHostI18nHeal = hostI18nEnabled && (!probe.hasHostI18n || !entry.hostI18nScriptId);
+      const expectedHostI18nMode = cfg?.hostLocalization === 'on' ? 'on' : cfg?.hostLocalization === 'off' ? 'off' : 'auto';
+      const hostI18nSig = hostI18nEnabled ? this._getHostI18nCfgSig(cfg) : '';
+      const hostI18nSkippedSameSig = Boolean(entry.hostI18nSkippedByLiveCfg && entry.lastHostI18nSig === hostI18nSig);
+      const uncheckedIsoCtxs =
+        expectedHostI18nMode === 'off' && !entry.isolatedHostI18nPaused
+          ? this._getMainFrameIsolatedContextIds(entry).filter((cid) => !entry.isolatedHostI18nNoExtCtxs?.has(cid))
+          : [];
+      const needsIsoHostI18nSync =
+        uncheckedIsoCtxs.length > 0 || (expectedHostI18nMode !== 'off' && Boolean(entry.isolatedHostI18nPaused));
+      const expectedHostI18nHash = hostI18nEnabled && this.hostI18nExpr ? (/const targetHash = "([^"]+)"/.exec(this.hostI18nExpr)?.[1] || '') : '';
+      const hostI18nHashMismatch = Boolean(expectedHostI18nHash && probe.hostI18nCodeHash && probe.hostI18nCodeHash !== expectedHostI18nHash);
+      const needsHostI18nHeal =
+        (hostI18nEnabled &&
+          !hostI18nSkippedSameSig &&
+          (!probe.hasHostI18n || !entry.hostI18nScriptId || hostI18nHashMismatch || (probe.hostI18nMode && probe.hostI18nMode !== expectedHostI18nMode))) ||
+        (expectedHostI18nMode === 'off' && uncheckedIsoCtxs.length > 0);
       const needsHostI18nCleanup =
-        !hostI18nEnabled && Boolean(probe.hasHostI18n || entry.hostI18nScriptId || entry.hostI18nMounted);
+        (!hostI18nEnabled && Boolean(probe.hasHostI18n || entry.hostI18nScriptId || entry.hostI18nMounted)) ||
+        (expectedHostI18nMode !== 'off' && Boolean(entry.isolatedHostI18nPaused) && !hostI18nEnabled);
       const needsThoughtHeal =
         thoughtEnabled &&
         (!probe.hasThought || !probe.hasThoughtSettingsUi || !entry.thoughtScriptId || !entry.thoughtMounted);
@@ -6716,12 +10082,74 @@ export class PrismDaemon {
         (!probe.hasInlineDiff || !entry.inlineDiffScriptId || !entry.inlineDiffMounted);
       const needsInlineDiffCleanup =
         !inlineDiffAvailable && Boolean(probe.hasInlineDiff || entry.inlineDiffScriptId || entry.inlineDiffMounted);
+      if (wallpaperAvailable && !entry.wallpaperSkipped && !this.wallpaperExpr && typeof this.cdp.buildWallpaperExpression === 'function') {
+        this._buildWallpaperExprForConfig(cfg);
+      }
+      const expectedWallpaperHash = wallpaperAvailable && this.wallpaperExpr ? this._getWallpaperExprHash(this.wallpaperExpr) : '';
+      const wallpaperHashMismatch = Boolean(
+        expectedWallpaperHash && probe.wallpaperCodeHash && probe.wallpaperCodeHash !== expectedWallpaperHash
+      );
       const needsWallpaperHeal =
         wallpaperAvailable &&
         !entry.wallpaperSkipped &&
-        (!probe.hasWallpaper || !probe.hasWallpaperUi || !entry.wallpaperScriptId || !entry.wallpaperMounted);
+        (!probe.hasWallpaper || !probe.hasWallpaperUi || wallpaperHashMismatch || !entry.wallpaperScriptId || !entry.wallpaperMounted);
       const needsWallpaperCleanup =
         !wallpaperAvailable && Boolean(probe.hasWallpaper || probe.hasWallpaperUi || entry.wallpaperScriptId || entry.wallpaperMounted);
+      const needsSuggesterHeal =
+        suggesterAvailable &&
+        !entry.suggesterSkipped &&
+        (probe.hasSuggester === false || probe.hasSuggesterUi === false || !entry.suggesterScriptId || !entry.suggesterMounted);
+      const needsSuggesterCleanup =
+        !suggesterAvailable && Boolean(probe.hasSuggester || probe.hasSuggesterUi || entry.suggesterScriptId || entry.suggesterMounted);
+      const periodicPickerEnabled = this._isPeriodicPickerEnabled(cfg);
+      const hasPeriodicPickerOnDisk = periodicPickerEnabled && this._hasPeriodicPickerFile();
+      if (hasPeriodicPickerOnDisk && !this.periodicPickerExpr && typeof this.cdp.buildPeriodicPickerExpression === 'function') {
+        this._buildPeriodicPickerExprForConfig(cfg);
+      }
+      const expectedPeriodicHash = hasPeriodicPickerOnDisk && this.periodicPickerExpr
+        ? this._getPeriodicPickerExprHash(this.periodicPickerExpr)
+        : '';
+      const expectedPeriodicSig = hasPeriodicPickerOnDisk && this.periodicPickerExpr
+        ? `${this._getPeriodicPickerCfgSig(cfg)}:${expectedPeriodicHash}`
+        : '';
+      const periodicPickerHashMismatch = Boolean(
+        expectedPeriodicHash && probe.periodicPickerCodeHash !== expectedPeriodicHash
+      );
+      const periodicPickerScriptStale = Boolean(
+        !entry.periodicPickerScriptId || (expectedPeriodicSig && entry.lastPeriodicPickerScriptSig !== expectedPeriodicSig)
+      );
+      const needsPeriodicPickerHeal =
+        hasPeriodicPickerOnDisk && (!probe.hasPeriodicPicker || periodicPickerHashMismatch || periodicPickerScriptStale);
+      const needsPeriodicPickerCleanup =
+        !periodicPickerEnabled && Boolean(probe.hasPeriodicPicker || entry.periodicPickerScriptId || entry.periodicPickerMounted);
+      const mascotEnabled = this._isMascotEnabled(cfg);
+      const hasMascotOnDisk = mascotEnabled && this._hasMascotFile();
+      if (hasMascotOnDisk && !this.mascotExpr && typeof this.cdp.buildMascotChannelExpression === 'function') {
+        this._buildMascotExprForConfig(cfg);
+      }
+      const expectedMascotHash = hasMascotOnDisk && this.mascotExpr ? this._getMascotExprHash(this.mascotExpr) : '';
+      const expectedMascotSig = hasMascotOnDisk && this.mascotExpr ? `${this._getMascotCfgSig(cfg)}:${expectedMascotHash}` : '';
+      const mascotHashMismatch = Boolean(expectedMascotHash && probe.mascotCodeHash !== expectedMascotHash);
+      const mascotScriptStale = Boolean(!entry.mascotScriptId || (expectedMascotSig && entry.lastMascotScriptSig !== expectedMascotSig));
+      const needsMascotHeal = hasMascotOnDisk && (!probe.hasMascot || mascotHashMismatch || mascotScriptStale);
+      const needsMascotCleanup = !mascotEnabled && Boolean(probe.hasMascot || entry.mascotScriptId || entry.mascotMounted);
+      const homeStudioEnabled = this._isHomeStudioEnabled(cfg);
+      const hasHomeStudioOnDisk = homeStudioEnabled && this._hasHomeStudioFile();
+      if (hasHomeStudioOnDisk && !this.homeStudioExpr && typeof this.cdp.buildHomeStudioChannelExpression === 'function') {
+        this._buildHomeStudioExprForConfig(cfg);
+      }
+      const expectedHomeStudioHash = hasHomeStudioOnDisk && this.homeStudioExpr ? this._getHomeStudioExprHash(this.homeStudioExpr) : '';
+      const expectedHomeStudioSig = hasHomeStudioOnDisk && this.homeStudioExpr ? `${this._getHomeStudioCfgSig(cfg)}:${expectedHomeStudioHash}` : '';
+      const homeStudioHashMismatch = Boolean(expectedHomeStudioHash && probe.homeStudioCodeHash !== expectedHomeStudioHash);
+      const homeStudioScriptStale = Boolean(!entry.homeStudioScriptId || (expectedHomeStudioSig && entry.lastHomeStudioScriptSig !== expectedHomeStudioSig));
+      const needsHomeStudioHeal = hasHomeStudioOnDisk && (!probe.hasHomeStudio || homeStudioHashMismatch || homeStudioScriptStale);
+      const needsHomeStudioCleanup = !homeStudioEnabled && Boolean(probe.hasHomeStudio || entry.homeStudioScriptId || entry.homeStudioMounted);
+      const shouldCheckSettingsHash = Boolean(probe.needsSettingsChannel || probe.hasSettingsPanel || probe.settingsCodeHash);
+      const expectedSettingsHash = shouldCheckSettingsHash ? this._getSettingsExprHash(this._ensureSettingsExpr()) : '';
+      const settingsHashMismatch = Boolean(
+        expectedSettingsHash && (probe.hasSettingsPanel || probe.settingsCodeHash) && probe.settingsCodeHash !== expectedSettingsHash
+      );
+      const needsSettingsHeal = Boolean(probe.needsSettingsChannel || settingsHashMismatch);
       let healed = false;
       if (
         (entry.sidebarHostVerified === false && probe.isHostDom) ||
@@ -6784,11 +10212,17 @@ export class PrismDaemon {
             await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.wallpaperScriptId }).catch(() => {});
             entry.wallpaperScriptId = null;
           }
+          if (entry.suggesterScriptId) {
+            await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.suggesterScriptId }).catch(() => {});
+            entry.suggesterScriptId = null;
+          }
           await this._removeSidebarBinding(entry);
           await this._removeInlineDiffBinding(entry);
           await this._removeWallpaperBinding(entry);
+          await this._removeSuggesterBinding(entry);
           entry.sidebarMounted = false;
           entry.hostI18nMounted = false;
+          entry.hostI18nSkippedByLiveCfg = false;
           entry.lastHostI18nSig = '';
           entry.lastHostI18nScriptSig = '';
           entry.thoughtMounted = false;
@@ -6802,10 +10236,17 @@ export class PrismDaemon {
           entry.wallpaperSkipped = true;
           entry.lastWallpaperHash = '';
           entry.lastWallpaperScriptHash = '';
+          entry.suggesterMounted = false;
+          entry.suggesterSkipped = true;
+          entry.lastSuggesterHash = '';
+          entry.lastSuggesterScriptHash = '';
+          await this._resetPeriodicPickerEntryState(entry);
+          await this._resetMascotEntryState(entry);
+          await this._resetHomeStudioEntryState(entry);
           this._markTargetIgnored({ id: entry.pageId, webSocketDebuggerUrl: entry.wsUrl }, probe.href || entry.url);
           entry.session.close();
           this.sessions.delete(entry.wsUrl);
-          this.log(`[↷] Detached & ignored deferred non-host target: ${entry.title}`);
+          this.log(`[↷] Detached & ignored deferred non-host target: ${this._redactSensitiveText(entry.title)}`);
           return { alive: false, ready: true, isHostDom: false };
         }
         if (omniEnabled) {
@@ -6853,8 +10294,13 @@ export class PrismDaemon {
           await entry.session.evaluate(this._buildSidebarCleanupExpression(true), false, 3500).catch(() => {});
           entry.sidebarMounted = false;
         }
-        if (hostI18nEnabled) {
-          if (!probe.hasHostI18n || !entry.hostI18nScriptId) {
+        if (hostI18nEnabled && !hostI18nSkippedSameSig) {
+          let isoHealRes = null;
+          if (expectedHostI18nMode === 'off') {
+            isoHealRes = await this._syncIsolatedHostI18n(entry, true, { skipNoExt: true });
+          }
+          let evaluatedHostI18nHeal = false;
+          if (!probe.hasHostI18n || !entry.hostI18nScriptId || hostI18nHashMismatch || (probe.hostI18nMode && probe.hostI18nMode !== expectedHostI18nMode)) {
             if (!this.hostI18nExpr && typeof this.cdp.buildHostI18nExpression === 'function') {
               const chOpts = this._getChannelCacheOpts(true);
               this.hostI18nExpr = chOpts
@@ -6864,7 +10310,11 @@ export class PrismDaemon {
             }
             if (this.hostI18nExpr) {
               const hiSig = this._getHostI18nCfgSig(cfg);
-              if (!entry.hostI18nScriptId) {
+              if (!entry.hostI18nScriptId || hostI18nHashMismatch) {
+                if (entry.hostI18nScriptId) {
+                  await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.hostI18nScriptId }).catch(() => {});
+                  entry.hostI18nScriptId = null;
+                }
                 const hiAdd = await entry.session
                   .send('Page.addScriptToEvaluateOnNewDocument', { source: this.hostI18nExpr })
                   .catch(() => null);
@@ -6873,14 +10323,25 @@ export class PrismDaemon {
                   entry.lastHostI18nScriptSig = hiSig;
                 }
               }
-              if (!probe.hasHostI18n) {
+              if (!probe.hasHostI18n || hostI18nHashMismatch || (probe.hostI18nMode && probe.hostI18nMode !== expectedHostI18nMode)) {
                 const evalRes = await entry.session.evaluate(this.hostI18nExpr, false, 4500).catch(() => null);
-                if (evalRes && evalRes.ok) {
-                  entry.hostI18nMounted = true;
+                if (evalRes?.skippedByLiveCfg) {
+                  entry.hostI18nMounted = false;
+                  entry.hostI18nSkippedByLiveCfg = true;
                   entry.lastHostI18nSig = hiSig;
+                } else if (evalRes && evalRes.ok) {
+                  entry.hostI18nMounted = true;
+                  entry.hostI18nSkippedByLiveCfg = false;
+                  entry.lastHostI18nSig = hiSig;
+                  evaluatedHostI18nHeal = !evalRes.reused;
                 }
               }
             }
+          }
+          if (expectedHostI18nMode === 'off' && isoHealRes && isoHealRes.newlyPaused && !evaluatedHostI18nHeal) {
+            await this._forceMainWorldHostI18nOffRescan(entry);
+          } else if (expectedHostI18nMode !== 'off' && entry.isolatedHostI18nPaused) {
+            await this._syncIsolatedHostI18n(entry, false);
           }
         } else if (needsHostI18nCleanup) {
           if (entry.hostI18nScriptId) {
@@ -6889,8 +10350,36 @@ export class PrismDaemon {
           }
           await entry.session.evaluate(this._getHostI18nCleanupExpression(), false, 3500).catch(() => {});
           entry.hostI18nMounted = false;
+          entry.hostI18nSkippedByLiveCfg = false;
           entry.lastHostI18nSig = '';
           entry.lastHostI18nScriptSig = '';
+          if (entry.isolatedHostI18nPaused) {
+            await this._syncIsolatedHostI18n(entry, false);
+          }
+        } else if (expectedHostI18nMode !== 'off' && entry.isolatedHostI18nPaused) {
+          await this._syncIsolatedHostI18n(entry, false);
+        }
+        if ((periodicPickerEnabled && needsPeriodicPickerHeal) || (!periodicPickerEnabled && needsPeriodicPickerCleanup)) {
+          await this._syncPeriodicPickerOnEntry(entry, cfg, {
+            enabled: periodicPickerEnabled,
+            probe,
+            runCleanup: needsPeriodicPickerCleanup,
+          });
+        }
+        if ((mascotEnabled && needsMascotHeal) || (!mascotEnabled && needsMascotCleanup)) {
+          await this._syncMascotOnEntry(entry, cfg, {
+            enabled: mascotEnabled,
+            probe,
+            runCleanup: needsMascotCleanup,
+          });
+        }
+        if ((homeStudioEnabled && (needsHomeStudioHeal || probe.needsHomeStudioChannel)) || (!homeStudioEnabled && needsHomeStudioCleanup)) {
+          await this._syncHomeStudioOnEntry(entry, cfg, {
+            enabled: homeStudioEnabled && hasHomeStudioOnDisk,
+            probe,
+            forceEval: Boolean(probe.needsHomeStudioChannel),
+            runCleanup: needsHomeStudioCleanup,
+          });
         }
         if (thoughtEnabled) {
           if (!this.thoughtExpr && typeof this.cdp.buildThoughtExpression === 'function') {
@@ -6962,7 +10451,11 @@ export class PrismDaemon {
           }
           if (this.wallpaperExpr) {
             const wallpaperHash = this._getWallpaperExprHash(this.wallpaperExpr);
-            if (!entry.wallpaperScriptId) {
+            if (!entry.wallpaperScriptId || (wallpaperHash && entry.lastWallpaperScriptHash !== wallpaperHash)) {
+              if (entry.wallpaperScriptId) {
+                await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.wallpaperScriptId }).catch(() => {});
+                entry.wallpaperScriptId = null;
+              }
               const wallpaperAdd = await entry.session
                 .send('Page.addScriptToEvaluateOnNewDocument', { source: this.wallpaperExpr })
                 .catch(() => null);
@@ -6986,7 +10479,41 @@ export class PrismDaemon {
           entry.lastWallpaperHash = '';
           entry.lastWallpaperScriptHash = '';
         }
-        this.log(`[↻] Hot-healed window to Obsidian Prism v${this.cdp.PLUGIN_VERSION}: ${entry.title}`);
+        if (suggesterAvailable) {
+          await this._ensureSuggesterBinding(entry, 2600, true);
+          if (!this.suggesterExpr && typeof this.cdp.buildSuggesterExpression === 'function') {
+            this._buildSuggesterExprForConfig(cfg);
+          }
+          if (this.suggesterExpr) {
+            const suggesterHash = this._getSuggesterExprHash(this.suggesterExpr);
+            if (!entry.suggesterScriptId) {
+              const suggesterAdd = await entry.session
+                .send('Page.addScriptToEvaluateOnNewDocument', { source: this.suggesterExpr })
+                .catch(() => null);
+              if (suggesterAdd && suggesterAdd.identifier) {
+                entry.suggesterScriptId = suggesterAdd.identifier;
+                entry.lastSuggesterScriptHash = suggesterHash;
+              }
+            }
+            const evalRes = await entry.session.evaluate(this.suggesterExpr, false, 4500).catch(() => null);
+            await this._recordSuggesterEvalOutcome(entry, evalRes, suggesterHash);
+          }
+        } else if (needsSuggesterCleanup) {
+          if (entry.suggesterScriptId) {
+            await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.suggesterScriptId }).catch(() => {});
+            entry.suggesterScriptId = null;
+          }
+          await this._removeSuggesterBinding(entry);
+          await entry.session.evaluate(this._getSuggesterCleanupExpression(), false, 3500).catch(() => {});
+          entry.suggesterMounted = false;
+          entry.suggesterSkipped = false;
+          entry.lastSuggesterHash = '';
+          entry.lastSuggesterScriptHash = '';
+        }
+        if (needsSettingsHeal) {
+          await this._deliverSettingsChannelToEntry(entry);
+        }
+        this.log(`[↻] Hot-healed window to Obsidian Prism v${this.cdp.PLUGIN_VERSION}: ${this._redactSensitiveText(entry.title)}`);
       } else {
         if (needsOmniHeal) {
           healed = true;
@@ -7041,33 +10568,55 @@ export class PrismDaemon {
           await entry.session.evaluate(this._buildSidebarCleanupExpression(true), false, 3500).catch(() => {});
           entry.sidebarMounted = false;
         }
-        if (needsHostI18nHeal) {
+        if (needsHostI18nHeal || needsIsoHostI18nSync) {
           healed = true;
-          if (!this.hostI18nExpr && typeof this.cdp.buildHostI18nExpression === 'function') {
-            const chOpts = this._getChannelCacheOpts(true);
-            this.hostI18nExpr = chOpts
-              ? this.cdp.buildHostI18nExpression(cfg, null, chOpts)
-              : this.cdp.buildHostI18nExpression(cfg);
-            if (chOpts && this.running) this._scheduleBundleCacheFlush();
+          let isoHealRes2 = null;
+          if (expectedHostI18nMode === 'off') {
+            isoHealRes2 = await this._syncIsolatedHostI18n(entry, true, { skipNoExt: true });
           }
-          if (this.hostI18nExpr) {
-            const hiSig = this._getHostI18nCfgSig(cfg);
-            if (!entry.hostI18nScriptId) {
-              const hiAdd = await entry.session
-                .send('Page.addScriptToEvaluateOnNewDocument', { source: this.hostI18nExpr })
-                .catch(() => null);
-              if (hiAdd && hiAdd.identifier) {
-                entry.hostI18nScriptId = hiAdd.identifier;
-                entry.lastHostI18nScriptSig = hiSig;
+          let evaluatedHostI18nHeal2 = false;
+          if (hostI18nEnabled && !hostI18nSkippedSameSig && (!probe.hasHostI18n || !entry.hostI18nScriptId || hostI18nHashMismatch || (probe.hostI18nMode && probe.hostI18nMode !== expectedHostI18nMode))) {
+            if (!this.hostI18nExpr && typeof this.cdp.buildHostI18nExpression === 'function') {
+              const chOpts = this._getChannelCacheOpts(true);
+              this.hostI18nExpr = chOpts
+                ? this.cdp.buildHostI18nExpression(cfg, null, chOpts)
+                : this.cdp.buildHostI18nExpression(cfg);
+              if (chOpts && this.running) this._scheduleBundleCacheFlush();
+            }
+            if (this.hostI18nExpr) {
+              const hiSig = this._getHostI18nCfgSig(cfg);
+              if (!entry.hostI18nScriptId || hostI18nHashMismatch) {
+                if (entry.hostI18nScriptId) {
+                  await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.hostI18nScriptId }).catch(() => {});
+                  entry.hostI18nScriptId = null;
+                }
+                const hiAdd = await entry.session
+                  .send('Page.addScriptToEvaluateOnNewDocument', { source: this.hostI18nExpr })
+                  .catch(() => null);
+                if (hiAdd && hiAdd.identifier) {
+                  entry.hostI18nScriptId = hiAdd.identifier;
+                  entry.lastHostI18nScriptSig = hiSig;
+                }
+              }
+              if (!probe.hasHostI18n || hostI18nHashMismatch || (probe.hostI18nMode && probe.hostI18nMode !== expectedHostI18nMode)) {
+                const evalRes = await entry.session.evaluate(this.hostI18nExpr, false, 4500).catch(() => null);
+                if (evalRes?.skippedByLiveCfg) {
+                  entry.hostI18nMounted = false;
+                  entry.hostI18nSkippedByLiveCfg = true;
+                  entry.lastHostI18nSig = hiSig;
+                } else if (evalRes && evalRes.ok) {
+                  entry.hostI18nMounted = true;
+                  entry.hostI18nSkippedByLiveCfg = false;
+                  entry.lastHostI18nSig = hiSig;
+                  evaluatedHostI18nHeal2 = !evalRes.reused;
+                }
               }
             }
-            if (!probe.hasHostI18n) {
-              const evalRes = await entry.session.evaluate(this.hostI18nExpr, false, 4500).catch(() => null);
-              if (evalRes && evalRes.ok) {
-                entry.hostI18nMounted = true;
-                entry.lastHostI18nSig = hiSig;
-              }
-            }
+          }
+          if (expectedHostI18nMode === 'off' && isoHealRes2 && isoHealRes2.newlyPaused && !evaluatedHostI18nHeal2) {
+            await this._forceMainWorldHostI18nOffRescan(entry);
+          } else if (expectedHostI18nMode !== 'off' && entry.isolatedHostI18nPaused) {
+            await this._syncIsolatedHostI18n(entry, false);
           }
         } else if (needsHostI18nCleanup) {
           healed = true;
@@ -7077,8 +10626,37 @@ export class PrismDaemon {
           }
           await entry.session.evaluate(this._getHostI18nCleanupExpression(), false, 3500).catch(() => {});
           entry.hostI18nMounted = false;
+          entry.hostI18nSkippedByLiveCfg = false;
           entry.lastHostI18nSig = '';
           entry.lastHostI18nScriptSig = '';
+          if (entry.isolatedHostI18nPaused) {
+            await this._syncIsolatedHostI18n(entry, false);
+          }
+        }
+        if (needsPeriodicPickerHeal || needsPeriodicPickerCleanup) {
+          healed = true;
+          await this._syncPeriodicPickerOnEntry(entry, cfg, {
+            enabled: needsPeriodicPickerHeal,
+            probe,
+            runCleanup: needsPeriodicPickerCleanup,
+          });
+        }
+        if (needsMascotHeal || needsMascotCleanup) {
+          healed = true;
+          await this._syncMascotOnEntry(entry, cfg, {
+            enabled: needsMascotHeal,
+            probe,
+            runCleanup: needsMascotCleanup,
+          });
+        }
+        if (needsHomeStudioHeal || probe.needsHomeStudioChannel || needsHomeStudioCleanup) {
+          healed = true;
+          await this._syncHomeStudioOnEntry(entry, cfg, {
+            enabled: homeStudioEnabled && hasHomeStudioOnDisk,
+            probe,
+            forceEval: Boolean(probe.needsHomeStudioChannel),
+            runCleanup: needsHomeStudioCleanup,
+          });
         }
         if (needsThoughtHeal) {
           healed = true;
@@ -7158,7 +10736,11 @@ export class PrismDaemon {
           }
           if (this.wallpaperExpr) {
             const wallpaperHash = this._getWallpaperExprHash(this.wallpaperExpr);
-            if (!entry.wallpaperScriptId) {
+            if (!entry.wallpaperScriptId || (wallpaperHash && entry.lastWallpaperScriptHash !== wallpaperHash)) {
+              if (entry.wallpaperScriptId) {
+                await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.wallpaperScriptId }).catch(() => {});
+                entry.wallpaperScriptId = null;
+              }
               const wallpaperAdd = await entry.session
                 .send('Page.addScriptToEvaluateOnNewDocument', { source: this.wallpaperExpr })
                 .catch(() => null);
@@ -7167,7 +10749,7 @@ export class PrismDaemon {
                 entry.lastWallpaperScriptHash = wallpaperHash;
               }
             }
-            if (!probe.hasWallpaper || !probe.hasWallpaperUi || !entry.wallpaperMounted) {
+            if (!probe.hasWallpaper || !probe.hasWallpaperUi || wallpaperHashMismatch || !entry.wallpaperMounted) {
               const evalRes = await entry.session.evaluate(this.wallpaperExpr, false, 4500).catch(() => null);
               await this._recordWallpaperEvalOutcome(entry, evalRes, wallpaperHash);
             }
@@ -7184,6 +10766,45 @@ export class PrismDaemon {
           entry.wallpaperSkipped = false;
           entry.lastWallpaperHash = '';
           entry.lastWallpaperScriptHash = '';
+        }
+        if (needsSuggesterHeal) {
+          healed = true;
+          await this._ensureSuggesterBinding(entry, 2600, true);
+          if (!this.suggesterExpr && typeof this.cdp.buildSuggesterExpression === 'function') {
+            this._buildSuggesterExprForConfig(cfg);
+          }
+          if (this.suggesterExpr) {
+            const suggesterHash = this._getSuggesterExprHash(this.suggesterExpr);
+            if (!entry.suggesterScriptId) {
+              const suggesterAdd = await entry.session
+                .send('Page.addScriptToEvaluateOnNewDocument', { source: this.suggesterExpr })
+                .catch(() => null);
+              if (suggesterAdd && suggesterAdd.identifier) {
+                entry.suggesterScriptId = suggesterAdd.identifier;
+                entry.lastSuggesterScriptHash = suggesterHash;
+              }
+            }
+            if (probe.hasSuggester === false || probe.hasSuggesterUi === false || !entry.suggesterMounted) {
+              const evalRes = await entry.session.evaluate(this.suggesterExpr, false, 4500).catch(() => null);
+              await this._recordSuggesterEvalOutcome(entry, evalRes, suggesterHash);
+            }
+          }
+        } else if (needsSuggesterCleanup) {
+          healed = true;
+          if (entry.suggesterScriptId) {
+            await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.suggesterScriptId }).catch(() => {});
+            entry.suggesterScriptId = null;
+          }
+          await this._removeSuggesterBinding(entry);
+          await entry.session.evaluate(this._getSuggesterCleanupExpression(), false, 3500).catch(() => {});
+          entry.suggesterMounted = false;
+          entry.suggesterSkipped = false;
+          entry.lastSuggesterHash = '';
+          entry.lastSuggesterScriptHash = '';
+        }
+        if (needsSettingsHeal) {
+          healed = true;
+          await this._deliverSettingsChannelToEntry(entry);
         }
         if (probe.needsDashboardSync) {
           healed = true;
@@ -7220,6 +10841,11 @@ export class PrismDaemon {
       clearTimeout(this._discoverTimer);
       this._discoverTimer = null;
     }
+    for (const tid of [...this.swarmSessions.keys()]) {
+      this._cleanupSwarmSessionLocal(tid);
+    }
+    this.swarmSessions.clear();
+    this._swarmAttaching.clear();
     if (this.browserSession) {
       const bs = this.browserSession;
       this.browserSession = null;
@@ -7267,12 +10893,23 @@ export class PrismDaemon {
           this.browserPort = null;
           this._browserDiscoverySubscribed = false;
           this._lastListPagesAt = 0;
+          for (const tid of [...this.swarmSessions.keys()]) {
+            this._cleanupSwarmSessionLocal(tid);
+          }
+          this.swarmSessions.clear();
+          this._swarmAttaching.clear();
         }
       };
       const onTargetEvent = (params) => {
         const info = params?.targetInfo;
-        if (!info || info.type !== 'page') return;
+        if (!info) return;
         const tid = info.targetId || info.id || '';
+        // Issue #18 层 B：Swarm 独立侧栏 OOPIF (plugin://swarm--swarm_board-*) 走独立按需状态机
+        if (this._isSwarmTargetInfo(info) || (tid && this.swarmSessions.has(tid))) {
+          void this._handleSwarmTargetEvent(info).catch(() => {});
+          return;
+        }
+        if (info.type !== 'page') return;
         // If this page is already attached and healthy, only mark it dirty on URL shift rather than waking all pages
         for (const existing of this.sessions.values()) {
           if (tid && existing.pageId === tid) {
@@ -7301,17 +10938,40 @@ export class PrismDaemon {
       };
       bSession.on('Target.targetCreated', onTargetEvent);
       bSession.on('Target.targetInfoChanged', onTargetEvent);
+      bSession.on('Target.targetDestroyed', (params) => {
+        const tid = String(params?.targetId || '').trim();
+        if (tid) this._cleanupSwarmSessionLocal(tid);
+      });
+      bSession.on('Target.detachedFromTarget', (params) => {
+        const tid = String(params?.targetId || '').trim();
+        if (tid && this.swarmSessions.has(tid)) {
+          this._cleanupSwarmSessionLocal(tid);
+          return;
+        }
+        const sid = String(params?.sessionId || '').trim();
+        if (sid) {
+          for (const [k, ent] of this.swarmSessions.entries()) {
+            if (ent && ent.sessionId === sid) {
+              this._cleanupSwarmSessionLocal(k);
+              break;
+            }
+          }
+        }
+      });
       const subOk = await bSession
         .send('Target.setDiscoverTargets', { discover: true }, 1500)
         .then(() => true)
         .catch(() => false);
       if (this.browserSession === bSession && !bSession.closed && subOk) {
         this._browserDiscoverySubscribed = true;
+        // 立即补扫已打开的 Swarm OOPIF，避免 tick() 早退导致已有面板漏接管
+        void this._scanExistingSwarmTargets(bSession).catch(() => {});
       }
     } catch {}
   }
 
   async detachAll(cleanPageDom = false) {
+    await this._detachAllSwarmSessions(cleanPageDom).catch(() => {});
     this.closeBrowserDiscovery();
     const entries = [...this.sessions.values()];
     await Promise.allSettled(
@@ -7352,8 +11012,29 @@ export class PrismDaemon {
           entry.wallpaperMounted = false;
           entry.lastWallpaperHash = '';
           entry.lastWallpaperScriptHash = '';
+          if (entry.suggesterScriptId && !entry.session.closed) {
+            await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.suggesterScriptId }).catch(() => {});
+          }
+          await this._removeSuggesterBinding(entry);
+          entry.suggesterBindingAdded = false;
+          entry.suggesterScriptId = null;
+          entry.suggesterMounted = false;
+          entry.lastSuggesterHash = '';
+          entry.lastSuggesterScriptHash = '';
+          await this._resetPeriodicPickerEntryState(entry);
+          await this._resetMascotEntryState(entry);
+          await this._resetHomeStudioEntryState(entry);
+          await this._cleanupSwarmSubFrames(entry, cleanPageDom).catch(() => {});
+          entry.swarmSubFrames?.clear?.();
           if (cleanPageDom && !entry.session.closed) {
             await entry.session.evaluate(this.cdp.REMOVE_EXPRESSION).catch(() => {});
+          }
+          if (entry._isoPauseTimers) {
+            for (const tid of entry._isoPauseTimers) clearTimeout(tid);
+            entry._isoPauseTimers.clear();
+          }
+          if (entry.isolatedHostI18nPaused && !entry.session.closed) {
+            await this._syncIsolatedHostI18n(entry, false).catch(() => {});
           }
         } catch {}
         entry.session.close();
@@ -7524,7 +11205,7 @@ export class PrismDaemon {
         this.cdp.recordRelaunchPromptState(this.rootDir, host.pid, host.startMs, 'prompted', extraDirs);
       }
       this.log(`[relaunch-guard] Host pid=${host.pid} running without CDP port; prompting user once`);
-      const lang = rawCfg.language || rawCfg.lang || 'zh-CN';
+      const lang = rawCfg.language || rawCfg.lang || 'auto';
       const promptFn =
         typeof this._relaunchHooks?.promptUser === 'function'
           ? this._relaunchHooks.promptUser
@@ -7578,14 +11259,14 @@ export class PrismDaemon {
     this._pendingTick = false;
     try {
       if (!this.isCurrentOwner()) {
-        await this.stop(false);
+        await this.stop(false, { skipAutoArchive: true });
         return { attached: 0, superseded: true };
       }
 
       if (!this.enabledCheck()) {
         this._noPortSinceMs = 0;
         this._hasActiveCdpPort = false;
-        if (this.sessions.size > 0 || this.browserSession) {
+        if (this.sessions.size > 0 || this.swarmSessions.size > 0 || this.browserSession) {
           await this.detachAll(true);
         }
         return { attached: 0, disabled: true };
@@ -7598,6 +11279,9 @@ export class PrismDaemon {
         if (this.sessions.size === 0 && this._prevAttachedCount > 0) {
           this._disconnectedAllSessions = true;
           this._prevAttachedCount = 0;
+        }
+        if (this.sessions.size === 0 && this._sawLiveHost && this._getAutoArchiveOnExitSetting() && !this._autoArchiveInFlight && !this._autoArchiveExitRan) {
+          void this._maybeRunAutoArchiveOnExit().catch(() => {});
         }
         await this._handleMissingCdpPort();
         return { attached: 0, port: null };
@@ -7629,7 +11313,12 @@ export class PrismDaemon {
 
         if (liveEntries.length > 0) {
           await Promise.allSettled(liveEntries.map((entry) => this.verifyAndHealEntry(entry)));
-          if (this.sessions.size === 0 && this._prevAttachedCount > 0) {
+          if (this.sessions.size > 0) {
+            this._sawLiveHost = true;
+            if (!(this._archiveScheduledAt > 0 && Date.now() - this._archiveScheduledAt < 60000)) {
+              this._autoArchiveExitRan = false;
+            }
+          } else if (this._prevAttachedCount > 0) {
             this._disconnectedAllSessions = true;
           }
           this._prevAttachedCount = this.sessions.size;
@@ -7641,7 +11330,7 @@ export class PrismDaemon {
           return {
             attached: this.sessions.size,
             port,
-            pages: [...this.sessions.values()].map((e) => e.title || e.url),
+            pages: [...this.sessions.values()].map((e) => this._redactSensitiveText(e.title || e.url)),
             skippedListPoll: true,
           };
         }
@@ -7664,6 +11353,9 @@ export class PrismDaemon {
           if (this._prevAttachedCount > 0) {
             this._disconnectedAllSessions = true;
             this._prevAttachedCount = 0;
+          }
+          if (this._sawLiveHost && this._getAutoArchiveOnExitSetting() && !this._autoArchiveInFlight && !this._autoArchiveExitRan) {
+            void this._maybeRunAutoArchiveOnExit().catch(() => {});
           }
           await this._handleMissingCdpPort();
         }
@@ -7744,7 +11436,26 @@ export class PrismDaemon {
             entry.wallpaperMounted = false;
             entry.lastWallpaperHash = '';
             entry.lastWallpaperScriptHash = '';
+            if (entry.suggesterScriptId) {
+              await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.suggesterScriptId }).catch(() => {});
+              entry.suggesterScriptId = null;
+            }
+            await this._removeSuggesterBinding(entry);
+            entry.suggesterBindingAdded = false;
+            entry.suggesterMounted = false;
+            entry.lastSuggesterHash = '';
+            entry.lastSuggesterScriptHash = '';
+            await this._resetPeriodicPickerEntryState(entry);
+            await this._resetMascotEntryState(entry);
+            await this._resetHomeStudioEntryState(entry);
             await entry.session.evaluate(this.cdp.REMOVE_EXPRESSION).catch(() => {});
+            if (entry._isoPauseTimers) {
+              for (const tid of entry._isoPauseTimers) clearTimeout(tid);
+              entry._isoPauseTimers.clear();
+            }
+            if (entry.isolatedHostI18nPaused) {
+              await this._syncIsolatedHostI18n(entry, false).catch(() => {});
+            }
           }
           entry.session.close();
           this.sessions.delete(wsUrl);
@@ -7764,6 +11475,12 @@ export class PrismDaemon {
 
       // 盲区 3：全部窗口断开后重连，或活跃窗口数从 0 恢复时，立即复位 45 分钟退避并补检快捷方式
       const nowAttachedCount = this.sessions.size;
+      if (nowAttachedCount > 0) {
+        this._sawLiveHost = true;
+        if (!(this._archiveScheduledAt > 0 && Date.now() - this._archiveScheduledAt < 60000)) {
+          this._autoArchiveExitRan = false;
+        }
+      }
       if (nowAttachedCount === 0) {
         if (this._prevAttachedCount > 0 || prevSessionCount > 0) {
           this._disconnectedAllSessions = true;
@@ -7791,7 +11508,7 @@ export class PrismDaemon {
         this._releaseIdleTelemetry(false);
       }
 
-      return { attached: this.sessions.size, port, pages: eligible.map((p) => p.title || p.url) };
+      return { attached: this.sessions.size, port, pages: eligible.map((p) => this._redactSensitiveText(p.title || p.url)) };
     } finally {
       this.busy = false;
       if (this._pendingTick && this.running) {
@@ -7801,7 +11518,13 @@ export class PrismDaemon {
     }
   }
 
-  stopExistingDaemon({ verifyPid = null, inspectCommandLine = null, inspectProcess = null, killProcess = null } = {}) {
+  stopExistingDaemon({
+    verifyPid = null,
+    inspectCommandLine = null,
+    inspectProcess = null,
+    queryTasklist = null,
+    killProcess = null,
+  } = {}) {
     try {
       if (!this.pidFile) return false;
       let pidStat;
@@ -7842,7 +11565,7 @@ export class PrismDaemon {
           // 兼容单测显式覆写 this.cdp.isExpectedDaemonProcess 注入校验钩子
           safeToKill = Boolean(this.cdp.isExpectedDaemonProcess(prevPid, this.pidFile));
         } else {
-          // P2-5: 复用 cdp.js 单次进程探针，避免 Windows 启动抢锁连续拉起两次 powershell.exe
+          // P2-5: 复用 cdp.js 单次进程探针，避免 Windows 启动抢锁重复拉起外部进程探针
           const hasUnifiedProbe =
             typeof inspectProcess === 'function' || typeof this.cdp.inspectProcessSync === 'function';
           const procInfo =
@@ -7856,14 +11579,24 @@ export class PrismDaemon {
             : Boolean(this.cdp.isExpectedDaemonProcess(prevPid, this.pidFile));
           if (!cdpVerified) {
             safeToKill = false;
+          } else if (typeof inspectCommandLine === 'function') {
+            safeToKill = isObsidianPrismDaemonCommandLine(inspectCommandLine(prevPid));
+          } else if (hasUnifiedProbe && typeof procInfo?.commandLine === 'string' && procInfo.commandLine.trim()) {
+            // 存在命令行信息时执行命令行身份复核，防误杀无关 node 进程
+            safeToKill = isObsidianPrismDaemonCommandLine(procInfo.commandLine);
+          } else if (process.platform === 'win32') {
+            // Windows 无命令行探针时使用原生 tasklist /FO CSV /NH 映像名 + .daemon.pid 锁文件 token 双重校验
+            const imgName =
+              (procInfo && typeof procInfo.imageName === 'string' && procInfo.imageName.trim()) ||
+              (typeof queryTasklist === 'function'
+                ? queryTasklist(prevPid)
+                : queryWindowsProcessImageNameSync(prevPid));
+            safeToKill =
+              Boolean(imgName) &&
+              WINDOWS_DAEMON_IMAGE_RE.test(imgName.trim()) &&
+              verifyDaemonPidLockToken(this.pidFile, prevPid, this.ownerToken);
           } else {
-            // 标准 cdp.isExpectedDaemonProcess 对 node.exe 仅核对映像名，补充命令行身份复核防误杀无关 node 进程
-            const cmd =
-              typeof inspectCommandLine === 'function'
-                ? inspectCommandLine(prevPid)
-                : hasUnifiedProbe
-                ? procInfo?.commandLine || ''
-                : queryProcessCommandLineSync(prevPid);
+            const cmd = hasUnifiedProbe ? procInfo?.commandLine || '' : queryProcessCommandLineSync(prevPid);
             safeToKill = isObsidianPrismDaemonCommandLine(cmd);
           }
         }
@@ -7952,6 +11685,7 @@ export class PrismDaemon {
     if (this.running) return;
     this._sidebarStopped = false;
     this._wallpaperStopped = false;
+    this._suggesterStopped = false;
     this.running = true;
     if (claimPid) this.claimOwnership();
     const initialPort = discoverActivePort(this.overridePort, this.portFile);
@@ -8035,26 +11769,97 @@ export class PrismDaemon {
     if (this._enableAutoUpdateTimer) {
       this._updateInitialTimer = setTimeout(() => {
         this._updateInitialTimer = null;
-        if (this.running) {
+        if (this.running && this._getAutoUpdateSetting() === 'on') {
           void this.runUpdateCheck({ force: false, manual: false, allowAutoApply: true }).catch(() => {});
         }
       }, this._updateCheckInitialDelayMs);
       this._updateInitialTimer?.unref?.();
 
       this._updateIntervalTimer = setInterval(() => {
-        if (this.running) {
+        if (this.running && this._getAutoUpdateSetting() === 'on') {
           void this.runUpdateCheck({ force: false, manual: false, allowAutoApply: true }).catch(() => {});
         }
       }, this._updateCheckIntervalMs);
       this._updateIntervalTimer?.unref?.();
     }
+
+    if (this._enableStorageGuardTimer) {
+      this._storageGuardInitialTimer = setTimeout(() => {
+        this._storageGuardInitialTimer = null;
+        if (this.running) {
+          void this._checkStorageGuardAndNotify().catch(() => {});
+        }
+      }, this._storageGuardInitialDelayMs);
+      this._storageGuardInitialTimer?.unref?.();
+
+      this._storageGuardIntervalTimer = setInterval(() => {
+        if (this.running) {
+          void this._checkStorageGuardAndNotify().catch(() => {});
+        }
+      }, this._storageGuardIntervalMs);
+      this._storageGuardIntervalTimer?.unref?.();
+    }
   }
 
-  async stop(cleanPageDom = false) {
+  async stop(cleanPageDom = false, _testOverrides = null) {
     this._flushUsageDiskCache();
+    // 原生 sidecar 随宿主退出时：若开启了退出自动归档且非卸载动作，零 await 同步落盘内存目录索引并同步派生纯等待脱离任务，
+    // 在宿主与 language_server 彻底退出 4s 后静默归档（杜绝异步 import 竞态导致进程退出前尚未完成派生）
+    const autoArchiveEnabled =
+      _testOverrides?.autoArchiveOnExit !== undefined
+        ? Boolean(_testOverrides.autoArchiveOnExit)
+        : this._getAutoArchiveOnExitSetting();
+    const hasRecentManualArchive = this._archiveScheduledAt > 0 && Date.now() - this._archiveScheduledAt < 60000;
+    if (
+      !cleanPageDom &&
+      !_testOverrides?.skipAutoArchive &&
+      !this._isUninstalling &&
+      this._sawLiveHost &&
+      !this._autoArchiveExitRan &&
+      !this._autoArchiveInFlight &&
+      !hasRecentManualArchive &&
+      autoArchiveEnabled
+    ) {
+      this._autoArchiveExitRan = true;
+      try {
+        const arch = _testOverrides?.arch || conversationArchive;
+        const convDir = _testOverrides?.convDir || arch.getDefaultConversationsDir();
+        const archiveDir = _testOverrides?.archiveDir || arch.getDefaultArchiveDir();
+        // 零阻塞同步将内存中已发现的子代理/摘要/侧栏白名单增量合并落盘，避免退出归档时新子代理落入 unknown
+        this._flushCatalogIndexFromMemory(arch, convDir, archiveDir);
+        const scriptPath = path.join(this.rootDir, 'sidecars', 'daemon', 'conversation-archive.mjs');
+        arch.spawnDetachedArchiveTask(
+          {
+            action: 'auto-exit-archive',
+            ...(_testOverrides?.convDir ? { convDir } : {}),
+            ...(_testOverrides?.archiveDir ? { archiveDir } : {}),
+            gracefulQuit: false,
+            relaunch: false,
+            mode: 'subagents',
+            subagentMaxAgeHours: arch.AUTO_ARCHIVE_SUBAGENT_MAX_AGE_HOURS,
+            settleMs: 4000,
+            waitExitTimeoutMs: 30000,
+          },
+          {
+            scriptPath,
+            spawnHook: _testOverrides?.spawnHook,
+            disableWmiBreakaway: Boolean(_testOverrides?.disableWmiBreakaway),
+          }
+        );
+      } catch {}
+    }
     this._sidebarStopped = true;
     this._wallpaperStopped = true;
+    this._suggesterStopped = true;
     this.running = false;
+    if (this._storageGuardInitialTimer) {
+      clearTimeout(this._storageGuardInitialTimer);
+      this._storageGuardInitialTimer = null;
+    }
+    if (this._storageGuardIntervalTimer) {
+      clearInterval(this._storageGuardIntervalTimer);
+      this._storageGuardIntervalTimer = null;
+    }
     if (this._updateInitialTimer) {
       clearTimeout(this._updateInitialTimer);
       this._updateInitialTimer = null;
@@ -8136,6 +11941,14 @@ export class PrismDaemon {
         if (typeof wp.dispose === 'function') await wp.dispose();
       } catch {}
     }
+    await this._suggesterServicePromise?.catch(() => null);
+    if (this._lazySuggesterService) {
+      const sg = this._lazySuggesterService;
+      this._lazySuggesterService = null;
+      try {
+        if (typeof sg.dispose === 'function') await sg.dispose();
+      } catch {}
+    }
     this.releaseOwnership();
   }
 }
@@ -8194,6 +12007,44 @@ export function isMainEntry(argv1, moduleFilename = __filename) {
   return resolvedArgv === resolvedSelf;
 }
 
+export const DAEMON_SHUTDOWN_SIGNALS = Object.freeze(['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGBREAK']);
+
+export function registerDaemonShutdownSignals(daemon, opts = {}) {
+  const proc = opts.proc || process;
+  const exitFn = typeof opts.exit === 'function' ? opts.exit : (code) => proc.exit(code);
+  let shuttingDown = false;
+  let shutdownPromise = null;
+  const shutdown = () => {
+    if (shuttingDown) return shutdownPromise;
+    shuttingDown = true;
+    shutdownPromise = Promise.resolve()
+      .then(() => daemon.stop(false))
+      .catch(() => {})
+      .finally(() => {
+        exitFn(0);
+      });
+    return shutdownPromise;
+  };
+  const listeners = [];
+  for (const sig of DAEMON_SHUTDOWN_SIGNALS) {
+    const handler = () => {
+      void shutdown();
+    };
+    proc.on(sig, handler);
+    listeners.push({ sig, handler });
+  }
+  return {
+    shutdown,
+    dispose() {
+      if (typeof proc.off === 'function') {
+        for (const { sig, handler } of listeners) {
+          proc.off(sig, handler);
+        }
+      }
+    },
+  };
+}
+
 if (isMainEntry(process.argv[1], __filename)) {
   const cli = parseArgs(process.argv);
   const daemon = new PrismDaemon({
@@ -8213,25 +12064,17 @@ if (isMainEntry(process.argv[1], __filename)) {
         } else {
           console.log(JSON.stringify({ ok: true, ...res }, null, 2));
         }
-        await daemon.stop(false);
+        await daemon.stop(false, { skipAutoArchive: true });
         process.exit(0);
       })
       .catch(async (err) => {
         console.error('[obsidian-prism daemon] error:', err.message);
-        await daemon.stop(false);
+        await daemon.stop(false, { skipAutoArchive: true });
         process.exitCode = 1;
       });
   } else {
     daemon.start({ claimPid: true, watchFiles: true });
-    const shutdown = async () => {
-      await daemon.stop(false);
-      process.exit(0);
-    };
-    for (const sig of ['SIGINT', 'SIGTERM', 'SIGBREAK']) {
-      process.on(sig, () => {
-        void shutdown();
-      });
-    }
+    registerDaemonShutdownSignals(daemon);
     process.on('uncaughtException', (err) => {
       daemon.log(`[!] uncaughtException: ${err?.stack || err}`);
     });

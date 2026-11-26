@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
 const usageCore = require('../usage-core.js');
@@ -1007,7 +1008,7 @@ function createMockStudioDom(initialTitle = 'obsidian-prism — Antigravity') {
       this._textContent = '';
     }
     get innerHTML() { return this._innerHTML || ''; }
-    setAttribute(k, v) { this.attrs.set(k, String(v)); if (k === 'id') this.id = String(v); }
+    setAttribute(k, v) { this.attrs.set(k, String(v)); if (k === 'id') this.id = String(v); if (k === 'class') this.className = String(v); }
     getAttribute(k) { return this.attrs.has(k) ? this.attrs.get(k) : null; }
     hasAttribute(k) { return this.attrs.has(k); }
     removeAttribute(k) { this.attrs.delete(k); }
@@ -1069,6 +1070,9 @@ function createMockStudioDom(initialTitle = 'obsidian-prism — Antigravity') {
       return out;
     }
     querySelector(sel) { return this.querySelectorAll(sel)[0] || null; }
+    contains(node) { let cur = node; while (cur) { if (cur === this) return true; cur = cur.parentElement; } return false; }
+    focus() { doc.activeElement = this; }
+    click() { this.listeners.get('click')?.({ currentTarget: this, target: this }); }
   }
 
   const doc = {
@@ -1076,7 +1080,9 @@ function createMockStudioDom(initialTitle = 'obsidian-prism — Antigravity') {
     documentElement: null,
     head: null,
     body: null,
+    activeElement: null,
     createElement(tag) { return new MockNode(tag); },
+    createElementNS(ns, tag) { const n = new MockNode(tag); n.namespaceURI = ns; return n; },
     createDocumentFragment() { return new MockNode('#FRAGMENT'); },
     getElementById(id) {
       const find = (n) => {
@@ -3260,5 +3266,1347 @@ test('Redteam #256 P1 #6: renderer-rpc-adapter merges before 1024 cap, supports 
   assert.equal(normTraj.trajectory.generatorMetadata[0].chatModel.timeToFirstToken, 1.25);
   assert.equal(normTraj.trajectory.generatorMetadata[0].chatModel.streamingDuration, 4);
   assert.equal(normTraj.trajectory.steps[0].metadata.createdAt, new Date((baseSec + 50000) * 1000).toISOString());
+});
+
+test('Deleted conversations preserve historical token usage across daemon list-summaries and home-studio-panel prune', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const { PrismDaemon } = await import('../sidecars/daemon/main.mjs');
+  const homeStudioPanel = require('../home-studio-panel.js');
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-deleted-usage-'));
+  const cachePath = path.join(tmpDir, 'usage-rollup-cache.json');
+  const repoRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
+
+  const liveId = 'aaaaaaaa-1111-4111-8111-111111111111';
+  const deletedId = 'bbbbbbbb-2222-4222-8222-222222222222';
+  const emptyDeletedId = 'cccccccc-3333-4333-8333-333333333333';
+  const sshDeletedId = 'dddddddd-4444-4444-8444-444444444444';
+  const nowSec = 1763500000;
+
+  const makeDayRec = (id, total, calls, stepCount) => ({
+    cascadeId: id,
+    stepCount,
+    lastModifiedSec: nowSec,
+    gmCount: calls,
+    calls,
+    workspace: 'busy-bohr',
+    days: {
+      '2026-11-24': {
+        calls,
+        input: Math.floor(total * 0.6),
+        output: Math.floor(total * 0.4),
+        cacheRead: 0,
+        cacheWrite: 0,
+        total,
+        hours: new Array(24).fill(0),
+        models: total > 0 ? { 'Gemini 4 Neon': { input: Math.floor(total * 0.6), output: Math.floor(total * 0.4), cacheRead: 0, cacheWrite: 0, total, calls } } : {},
+      },
+    },
+  });
+
+  const prevWin = globalThis.window;
+  const prevDoc = globalThis.document;
+  const prevLs = globalThis.localStorage;
+  try {
+    // 1) Backend daemon: diskCache contains liveId, deletedId (real usage), emptyDeletedId (0 tokens), and sshDeletedId (different scope)
+    const daemon = new PrismDaemon({ rootDir: repoRoot, usageCachePath: cachePath, silent: true });
+    daemon._discoverLocalAppConversations = () => [];
+    daemon._putUsageDiskCache(liveId, 4, nowSec, makeDayRec(liveId, 10000, 2, 4), 'local');
+    daemon._putUsageDiskCache(deletedId, 6, nowSec - 60, makeDayRec(deletedId, 42000, 5, 6), 'local');
+    daemon._putUsageDiskCache(emptyDeletedId, 1, nowSec - 120, makeDayRec(emptyDeletedId, 0, 0, 1), 'local');
+    daemon._putUsageDiskCache(sshDeletedId, 5, nowSec - 30, makeDayRec(sshDeletedId, 99000, 3, 5), 'ssh:prod-box');
+    daemon._flushUsageDiskCache();
+
+    // Cold daemon where only liveId remains in GetAllCascadeTrajectories (deletedId was deleted by user)
+    const daemon2 = new PrismDaemon({ rootDir: repoRoot, usageCachePath: cachePath, silent: true });
+    daemon2._discoverLocalAppConversations = () => [];
+    daemon2._lazyLsClient = {
+      server: { port: 12349, mode: 'http' },
+      call: async (method) => {
+        if (method === 'GetAllCascadeTrajectories') {
+          return { trajectorySummaries: { [liveId]: { stepCount: 4, lastModifiedTime: { seconds: String(nowSec) } } } };
+        }
+        return {};
+      },
+    };
+    const listRes = await daemon2.fetchUsageRollupBatch(null, { action: 'list-summaries' });
+    assert.equal(listRes.ok, true);
+    const byId = new Map(listRes.records.map((r) => [r.id, r]));
+    assert.equal(byId.has(liveId), true, 'Live conversation must be returned');
+    assert.equal(byId.has(deletedId), true, 'Deleted conversation with real token usage must still be returned from disk cache');
+    assert.equal(byId.get(deletedId).archived, true, 'Deleted historical record must be flagged archived: true');
+    assert.equal(byId.has(emptyDeletedId), false, 'Deleted 0-token record must not be re-emitted');
+    assert.equal(byId.has(sshDeletedId), false, 'Other scope (ssh:prod-box) archived records must never leak into local scope');
+
+    // 2) Frontend home-studio-panel: deleting a conversation must NOT drop its historical tokens, while 0-token deferred placeholders ARE pruned
+    const storeMem = new Map();
+    globalThis.localStorage = {
+      getItem: (k) => (storeMem.has(k) ? storeMem.get(k) : null),
+      setItem: (k, v) => storeMem.set(k, String(v)),
+      removeItem: (k) => storeMem.delete(k),
+    };
+    globalThis.document = {
+      title: 'busy-bohr - Antigravity',
+      documentElement: { setAttribute() {}, removeAttribute() {}, getAttribute() { return null; } },
+      querySelector: () => null,
+      body: null,
+    };
+
+    const deferredPlaceholder = {
+      cascadeId: emptyDeletedId,
+      stepCount: 1,
+      lastModifiedSec: nowSec - 120,
+      gmCount: 0,
+      calls: 0,
+      _do: 1,
+      days: { '2026-11-24': { calls: 1, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0, hours: new Array(24).fill(0), models: {} } },
+    };
+    assert.equal(homeStudioPanel.hasPersistedTokens(deferredPlaceholder), false, 'hasPersistedTokens must reject _do deferred 0-token placeholder');
+    storeMem.set('test:deleted:rollup', JSON.stringify({
+      [liveId]: makeDayRec(liveId, 10000, 2, 4),
+      [deletedId]: makeDayRec(deletedId, 42000, 5, 6),
+      [emptyDeletedId]: deferredPlaceholder,
+    }));
+
+    let activeSummaries = {
+      [liveId]: { stepCount: 4, lastModifiedTime: { seconds: nowSec }, workspaces: [{ workspaceFolderAbsoluteUri: 'file:///c:/proj/busy-bohr' }] },
+    };
+    globalThis.window = {
+      document: globalThis.document,
+      __agPrismUsageBridge: {
+        isOnline: () => true,
+        listSummaries: async () => ({
+          ok: true,
+          scopeKey: 'local',
+          summaries: Object.entries(activeSummaries).map(([id, s]) => ({ id, ...s })),
+          records: [
+            { id: liveId, mode: 'full', record: makeDayRec(liveId, 10000, 2, 4) },
+            { id: deletedId, mode: 'full', archived: true, record: makeDayRec(deletedId, 42000, 5, 6) },
+          ],
+        }),
+        fetchBatch: async () => ({ ok: true, records: [] }),
+      },
+    };
+
+    const ctl = homeStudioPanel.createHomeStudioPanelController({
+      usageCore,
+      storageUsageCacheKey: 'test:deleted:rollup',
+      isDestroyed: () => false,
+      getHomeLayout: () => 'studio',
+      getLang: () => 'zh-CN',
+      uiText: () => ({}),
+      getDisplayName: () => 'Dev',
+      ensureHooks: () => ({ store: { getState: () => ({ trajectorySummaries: { summaries: activeSummaries } }) }, svc: {} }),
+      canMountRealCanvas: () => false,
+      setAttrIfChanged: () => {},
+      runGuardedMut: (fn) => fn(),
+    });
+
+    await ctl.refreshUsageRollup(true);
+    assert.equal(ctl.getUsageRecordsCount(), 2, 'Live + deleted real-usage records must be retained; 0-token deferred placeholder must be pruned');
+    ctl.flushUsageCacheNow();
+    const persisted = JSON.parse(storeMem.get('test:deleted:rollup') || '{}');
+    assert.ok(persisted[deletedId], 'Deleted conversation usage must persist in localStorage');
+    assert.equal(persisted[emptyDeletedId], undefined, '0-token deferred placeholder must be pruned from localStorage');
+    const agg = usageCore.aggregateUsageRollup(Object.values(persisted), 'all', 0, 'zh-CN', new Date((nowSec + 60) * 1000));
+    assert.equal(agg.tokens, 52000, 'Total tokens must stay 52,000 (10k live + 42k deleted)');
+
+    // 3) Even when ALL live conversations are deleted (entries.length === 0), archived records from listSummaries still hydrate cleanly
+    activeSummaries = {};
+    storeMem.delete('test:deleted:rollup:empty');
+    const ctlEmpty = homeStudioPanel.createHomeStudioPanelController({
+      usageCore,
+      storageUsageCacheKey: 'test:deleted:rollup:empty',
+      isDestroyed: () => false,
+      getHomeLayout: () => 'studio',
+      getLang: () => 'zh-CN',
+      uiText: () => ({}),
+      getDisplayName: () => 'Dev',
+      ensureHooks: () => ({ store: { getState: () => ({ trajectorySummaries: { summaries: {} } }) }, svc: {} }),
+      canMountRealCanvas: () => false,
+      setAttrIfChanged: () => {},
+      runGuardedMut: (fn) => fn(),
+    });
+    await ctlEmpty.refreshUsageRollup(true);
+    assert.equal(ctlEmpty.getUsageRecordsCount(), 2, 'Archived historical usage must still hydrate when 0 live conversations exist');
+
+    // 4) When listSummaries seeds archived records AND fetchBatch is slow/in-flight, seeded archived usage must flush to cache immediately before fetchBatch finishes
+    let resolveSlowBatch = null;
+    const slowKey = 'test:deleted:rollup:slow';
+    storeMem.set(slowKey, JSON.stringify({ [liveId]: makeDayRec(liveId, 10000, 2, 4) }));
+    activeSummaries = {
+      [liveId]: { stepCount: 5, lastModifiedTime: { seconds: nowSec + 10 }, workspaces: [{ workspaceFolderAbsoluteUri: 'file:///c:/proj/busy-bohr' }] },
+    };
+    globalThis.window.__agPrismUsageBridge.fetchBatch = () => new Promise((r) => { resolveSlowBatch = () => r({ ok: true, records: [] }); });
+    const ctlSlow = homeStudioPanel.createHomeStudioPanelController({
+      usageCore,
+      storageUsageCacheKey: slowKey,
+      isDestroyed: () => false,
+      getHomeLayout: () => 'studio',
+      getLang: () => 'zh-CN',
+      uiText: () => ({}),
+      getDisplayName: () => 'Dev',
+      ensureHooks: () => ({ store: { getState: () => ({ trajectorySummaries: { summaries: activeSummaries } }) }, svc: {} }),
+      canMountRealCanvas: () => false,
+      setAttrIfChanged: () => {},
+      runGuardedMut: (fn) => fn(),
+    });
+    const slowProm = ctlSlow.refreshUsageRollup(true);
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(ctlSlow.getUsageRecordsCount(), 2, 'Seeded archived record must be available in memory while fetchBatch is still in-flight');
+    ctlSlow.flushUsageCacheNow();
+    const slowSaved = JSON.parse(storeMem.get(slowKey) || '{}');
+    assert.ok(slowSaved[deletedId], 'Seeded archived record must be persisted even before slow fetchBatch completes');
+    if (resolveSlowBatch) resolveSlowBatch();
+    await slowProm;
+
+    // 5) Frozen Redux/Immer summary objects must NEVER throw TypeError when merging listSummaries metadata (which previously aborted before assigning bridgeRecs!)
+    const frozenKey = 'test:deleted:rollup:frozen';
+    storeMem.delete(frozenKey);
+    const frozenSummaries = Object.freeze({
+      [liveId]: Object.freeze({ stepCount: 4, lastModifiedTime: Object.freeze({ seconds: nowSec }) }),
+    });
+    globalThis.window.__agPrismUsageBridge.listSummaries = async () => ({
+      ok: true,
+      scopeKey: 'local',
+      summaries: [{ id: liveId, stepCount: 4, lastModifiedSec: nowSec, workspace: 'busy-bohr', workspaces: ['file:///c:/proj/busy-bohr'], parentId: 'root-parent-1' }],
+      records: [
+        { id: liveId, mode: 'full', record: makeDayRec(liveId, 10000, 2, 4) },
+        { id: deletedId, mode: 'full', archived: true, record: makeDayRec(deletedId, 42000, 5, 6) },
+      ],
+    });
+    globalThis.window.__agPrismUsageBridge.fetchBatch = async () => ({ ok: true, records: [] });
+    const ctlFrozen = homeStudioPanel.createHomeStudioPanelController({
+      usageCore,
+      storageUsageCacheKey: frozenKey,
+      isDestroyed: () => false,
+      getHomeLayout: () => 'studio',
+      getLang: () => 'zh-CN',
+      uiText: () => ({}),
+      getDisplayName: () => 'Dev',
+      ensureHooks: () => ({ store: { getState: () => ({ trajectorySummaries: { summaries: frozenSummaries } }) }, svc: {} }),
+      canMountRealCanvas: () => false,
+      setAttrIfChanged: () => {},
+      runGuardedMut: (fn) => fn(),
+    });
+    await ctlFrozen.refreshUsageRollup(true);
+    assert.equal(ctlFrozen.getUsageRecordsCount(), 2, 'Frozen Redux summary objects must not throw or drop bridgeRecs');
+    ctlFrozen.flushUsageCacheNow();
+    const frozenSaved = JSON.parse(storeMem.get(frozenKey) || '{}');
+    assert.ok(frozenSaved[deletedId], 'Archived deleted conversation must hydrate even when Redux summaries are Object.freeze()d');
+  } finally {
+    globalThis.window = prevWin;
+    globalThis.document = prevDoc;
+    globalThis.localStorage = prevLs;
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('Boundary: stepCount: 0 live conversation coexists with archived: true deleted conversation without triggering extra fetchBatch', async () => {
+  const homeStudioPanel = require('../home-studio-panel.js');
+  const zeroStepId = 'eeeeeeee-5555-4555-8555-555555555555';
+  const archivedId = 'ffffffff-6666-4666-8666-666666666666';
+  const nowSec = 1763500100;
+  const makeRec = (id, total, calls, stepCount) => ({
+    cascadeId: id,
+    stepCount,
+    lastModifiedSec: nowSec,
+    gmCount: calls,
+    calls,
+    workspace: 'busy-bohr',
+    days: {
+      '2026-11-24': { calls, input: Math.floor(total * 0.6), output: Math.floor(total * 0.4), cacheRead: 0, cacheWrite: 0, total, hours: new Array(24).fill(0), models: {} },
+    },
+  });
+
+  const prevWin = globalThis.window;
+  const prevDoc = globalThis.document;
+  const prevLs = globalThis.localStorage;
+  try {
+    const storeMem = new Map();
+    const key = 'test:boundary:zerostep:archived';
+    storeMem.set(key, JSON.stringify({ [zeroStepId]: makeRec(zeroStepId, 8000, 2, 3) }));
+    globalThis.localStorage = {
+      getItem: (k) => (storeMem.has(k) ? storeMem.get(k) : null),
+      setItem: (k, v) => storeMem.set(k, String(v)),
+      removeItem: (k) => storeMem.delete(k),
+    };
+    globalThis.document = {
+      title: 'busy-bohr - Antigravity',
+      documentElement: { setAttribute() {}, removeAttribute() {}, getAttribute() { return null; } },
+      querySelector: () => null,
+      body: null,
+    };
+    const activeSummaries = {
+      // 模拟宿主摘要暂报 stepCount: 0 但 lastModifiedTime 未变的在线会话
+      [zeroStepId]: { stepCount: 0, lastModifiedTime: { seconds: nowSec }, workspaces: [{ workspaceFolderAbsoluteUri: 'file:///c:/proj/busy-bohr' }] },
+    };
+    let fetchBatchCalls = 0;
+    globalThis.window = {
+      document: globalThis.document,
+      __agPrismUsageBridge: {
+        isOnline: () => true,
+        listSummaries: async () => ({
+          ok: true,
+          scopeKey: 'local',
+          summaries: [{ id: zeroStepId, stepCount: 0, lastModifiedSec: nowSec, workspace: 'busy-bohr' }],
+          records: [{ id: archivedId, mode: 'full', archived: true, record: makeRec(archivedId, 12000, 3, 5) }],
+        }),
+        fetchBatch: async () => { fetchBatchCalls += 1; return { ok: true, records: [] }; },
+      },
+    };
+    const ctl = homeStudioPanel.createHomeStudioPanelController({
+      usageCore,
+      storageUsageCacheKey: key,
+      isDestroyed: () => false,
+      getHomeLayout: () => 'studio',
+      getLang: () => 'zh-CN',
+      uiText: () => ({}),
+      getDisplayName: () => 'Dev',
+      ensureHooks: () => ({ store: { getState: () => ({ trajectorySummaries: { summaries: activeSummaries } }) }, svc: {} }),
+      canMountRealCanvas: () => false,
+      setAttrIfChanged: () => {},
+      runGuardedMut: (fn) => fn(),
+    });
+    await ctl.refreshUsageRollup(true);
+    assert.equal(fetchBatchCalls, 0, 'stepCount: 0 live conversation with cached real usage must not trigger redundant fetchBatch');
+    assert.equal(ctl.getUsageRecordsCount(), 2, 'Both live stepCount: 0 session and archived: true deleted session must coexist');
+    ctl.flushUsageCacheNow();
+    const saved = JSON.parse(storeMem.get(key) || '{}');
+    assert.equal(saved[zeroStepId]?.days?.['2026-11-24']?.total, 8000);
+    assert.equal(saved[archivedId]?.days?.['2026-11-24']?.total, 12000);
+  } finally {
+    globalThis.window = prevWin;
+    globalThis.document = prevDoc;
+    globalThis.localStorage = prevLs;
+  }
+});
+
+test('Boundary: slow fetchBatch triggers saveUsageCache and renderHomePanel immediately when seededCache is true', async () => {
+  const homeStudioPanel = require('../home-studio-panel.js');
+  const liveId = '11111111-7777-4777-8777-777777777777';
+  const archivedId = '22222222-8888-4888-8888-888888888888';
+  const nowSec = 1763500200;
+  const makeRec = (id, total, calls, stepCount) => ({
+    cascadeId: id,
+    stepCount,
+    lastModifiedSec: nowSec,
+    gmCount: calls,
+    calls,
+    workspace: 'busy-bohr',
+    days: {
+      '2026-11-24': { calls, input: Math.floor(total * 0.6), output: Math.floor(total * 0.4), cacheRead: 0, cacheWrite: 0, total, hours: new Array(24).fill(0), models: {} },
+    },
+  });
+
+  const prevWin = globalThis.window;
+  const prevDoc = globalThis.document;
+  const prevLs = globalThis.localStorage;
+  try {
+    const storeMem = new Map();
+    const key = 'test:boundary:slow:autopersist';
+    // 预置 liveId 让 usageHasData 在初始化时即为 true，确保能直接验证 !usageHasData || seededCache 分支
+    storeMem.set(key, JSON.stringify({ [liveId]: makeRec(liveId, 5000, 1, 2) }));
+    globalThis.localStorage = {
+      getItem: (k) => (storeMem.has(k) ? storeMem.get(k) : null),
+      setItem: (k, v) => storeMem.set(k, String(v)),
+      removeItem: (k) => storeMem.delete(k),
+    };
+    globalThis.document = {
+      title: 'busy-bohr - Antigravity',
+      documentElement: { setAttribute() {}, removeAttribute() {}, getAttribute() { return null; } },
+      querySelector: () => null,
+      body: null,
+    };
+    const activeSummaries = {
+      [liveId]: { stepCount: 5, lastModifiedTime: { seconds: nowSec + 20 }, workspaces: [{ workspaceFolderAbsoluteUri: 'file:///c:/proj/busy-bohr' }] },
+    };
+    let resolveSlowBatch = null;
+    let renderLayoutChecks = 0;
+    globalThis.window = {
+      document: globalThis.document,
+      __agPrismUsageBridge: {
+        isOnline: () => true,
+        listSummaries: async () => ({
+          ok: true,
+          scopeKey: 'local',
+          summaries: [{ id: liveId, stepCount: 5, lastModifiedSec: nowSec + 20, workspace: 'busy-bohr' }],
+          records: [{ id: archivedId, mode: 'full', archived: true, record: makeRec(archivedId, 18000, 4, 6) }],
+        }),
+        fetchBatch: () => new Promise((r) => { resolveSlowBatch = () => r({ ok: true, records: [] }); }),
+      },
+    };
+    const ctl = homeStudioPanel.createHomeStudioPanelController({
+      usageCore,
+      storageUsageCacheKey: key,
+      isDestroyed: () => false,
+      getHomeLayout: () => { renderLayoutChecks += 1; return 'studio'; },
+      getLang: () => 'zh-CN',
+      uiText: () => ({}),
+      getDisplayName: () => 'Dev',
+      ensureHooks: () => ({ store: { getState: () => ({ trajectorySummaries: { summaries: activeSummaries } }) }, svc: {} }),
+      canMountRealCanvas: () => false,
+      setAttrIfChanged: () => {},
+      runGuardedMut: (fn) => fn(),
+    });
+    const prom = ctl.refreshUsageRollup(true);
+    // 等待 saveUsageCache() 的 1200ms 延迟存盘自然触发，全程不调用 flushUsageCacheNow()，且 fetchBatch 仍处于 pending
+    await new Promise((r) => setTimeout(r, 1350));
+    assert.ok(renderLayoutChecks >= 1, 'renderHomePanel must run immediately before slow fetchBatch finishes even when usageHasData is already true');
+    const savedBeforeBatchDone = JSON.parse(storeMem.get(key) || '{}');
+    assert.ok(savedBeforeBatchDone[archivedId], 'saveUsageCache must persist seeded archived record automatically while fetchBatch is still in-flight');
+    if (resolveSlowBatch) resolveSlowBatch();
+    await prom;
+  } finally {
+    globalThis.window = prevWin;
+    globalThis.document = prevDoc;
+    globalThis.localStorage = prevLs;
+  }
+});
+
+test('Self-referential rootConversationId on main conversations is never misclassified as subagent and auto-heals poisoned caches', async () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const homeStudioPanel = require('../home-studio-panel.js');
+  const { PrismDaemon } = await import('../sidecars/daemon/main.mjs');
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ag-prism-self-root-'));
+  const cacheFile = path.join(tmpDir, 'usage-cache.json');
+  const nowSec = Math.floor(Date.now() / 1000);
+  const dKey = usageCore.homeDayKey(new Date(nowSec * 1000));
+  const mainId = '37df370c-2a64-4ad4-a9d6-9fd7429ea757';
+  const subId = 'd17837e3-f5b2-4220-9d1b-5bf39df8979d';
+
+  // 1) usage-core: rootConversationId === cascadeId must NOT yield self parentId or subagent=true
+  const mainSummary = {
+    cascadeId: mainId,
+    stepCount: 20,
+    lastModifiedTime: { seconds: nowSec },
+    rootConversationId: mainId,
+    trajectoryMetadata: { parentConversationId: '', rootConversationId: mainId, nestingDepth: 0 },
+  };
+  assert.equal(usageCore.isSubagentSummary(mainSummary, mainId), false);
+  const analyzedMain = usageCore.analyzeTrajectoryForUsage(
+    {
+      numTotalSteps: 20,
+      trajectory: {
+        cascadeId: mainId,
+        steps: [{ metadata: { createdAt: new Date(nowSec * 1000).toISOString() } }],
+        generatorMetadata: [{ chatModel: { model: 'Gemini 4 Neon', usage: { inputTokens: 1000, outputTokens: 200 } } }],
+      },
+    },
+    mainSummary,
+    mainId
+  );
+  assert.equal(analyzedMain.subagent, false, 'Main conversation with rootConversationId===self must stay subagent=false');
+  assert.equal(analyzedMain.parentId, '', 'Main conversation with rootConversationId===self must have empty parentId');
+
+  // Real subagent (parentConversationId !== self) must remain subagent=true
+  const subSummary = {
+    cascadeId: subId,
+    stepCount: 8,
+    lastModifiedTime: { seconds: nowSec },
+    parentConversationId: mainId,
+    rootConversationId: mainId,
+    trajectoryMetadata: { parentConversationId: mainId, rootConversationId: mainId, nestingDepth: 1 },
+  };
+  assert.equal(usageCore.isSubagentSummary(subSummary, subId), true);
+
+  // 2) aggregateUsageRollup auto-heals legacy poisoned { cascadeId: X, parentId: X, subagent: true } records
+  const poisonedMainRec = {
+    cascadeId: mainId,
+    stepCount: 20,
+    lastModifiedSec: nowSec,
+    gmCount: 5,
+    subagent: true,
+    workspace: 'PCL',
+    parentId: mainId,
+    calls: 5,
+    days: { [dKey]: { calls: 5, input: 1000, output: 200, cacheRead: 0, cacheWrite: 0, total: 1200, hours: new Array(24).fill(0), models: { 'Gemini 4': { input: 1000, output: 200, cacheRead: 0, cacheWrite: 0, total: 1200, calls: 5 } } } },
+  };
+  const realSubRec = {
+    cascadeId: subId,
+    stepCount: 8,
+    lastModifiedSec: nowSec,
+    gmCount: 2,
+    subagent: true,
+    workspace: 'PCL',
+    parentId: mainId,
+    calls: 2,
+    days: { [dKey]: { calls: 2, input: 300, output: 100, cacheRead: 0, cacheWrite: 0, total: 400, hours: new Array(24).fill(0), models: { 'Gemini 4': { input: 300, output: 100, cacheRead: 0, cacheWrite: 0, total: 400, calls: 2 } } } },
+  };
+  const agg = usageCore.aggregateUsageRollup([poisonedMainRec, realSubRec], 'all', 0.1, true, new Date(nowSec * 1000));
+  assert.equal(agg.sessions, 1, 'Self-parent poisoned main record must be counted as a main session');
+  assert.equal(agg.subagentSessions, 1, 'Real subagent must still be counted as a subagent session');
+  assert.equal(agg.mainTokens, 1200, 'Poisoned main tokens must count under mainTokens, not subagentTokens');
+  assert.equal(agg.subagentTokens, 400);
+
+  // 3) Daemon disk cache auto-heals poisoned self-parent record on load & strips self rootId in summaries
+  fs.writeFileSync(
+    cacheFile,
+    JSON.stringify({
+      version: 2,
+      scopes: {
+        local: {
+          [mainId]: { stepCount: 20, lastModifiedSec: nowSec, record: poisonedMainRec },
+          [subId]: { stepCount: 8, lastModifiedSec: nowSec, record: realSubRec },
+        },
+      },
+    }),
+    'utf8'
+  );
+  const repoRoot = path.resolve(require('node:url').fileURLToPath(import.meta.url), '..', '..');
+  const daemon = new PrismDaemon({ rootDir: repoRoot, usageCachePath: cacheFile, silent: true });
+  daemon._discoverLocalAppConversations = () => [];
+  daemon._lazyLsClient = {
+    server: { port: 12349, mode: 'http' },
+    call: async (method) => {
+      if (method === 'GetAllCascadeTrajectories') {
+        return {
+          trajectorySummaries: {
+            [mainId]: { stepCount: 20, lastModifiedTime: { seconds: String(nowSec) }, trajectoryMetadata: { parentConversationId: '', rootConversationId: mainId, nestingDepth: 0 } },
+            [subId]: { stepCount: 8, lastModifiedTime: { seconds: String(nowSec) }, trajectoryMetadata: { parentConversationId: mainId, rootConversationId: mainId, nestingDepth: 1 } },
+          },
+        };
+      }
+      return {};
+    },
+  };
+  const listRes = await daemon.fetchUsageRollupBatch([], { action: 'list-summaries', scopeKey: 'local' });
+  const mainSumOut = listRes.summaries.find((s) => s.id === mainId);
+  const mainRecOut = listRes.records.find((r) => r.id === mainId)?.record;
+  const subRecOut = listRes.records.find((r) => r.id === subId)?.record;
+  assert.equal(mainSumOut?.subagent, false, 'Daemon summary for main conv must have subagent=false');
+  assert.equal(mainSumOut?.rootId, undefined, 'Daemon summary must strip self-referential rootId');
+  assert.equal(mainRecOut?.subagent, false, 'Daemon disk cache must auto-heal poisoned main record subagent->false');
+  assert.equal(mainRecOut?.parentId, '', 'Daemon disk cache must auto-heal poisoned self parentId->empty');
+  assert.equal(subRecOut?.subagent, true, 'Real subagent record must stay subagent=true');
+  daemon._flushUsageDiskCache();
+
+  // 4) home-studio-panel heals poisoned localStorage and does not send subagent=true for rootId===self
+  const prevWin = globalThis.window;
+  const prevDoc = globalThis.document;
+  const prevLs = globalThis.localStorage;
+  try {
+    const storeMem = new Map();
+    const key = 'test:self-root:rollup';
+    storeMem.set(key, JSON.stringify({ [mainId]: poisonedMainRec, [subId]: realSubRec }));
+    globalThis.localStorage = {
+      getItem: (k) => (storeMem.has(k) ? storeMem.get(k) : null),
+      setItem: (k, v) => storeMem.set(k, String(v)),
+      removeItem: (k) => storeMem.delete(k),
+    };
+    globalThis.document = { documentElement: { removeAttribute() {} }, title: 'Antigravity', querySelector: () => null };
+    let capturedBatchItems = [];
+    globalThis.window = {
+      document: globalThis.document,
+      __agPrismUsageBridge: {
+        isOnline: () => true,
+        listSummaries: async () => ({
+          ok: true,
+          scopeKey: 'local',
+          summaries: [{ id: mainId, stepCount: 25, lastModifiedSec: nowSec + 10, rootId: mainId, rootConversationId: mainId, workspace: 'PCL' }],
+          records: [{ id: mainId, mode: 'full', record: poisonedMainRec }],
+        }),
+        fetchBatch: async (items) => {
+          capturedBatchItems = items;
+          return {
+            ok: true,
+            records: items.map((it) => ({
+              id: it.id,
+              mode: 'full',
+              record: { ...poisonedMainRec, stepCount: it.stepCount, lastModifiedSec: it.lastModifiedSec, subagent: it.subagent, parentId: it.parentId },
+            })),
+          };
+        },
+      },
+    };
+    const ctl = homeStudioPanel.createHomeStudioPanelController({
+      usageCore,
+      storageUsageCacheKey: key,
+      isDestroyed: () => false,
+      getHomeLayout: () => 'studio',
+      getLang: () => 'zh-CN',
+      uiText: () => ({}),
+      getDisplayName: () => 'Dev',
+      ensureHooks: () => ({ store: { getState: () => ({ trajectorySummaries: { summaries: { [mainId]: { stepCount: 25, lastModifiedTime: { seconds: nowSec + 10 }, rootConversationId: mainId } } } }) }, svc: {} }),
+      canMountRealCanvas: () => false,
+      setAttrIfChanged: () => {},
+      runGuardedMut: (fn) => fn(),
+    });
+    await ctl.refreshUsageRollup(true);
+    assert.equal(capturedBatchItems.length, 1);
+    assert.equal(capturedBatchItems[0].subagent, false, 'home-studio-panel must NOT send subagent=true when rootId===self');
+    assert.equal(capturedBatchItems[0].parentId, '', 'home-studio-panel must NOT send self parentId when rootId===self');
+    ctl.flushUsageCacheNow();
+    const saved = JSON.parse(storeMem.get(key) || '{}');
+    assert.equal(saved[mainId]?.subagent, false, 'Saved localStorage main record must be healed to subagent=false');
+    assert.equal(saved[mainId]?.parentId, '', 'Saved localStorage main record must have empty parentId');
+    assert.equal(saved[subId]?.subagent, true, 'Saved localStorage real subagent must remain subagent=true');
+  } finally {
+    globalThis.window = prevWin;
+    globalThis.document = prevDoc;
+    globalThis.localStorage = prevLs;
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('Boundary: legacy poisoned { cascadeId: X, subagent: true, parentId: "", rootId: X } is fully healed across usage-core, daemon, panel, and archive catalog', async () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const homeStudioPanel = require('../home-studio-panel.js');
+  const { PrismDaemon } = await import('../sidecars/daemon/main.mjs');
+  const arch = await import('../sidecars/daemon/conversation-archive.mjs');
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ag-prism-self-root-empty-parent-'));
+  const cacheFile = path.join(tmpDir, 'usage-cache.json');
+  const archiveDir = path.join(tmpDir, 'archive');
+  const nowSec = Math.floor(Date.now() / 1000);
+  const dKey = usageCore.homeDayKey(new Date(nowSec * 1000));
+  const mainId = '4a5b6c7d-1234-4abc-8def-112233445566';
+  const mainIdUpper = mainId.toUpperCase();
+  const archivedMainId = '7d6c5b4a-4321-4cba-9fed-665544332211';
+
+  const makeRootPoisonRec = (id, rootVal, tok) => ({
+    cascadeId: id,
+    stepCount: 12,
+    lastModifiedSec: nowSec,
+    gmCount: 3,
+    subagent: true,
+    workspace: 'prism-lab',
+    parentId: '',
+    rootId: rootVal,
+    calls: 3,
+    days: {
+      [dKey]: {
+        calls: 3,
+        input: Math.floor(tok * 0.7),
+        output: Math.ceil(tok * 0.3),
+        cacheRead: 0,
+        cacheWrite: 0,
+        total: tok,
+        hours: new Array(24).fill(0),
+        models: { 'Gemini 4 Carbon': { input: Math.floor(tok * 0.7), output: Math.ceil(tok * 0.3), cacheRead: 0, cacheWrite: 0, total: tok, calls: 3 } },
+      },
+    },
+  });
+
+  const poisonedRec = makeRootPoisonRec(mainId, mainIdUpper, 2000);
+  const poisonedArchivedRec = makeRootPoisonRec(archivedMainId, archivedMainId, 1500);
+
+  // 1) usage-core: isSubagentSummary / mergeUsageRecordDelta / aggregateUsageRollup all heal empty-parent self-rootId (case-insensitive)
+  assert.equal(usageCore.isSubagentSummary({ cascadeId: mainId, subagent: true, parentId: '', rootId: mainIdUpper }), false);
+  const merged = usageCore.mergeUsageRecordDelta(
+    poisonedRec,
+    { calls: 1, days: { [dKey]: { calls: 1, input: 400, output: 100, cacheRead: 0, cacheWrite: 0, total: 500, hours: new Array(24).fill(0), models: {} } } },
+    { cascadeId: mainId, stepCount: 14, lastModifiedSec: nowSec + 5 }
+  );
+  assert.equal(merged.subagent, false, 'mergeUsageRecordDelta must heal poisoned baseRec with empty parentId and self rootId');
+  assert.equal(merged.parentId, '');
+  const agg = usageCore.aggregateUsageRollup([poisonedRec], 'all', 0.1, true, new Date(nowSec * 1000));
+  assert.equal(agg.sessions, 1, 'aggregateUsageRollup must count empty-parent self-rootId record as main session');
+  assert.equal(agg.subagentSessions, 0);
+  assert.equal(agg.mainTokens, 2000);
+  assert.equal(agg.subagentTokens, 0);
+
+  // 2) Daemon: strips self-referential rootId from summaries, heals both live & archived disk records, and sanitizes fetch-batch hits
+  fs.writeFileSync(
+    cacheFile,
+    JSON.stringify({
+      version: 2,
+      scopes: {
+        local: {
+          [mainId]: { stepCount: 12, lastModifiedSec: nowSec, record: poisonedRec },
+          [archivedMainId]: { stepCount: 12, lastModifiedSec: nowSec - 60, record: poisonedArchivedRec },
+        },
+      },
+    }),
+    'utf8'
+  );
+  const repoRoot = path.resolve(require('node:url').fileURLToPath(import.meta.url), '..', '..');
+  const daemon = new PrismDaemon({ rootDir: repoRoot, usageCachePath: cacheFile, silent: true });
+  daemon._discoverLocalAppConversations = () => [];
+  daemon._lazyLsClient = {
+    server: { port: 12350, mode: 'http' },
+    call: async (method) => {
+      if (method === 'GetAllCascadeTrajectories') {
+        return {
+          trajectorySummaries: {
+            [mainId]: {
+              stepCount: 12,
+              lastModifiedTime: { seconds: String(nowSec) },
+              subagent: true,
+              parentId: '',
+              rootId: mainIdUpper,
+              trajectoryMetadata: { parentConversationId: '', rootConversationId: mainIdUpper, nestingDepth: 0 },
+            },
+          },
+        };
+      }
+      return {};
+    },
+  };
+  const listRes = await daemon.fetchUsageRollupBatch([], { action: 'list-summaries', scopeKey: 'local' });
+  const liveSum = listRes.summaries.find((s) => s.id === mainId);
+  const liveRec = listRes.records.find((r) => r.id === mainId)?.record;
+  const archItem = listRes.records.find((r) => r.id === archivedMainId);
+  assert.equal(liveSum?.subagent, false, 'Daemon summary must ignore self-rootId poisoned subagent flag');
+  assert.equal(liveSum?.rootId, undefined, 'Daemon summary must strip self-referential rootId (case-insensitive)');
+  assert.equal(liveRec?.subagent, false, 'Daemon disk cache must heal live empty-parent self-rootId record');
+  assert.equal(liveRec?.rootId, undefined, 'Daemon disk cache must remove self-referential rootId from live record');
+  assert.equal(archItem?.archived, true, 'Archived deleted record must remain flagged archived: true');
+  assert.equal(archItem?.record?.subagent, false, 'Daemon disk cache must also heal archived empty-parent self-rootId record');
+  assert.equal(archItem?.record?.rootId, undefined, 'Daemon disk cache must strip self rootId from archived record');
+
+  const batchRes = await daemon.fetchUsageRollupBatch(
+    [{ id: mainId, stepCount: 12, lastModifiedSec: nowSec, subagent: true, parentId: '', rootId: mainIdUpper }],
+    { action: 'fetch-batch', scopeKey: 'local' }
+  );
+  assert.equal(batchRes.records[0]?.subagent, false, 'fetch-batch must not re-poison disk cache hit when item sends self rootId');
+  assert.equal(batchRes.records[0]?.record?.subagent, false);
+  assert.equal(batchRes.records[0]?.record?.rootId, undefined);
+  daemon._flushUsageDiskCache();
+
+  // 3) conversation-archive: saveCatalogIndex must not persist self-referential parentId/rootId into .last-catalog-index.json
+  arch.saveCatalogIndex(archiveDir, {
+    [mainId]: { summary: 'Main With Self Refs', parentId: mainIdUpper, rootConversationId: mainIdUpper, subagent: true },
+  });
+  const catalogJson = arch.loadCatalogIndex(archiveDir);
+  assert.equal(catalogJson.entries[mainId]?.subagent, false, 'Catalog index must classify self-ref entry as main');
+  assert.equal(catalogJson.entries[mainId]?.parentId, undefined, 'Catalog index must not write self-referential parentId');
+  assert.equal(catalogJson.entries[mainId]?.rootId, undefined, 'Catalog index must not write self-referential rootId');
+
+  // 4) home-studio-panel: heals poisoned localStorage even when 0 stale items exist
+  const prevWin = globalThis.window;
+  const prevDoc = globalThis.document;
+  const prevLs = globalThis.localStorage;
+  try {
+    const storeMem = new Map();
+    const key = 'test:self-root-empty-parent:rollup';
+    storeMem.set(key, JSON.stringify({ [mainId]: poisonedRec }));
+    globalThis.localStorage = {
+      getItem: (k) => (storeMem.has(k) ? storeMem.get(k) : null),
+      setItem: (k, v) => storeMem.set(k, String(v)),
+      removeItem: (k) => storeMem.delete(k),
+    };
+    globalThis.document = { documentElement: { removeAttribute() {} }, title: 'prism-lab - Antigravity', querySelector: () => null };
+    globalThis.window = {
+      document: globalThis.document,
+      __agPrismUsageBridge: {
+        isOnline: () => true,
+        listSummaries: async () => ({
+          ok: true,
+          scopeKey: 'local',
+          summaries: [{ id: mainId, stepCount: 12, lastModifiedSec: nowSec, rootId: mainIdUpper, workspace: 'prism-lab' }],
+          records: [{ id: mainId, mode: 'full', record: poisonedRec }],
+        }),
+        fetchBatch: async () => ({ ok: true, records: [] }),
+      },
+    };
+    const ctl = homeStudioPanel.createHomeStudioPanelController({
+      usageCore,
+      storageUsageCacheKey: key,
+      isDestroyed: () => false,
+      getHomeLayout: () => 'studio',
+      getLang: () => 'zh-CN',
+      uiText: () => ({}),
+      getDisplayName: () => 'Dev',
+      ensureHooks: () => ({ store: { getState: () => ({ trajectorySummaries: { summaries: { [mainId]: { stepCount: 12, lastModifiedTime: { seconds: nowSec }, rootConversationId: mainIdUpper } } } }) }, svc: {} }),
+      canMountRealCanvas: () => false,
+      setAttrIfChanged: () => {},
+      runGuardedMut: (fn) => fn(),
+    });
+    await ctl.refreshUsageRollup(true);
+    ctl.flushUsageCacheNow();
+    const saved = JSON.parse(storeMem.get(key) || '{}');
+    assert.equal(saved[mainId]?.subagent, false, 'Panel must heal { parentId: "", rootId: X, subagent: true } to subagent=false');
+    assert.equal(saved[mainId]?.parentId, '');
+    assert.equal(saved[mainId]?.rootId, undefined, 'Panel must strip self-referential rootId when saving localStorage');
+  } finally {
+    globalThis.window = prevWin;
+    globalThis.document = prevDoc;
+    globalThis.localStorage = prevLs;
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('Smoked Obsidian Wave 1: home-studio-panel renders pure createElementNS SVG area-line trend chart & stamps full 5+1 no-translate attrs on heatTipEl', () => {
+  const homeStudioPanel = require('../home-studio-panel.js');
+  const prevWin = globalThis.window;
+  const prevDoc = globalThis.document;
+  const prevLs = globalThis.localStorage;
+  const prevRaf = globalThis.requestAnimationFrame;
+  const svgCreated = [];
+  const innerHtmlWrites = [];
+  const mkNode = (tag, ns = '') => {
+    const attrs = new Map();
+    const listeners = new Map();
+    const node = {
+      nodeType: 1,
+      tagName: String(tag).toUpperCase(),
+      namespaceURI: ns,
+      children: [],
+      parentElement: null,
+      style: {},
+      textContent: '',
+      className: '',
+      isConnected: true,
+      get childElementCount() { return node.children.length; },
+      get previousSibling() {
+        if (!node.parentElement) return null;
+        const i = node.parentElement.children.indexOf(node);
+        return i > 0 ? node.parentElement.children[i - 1] : null;
+      },
+      get nextSibling() {
+        if (!node.parentElement) return null;
+        const i = node.parentElement.children.indexOf(node);
+        return i >= 0 ? node.parentElement.children[i + 1] || null : null;
+      },
+      get innerHTML() { return ''; },
+      set innerHTML(v) {
+        if (v !== '') innerHtmlWrites.push(v);
+        node.children = [];
+      },
+      setAttribute(k, v) {
+        attrs.set(k, String(v));
+        if (k === 'class') node.className = String(v);
+        if (k === 'id') node.id = String(v);
+      },
+      getAttribute(k) { return attrs.has(k) ? attrs.get(k) : null; },
+      removeAttribute(k) { attrs.delete(k); },
+      appendChild(c) {
+        if (!c) return c;
+        c.parentElement = node;
+        node.children.push(c);
+        return c;
+      },
+      insertBefore(c, ref) {
+        if (!ref) return node.appendChild(c);
+        const i = node.children.indexOf(ref);
+        c.parentElement = node;
+        if (i >= 0) node.children.splice(i, 0, c);
+        else node.children.push(c);
+        return c;
+      },
+      removeChild(c) {
+        const i = node.children.indexOf(c);
+        if (i >= 0) node.children.splice(i, 1);
+        c.parentElement = null;
+        return c;
+      },
+      addEventListener(ev, fn) {
+        if (!listeners.has(ev)) listeners.set(ev, []);
+        listeners.get(ev).push(fn);
+      },
+      click() {
+        for (const fn of listeners.get('click') || []) fn({ target: node });
+      },
+      querySelector(sel) { return node.querySelectorAll(sel)[0] || null; },
+      querySelectorAll(sel) {
+        const out = [];
+        const walk = (cur) => {
+          for (const ch of cur.children) {
+            const cls = String(ch.className || '').split(/\s+/);
+            const ok = sel.startsWith('.')
+              ? cls.includes(sel.slice(1))
+              : sel.startsWith('[data-tab="')
+              ? ch.getAttribute('data-tab') === sel.slice(11, -2)
+              : sel === '[data-testid="home-greeting"]'
+              ? ch.getAttribute('data-testid') === 'home-greeting'
+              : ch.tagName === sel.toUpperCase();
+            if (ok) out.push(ch);
+            walk(ch);
+          }
+        };
+        walk(node);
+        return out;
+      },
+    };
+    return node;
+  };
+  try {
+    const docEl = mkNode('html');
+    const head = mkNode('head');
+    const body = mkNode('body');
+    const home = mkNode('div');
+    home.className = 'agy-home';
+    const greeting = mkNode('div');
+    greeting.setAttribute('data-testid', 'home-greeting');
+    home.appendChild(greeting);
+    body.appendChild(home);
+    docEl.appendChild(head);
+    docEl.appendChild(body);
+    const d1 = usageCore.homeDayKey(new Date(Date.now() - 2 * 86400000));
+    const d2 = usageCore.homeDayKey(new Date(Date.now() - 86400000));
+    const d3 = usageCore.homeDayKey(new Date());
+    const lsMap = new Map([[
+      'test:svg-wave1',
+      JSON.stringify({
+        c1: {
+          cascadeId: 'c1',
+          subagent: false,
+          days: {
+            [d1]: { calls: 1, input: 2000, output: 500, cacheRead: 0, cacheWrite: 0, total: 2500, hours: new Array(24).fill(0), models: { 'Gemini 4': { input: 2000, output: 500, cacheRead: 0, cacheWrite: 0, total: 2500, calls: 1 } } },
+            [d2]: { calls: 2, input: 8000, output: 2000, cacheRead: 0, cacheWrite: 0, total: 10000, hours: new Array(24).fill(0), models: { 'Gemini 4': { input: 8000, output: 2000, cacheRead: 0, cacheWrite: 0, total: 10000, calls: 2 } } },
+            [d3]: { calls: 1, input: 4000, output: 1000, cacheRead: 0, cacheWrite: 0, total: 5000, hours: new Array(24).fill(0), models: { 'Claude Opus': { input: 4000, output: 1000, cacheRead: 0, cacheWrite: 0, total: 5000, calls: 1 } } },
+          },
+        },
+      }),
+    ]]);
+    globalThis.localStorage = { getItem: (k) => lsMap.get(k) ?? null, setItem: (k, v) => lsMap.set(k, v) };
+    globalThis.requestAnimationFrame = () => 1;
+    globalThis.document = {
+      documentElement: docEl,
+      head,
+      body,
+      title: 'Antigravity',
+      createElement: (tag) => mkNode(tag),
+      createElementNS: (ns, tag) => { const n = mkNode(tag, ns); svgCreated.push(tag); return n; },
+      getElementById: (id) => head.children.find((c) => c.id === id) || null,
+      querySelector: (sel) => docEl.querySelector(sel),
+    };
+    globalThis.window = { document: globalThis.document };
+
+    const ctl = homeStudioPanel.createHomeStudioPanelController({
+      usageCore,
+      storageUsageCacheKey: 'test:svg-wave1',
+      isDestroyed: () => false,
+      getHomeLayout: () => 'studio',
+      getLang: () => 'en',
+      uiText: () => ({}),
+      getDisplayName: () => 'Dev',
+      ensureHooks: () => null,
+      canMountRealCanvas: () => true,
+      setAttrIfChanged: (el, k, v) => el?.setAttribute?.(k, v),
+      runGuardedMut: (fn) => fn(),
+    });
+    ctl.renderHomePanel(true);
+
+    // 1) Overview heatTipEl carries complete 5+1 anti-translation attributes
+    const heatTip = home.querySelector('.ag-cs-home-heat-hint');
+    assert.ok(heatTip, 'heatTipEl must exist on overview tab');
+    for (const [k, v] of [['translate', 'no'], ['data-no-translate', 'true'], ['data-ag-localization-skip', 'true'], ['data-agy-no-translate', 'true'], ['data-antigravity-zh-skip', '1'], ['data-ag-no-i18n', '']]) {
+      assert.equal(heatTip.getAttribute(k), v, `heatTipEl must carry ${k}="${v}"`);
+    }
+
+    // 2) Switch to Models tab -> pure createElementNS SVG area-line chart & peak marker rendered with zero innerHTML writes
+    const modelsTab = home.querySelector('[data-tab="models"]');
+    assert.ok(modelsTab, 'Models tab button must exist');
+    modelsTab.click();
+
+    const svgEl = home.querySelector('.ag-cs-home-chart-svg');
+    assert.ok(svgEl, 'Models view must mount .ag-cs-home-chart-svg');
+    assert.equal(svgEl.namespaceURI, 'http://www.w3.org/2000/svg');
+    assert.equal(innerHtmlWrites.length, 0, 'SVG trend chart must NEVER assign non-empty innerHTML');
+    assert.ok(svgCreated.includes('linearGradient') && svgCreated.includes('path') && svgCreated.includes('line'));
+    assert.equal(home.querySelectorAll('.ag-cs-home-chart-grid').length, 4, 'Must render 4 horizontal dashed grid lines');
+    assert.ok(home.querySelector('.ag-cs-home-chart-area')?.getAttribute('d')?.endsWith('Z'));
+    assert.ok(home.querySelector('.ag-cs-home-chart-line')?.getAttribute('d')?.includes('C'));
+    const peakDot = home.querySelector('.ag-cs-home-chart-peak');
+    assert.ok(peakDot && peakDot.style.left && peakDot.style.bottom, 'Must render peak anchor dot with % positioning');
+  } finally {
+    globalThis.window = prevWin;
+    globalThis.document = prevDoc;
+    globalThis.localStorage = prevLs;
+    globalThis.requestAnimationFrame = prevRaf;
+  }
+});
+
+test('PR #41: Home Studio distinguishes cumulative vs active-only sessions with 8-language toolbar toggle, SVG icon, focus preservation, and localStorage persistence', async () => {
+  const fs = require('node:fs');
+  const homeStudioPanel = require('../home-studio-panel.js');
+  const i18nLocales = require('../i18n-locales.js');
+  const nowSec = Math.floor(Date.now() / 1000);
+  const dKey = usageCore.homeDayKey(new Date(nowSec * 1000));
+  const mkRec = (id, total, calls, extra = {}) => ({
+    cascadeId: id,
+    stepCount: 10,
+    lastModifiedSec: nowSec,
+    gmCount: calls,
+    calls,
+    workspace: 'busy-bohr',
+    days: {
+      [dKey]: {
+        calls,
+        input: total,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        total,
+        hours: new Array(24).fill(0),
+        models: { 'Gemini 4': { input: total, output: 0, cacheRead: 0, cacheWrite: 0, total, calls } },
+      },
+    },
+    ...extra,
+  });
+
+  // 1) usage-core: includeArchived + walkRec archived inheritance + self-parent cycle guard
+  const liveMain = mkRec('11111111-1111-4111-8111-111111111111', 1000, 2);
+  const selfRefMain = mkRec('44444444-4444-4444-8444-444444444444', 600, 1, { parentId: '44444444-4444-4444-8444-444444444444', subagent: true });
+  const archMain = mkRec('22222222-2222-4222-8222-222222222222', 3000, 4, { archived: true });
+  const archSub = mkRec('33333333-3333-4333-8333-333333333333', 500, 1, { subagent: true, parentId: archMain.cascadeId });
+
+  const allAgg = usageCore.aggregateUsageRollup([liveMain, selfRefMain, archMain, archSub], 'all', 0.1, 'zh-CN', new Date(nowSec * 1000), { includeArchived: true });
+  assert.equal(allAgg.sessions, 3);
+  assert.equal(allAgg.activeSessions, 2);
+  assert.equal(allAgg.archivedSessions, 1);
+  assert.equal(allAgg.hasArchived, true);
+  assert.equal(allAgg.tokens, 5100);
+  assert.equal(allAgg.calls, 8);
+
+  const actAgg = usageCore.aggregateUsageRollup([liveMain, selfRefMain, archMain, archSub], 'all', 0.1, 'zh-CN', new Date(nowSec * 1000), { includeArchived: false });
+  assert.equal(actAgg.sessions, 2, 'Active-only mode must count only non-archived main sessions (including self-parent healed main)');
+  assert.equal(actAgg.activeSessions, 2);
+  assert.equal(actAgg.archivedSessions, 1, 'archivedSessions count must stay available when active-only is enabled');
+  assert.equal(actAgg.hasArchived, true);
+  assert.equal(actAgg.tokens, 1600, 'Active-only mode must exclude both archived main and its inherited subagent');
+  assert.equal(actAgg.calls, 3);
+
+  const EXPECTED_8 = {
+    'zh-CN': { all: '含归档', active: '仅当前', kA: '当前', kH: '归档' },
+    'zh-TW': { all: '含歸檔', active: '僅當前', kA: '當前', kH: '歸檔' },
+    en: { all: 'All', active: 'Current', kA: 'Active', kH: 'Archived' },
+    ja: { all: '履歴含む', active: '現在のみ', kA: '現在', kH: 'アーカイブ' },
+    ko: { all: '보관 포함', active: '현재만', kA: '현재', kH: '보관' },
+    es: { all: 'Todo', active: 'Actuales', kA: 'Activas', kH: 'Archiv.' },
+    fr: { all: 'Tout', active: 'Actuelles', kA: 'Actives', kH: 'Archiv.' },
+    de: { all: 'Alle', active: 'Aktuell', kA: 'Aktiv', kH: 'Archiv.' },
+  };
+  const NON_CJK = new Set(['en', 'es', 'fr', 'de']);
+  const HAN_RE = /[\u4E00-\u9FFF]/;
+
+  const prevWin = globalThis.window;
+  const prevDoc = globalThis.document;
+  const prevLs = globalThis.localStorage;
+  try {
+    // 2) Panel stamping/clearing of archived flag, SVG toggle, focus restoration, persistence, and 8-language verification
+    for (const [lang, exp] of Object.entries(EXPECTED_8)) {
+      const storeMem = new Map();
+      const key = `test:scope-toggle:rollup:${lang}`;
+      storeMem.set(key, JSON.stringify({
+        [liveMain.cascadeId]: { ...liveMain, archived: true },
+        [archMain.cascadeId]: { ...archMain, archived: false },
+      }));
+      globalThis.localStorage = {
+        getItem: (k) => (storeMem.has(k) ? storeMem.get(k) : null),
+        setItem: (k, v) => storeMem.set(k, String(v)),
+        removeItem: (k) => storeMem.delete(k),
+      };
+      const dom = createMockStudioDom('Antigravity');
+      globalThis.document = dom.doc;
+      globalThis.window = {
+        document: dom.doc,
+        __agPrismUsageBridge: {
+          isOnline: () => true,
+          listSummaries: async () => ({
+            ok: true,
+            scopeKey: 'local',
+            summaries: [{ id: liveMain.cascadeId, stepCount: 10, lastModifiedSec: nowSec, workspace: 'busy-bohr' }],
+            records: [
+              { id: liveMain.cascadeId, mode: 'full', record: liveMain },
+              { id: archMain.cascadeId, mode: 'full', archived: true, record: archMain },
+            ],
+          }),
+          fetchBatch: async () => ({ ok: true, records: [] }),
+        },
+      };
+      const uiFromLocales = i18nLocales.getUiStrings(lang);
+      const ctl = homeStudioPanel.createHomeStudioPanelController({
+        usageCore,
+        storageUsageCacheKey: key,
+        isDestroyed: () => false,
+        getHomeLayout: () => 'studio',
+        getLang: () => lang,
+        // Verify STUDIO_FB fallback directly for zh-CN/en/de and i18nLocales uiText for all others
+        uiText: (l) => (lang === 'en' ? {} : i18nLocales.getUiStrings(l)),
+        getDisplayName: () => 'Dev',
+        ensureHooks: () => ({ store: { getState: () => ({ trajectorySummaries: { summaries: { [liveMain.cascadeId]: { stepCount: 10, lastModifiedTime: { seconds: nowSec } } } } }) }, svc: {} }),
+        canMountRealCanvas: () => false,
+        setAttrIfChanged: () => {},
+        runGuardedMut: (fn) => fn(),
+      });
+      await ctl.refreshUsageRollup(true);
+      ctl.flushUsageCacheNow();
+      const saved = JSON.parse(storeMem.get(key) || '{}');
+      assert.equal(Boolean(saved[liveMain.cascadeId]?.archived), false, `Live conversation must clear archived flag (${lang})`);
+      assert.equal(saved[archMain.cascadeId]?.archived, true, `Deleted conversation must be stamped archived: true (${lang})`);
+
+      ctl.renderHomePanel(true);
+      const tg1 = dom.doc.querySelector('.ag-cs-home-head-right [data-ag-scope-toggle]');
+      assert.ok(tg1, `Scope toggle must render inside .ag-cs-home-head-right (${lang})`);
+      assert.equal(tg1.getAttribute('aria-pressed'), 'false');
+      assert.equal(tg1.textContent, exp.all, `Cumulative toggle label mismatch for ${lang}`);
+      assert.equal(uiFromLocales.homeScopeAll, exp.all, `i18n homeScopeAll mismatch for ${lang}`);
+      assert.equal(uiFromLocales.homeScopeActive, exp.active, `i18n homeScopeActive mismatch for ${lang}`);
+      assert.equal(uiFromLocales.homeScopeActiveCount, exp.kA, `i18n homeScopeActiveCount mismatch for ${lang}`);
+      assert.equal(uiFromLocales.homeScopeArchivedCount, exp.kH, `i18n homeScopeArchivedCount mismatch for ${lang}`);
+      const svgEl = tg1.querySelector('svg');
+      const pathEl = svgEl?.querySelector('path');
+      assert.equal(svgEl?.namespaceURI, 'http://www.w3.org/2000/svg');
+      assert.equal(svgEl?.getAttribute('aria-hidden'), 'true');
+      assert.equal(svgEl?.getAttribute('focusable'), 'false');
+      assert.equal(pathEl?.getAttribute('d'), 'M7 10h14l-4-4m0 8H3l4 4');
+
+      const sub1 = dom.doc.querySelector('[data-stat="sessions"] .ag-cs-home-stat-sub');
+      assert.equal(sub1?.tagName, 'SPAN', 'Sessions KPI subtitle must be a static <span>');
+      assert.equal(sub1?.textContent, `${exp.kA} 1 · ${exp.kH} 1`, `Sessions breakdown subtitle mismatch for ${lang}`);
+      if (NON_CJK.has(lang)) {
+        assert.equal(HAN_RE.test(tg1.textContent), false, `Toggle text must have zero Han chars in ${lang}`);
+        assert.equal(HAN_RE.test(tg1.getAttribute('aria-label') || ''), false, `Toggle aria-label must have zero Han chars in ${lang}`);
+        assert.equal(HAN_RE.test(sub1.textContent), false, `Sessions subtitle must have zero Han chars in ${lang}`);
+      }
+
+      tg1.focus();
+      tg1.click();
+      const tg2 = dom.doc.querySelector('.ag-cs-home-head-right [data-ag-scope-toggle]');
+      assert.equal(tg2?.getAttribute('aria-pressed'), 'true');
+      assert.equal(tg2?.textContent, exp.active, `Active-only toggle label mismatch for ${lang}`);
+      assert.equal(storeMem.get('ag-prism:homeSessionScope.v1'), 'active');
+      assert.equal(dom.doc.activeElement, tg2, `Focus must be restored across re-render (${lang})`);
+      if (NON_CJK.has(lang)) assert.equal(HAN_RE.test(tg2.textContent), false, `Active toggle text must have zero Han chars in ${lang}`);
+
+      const modelsTab = dom.doc.querySelector('[data-tab="models"]');
+      modelsTab.click();
+      const tgModels = dom.doc.querySelector('.ag-cs-home-head-right [data-ag-scope-toggle]');
+      assert.ok(tgModels, `Scope toggle must stay visible on Models tab (${lang})`);
+      assert.equal(tgModels.getAttribute('aria-pressed'), 'true');
+
+      const quotasTab = dom.doc.querySelector('[data-tab="quotas"]');
+      quotasTab.click();
+      assert.equal(dom.doc.querySelector('.ag-cs-home-head-right [data-ag-scope-toggle]'), null, 'Quotas tab must not render session scope toggle');
+    }
+
+    // 3) Static source redlines & preserved exports
+    assert.equal(typeof homeStudioPanel.hasPersistedTokens, 'function', 'hasPersistedTokens export must remain intact');
+    const hspSrc = fs.readFileSync(require.resolve('../home-studio-panel.js'), 'utf8');
+    assert.equal(hspSrc.includes('⇄'), false, 'Session scope toggle must use inline SVG instead of Unicode ⇄');
+    assert.ok(hspSrc.includes('M7 10h14l-4-4m0 8H3l4 4'));
+    assert.ok(hspSrc.includes("'aria-hidden', 'true'") && hspSrc.includes("'aria-pressed'"));
+    assert.ok(hspSrc.includes(':focus-visible{outline:2px solid var(--_a)'));
+    assert.ok(hspSrc.includes('ag-prism:homeSessionScope.v1'));
+    assert.equal(hspSrc.includes("lang === 'yue'"), false, 'home-studio-panel.js must not reintroduce legacy yue branches');
+  } finally {
+    if (prevWin === undefined) delete globalThis.window;
+    else globalThis.window = prevWin;
+    if (prevDoc === undefined) delete globalThis.document;
+    else globalThis.document = prevDoc;
+    if (prevLs === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = prevLs;
+  }
+});
+
+test('PR #49: Home Studio clarifies local-sessions-only scope across all 8 languages without crowding Sessions/Tokens subtitles', async () => {
+  const i18nLocales = require('../i18n-locales.js');
+  const homeStudioPanel = require('../home-studio-panel.js');
+  const prevWin = globalThis.window;
+  const prevDoc = globalThis.document;
+  const prevStorage = globalThis.localStorage;
+
+  const EXPECTED_LOCAL_8 = {
+    'zh-CN': ['仅本地', '仅统计本机已保存会话（不含云端）'],
+    'zh-TW': ['僅本機', '僅統計本機已儲存工作階段（不含雲端）'],
+    en: ['Local only', 'Counts saved local sessions only (excludes cloud)'],
+    ja: ['ローカルのみ', 'ローカル保存済みセッションのみ集計（クラウド除く）'],
+    ko: ['로컬만', '로컬 저장 세션만 집계 (클라우드 제외)'],
+    es: ['Solo local', 'Solo sesiones locales guardadas (sin nube)'],
+    fr: ['Local', 'Sessions locales enregistrées uniquement (hors cloud)'],
+    de: ['Nur lokal', 'Nur lokal gespeicherte Sitzungen (ohne Cloud)'],
+  };
+  const NON_CJK = new Set(['en', 'es', 'fr', 'de']);
+  const HAN_RE = /[\u4E00-\u9FFF]/;
+
+  const sec = 1763400900;
+  const dKey = usageCore.homeDayKey(new Date(sec * 1000));
+  const storeMem = new Map();
+  globalThis.localStorage = {
+    getItem: (k) => (storeMem.has(k) ? storeMem.get(k) : null),
+    setItem: (k, v) => { storeMem.set(k, String(v)); },
+    removeItem: (k) => { storeMem.delete(k); },
+  };
+
+  try {
+    const runScenario = async (lang, withSubagent, withArchived = false) => {
+      const [expTag, expNote] = EXPECTED_LOCAL_8[lang];
+      const ui = i18nLocales.getUiStrings(lang);
+      assert.equal(ui.homeLocalOnlyTag, expTag, `i18n homeLocalOnlyTag mismatch for ${lang}`);
+      assert.equal(ui.homeLocalScopeNote, expNote, `i18n homeLocalScopeNote mismatch for ${lang}`);
+      const dom = createMockStudioDom('obsidian-prism — Antigravity');
+      globalThis.document = dom.doc;
+      globalThis.window = {
+        document: dom.doc,
+        location: { href: 'vscode-file://vscode-app/workbench.html' },
+        __agPrismUsageBridge: {
+          isOnline: () => true,
+          listSummaries: async () => ({
+            ok: true,
+            scopeKey: 'local',
+            summaries: withSubagent
+              ? [
+                  { id: 'main-1', stepCount: 4, lastModifiedSec: sec, workspace: 'proj' },
+                  { id: 'sub-1', stepCount: 2, lastModifiedSec: sec, subagent: true, parentId: 'main-1', workspace: 'proj' },
+                ]
+              : [{ id: 'main-1', stepCount: 4, lastModifiedSec: sec, workspace: 'proj' }],
+            records: withArchived
+              ? [{
+                  id: 'arch-1',
+                  mode: 'full',
+                  archived: true,
+                  record: {
+                    cascadeId: 'arch-1',
+                    stepCount: 3,
+                    lastModifiedSec: sec - 60,
+                    gmCount: 1,
+                    subagent: false,
+                    workspace: 'proj',
+                    parentId: '',
+                    calls: 1,
+                    days: { [dKey]: { calls: 1, input: 1000, output: 500, cacheRead: 0, cacheWrite: 0, total: 1500, hours: new Array(24).fill(0), models: { 'Gemini 4 Carbon': { input: 1000, output: 500, cacheRead: 0, cacheWrite: 0, total: 1500, calls: 1 } } } },
+                  },
+                }]
+              : [],
+          }),
+          fetchBatch: async (items) => ({
+            ok: true,
+            scopeKey: 'local',
+            records: items.map((it) => ({
+              id: it.id,
+              mode: 'full',
+              record: {
+                cascadeId: it.id,
+                stepCount: it.stepCount,
+                lastModifiedSec: it.lastModifiedSec,
+                gmCount: 1,
+                subagent: !!it.subagent,
+                workspace: 'proj',
+                parentId: it.parentId || '',
+                calls: 2,
+                days: {
+                  [dKey]: {
+                    calls: 2,
+                    input: 4000,
+                    output: 1000,
+                    cacheRead: 5000,
+                    cacheWrite: 0,
+                    total: 10000,
+                    hours: new Array(24).fill(0),
+                    models: { 'Gemini 4 Carbon': { input: 4000, output: 1000, cacheRead: 5000, cacheWrite: 0, total: 10000, calls: 2 } },
+                  },
+                },
+              },
+            })),
+          }),
+        },
+      };
+
+      const ctl = homeStudioPanel.createHomeStudioPanelController({
+        usageCore,
+        storageUsageCacheKey: `test:local-note:${lang}:${withSubagent ? 'sub' : 'main'}:${withArchived ? 'arch' : 'noarch'}`,
+        isDestroyed: () => false,
+        getHomeLayout: () => 'studio',
+        getLang: () => lang,
+        uiText: (l) => i18nLocales.getUiStrings(l),
+        getDisplayName: () => 'Dev',
+        ensureHooks: () => ({ store: { getState: () => ({ trajectorySummaries: { summaries: {} } }) }, svc: {} }),
+        canMountRealCanvas: () => true,
+        setAttrIfChanged: (el, k, v) => el?.setAttribute?.(k, v),
+        runGuardedMut: (fn) => fn(),
+      });
+
+      await ctl.refreshUsageRollup(true);
+      assert.equal(dom.doc.querySelector('.ag-cs-home-scope-badge'), null, 'Local window must not render remote scope badge');
+
+      const tokSub = dom.doc.querySelector('[data-stat="tokens"] .ag-cs-home-stat-sub');
+      const tokVal = dom.doc.querySelector('[data-stat="tokens"] .ag-cs-home-stat-value');
+      assert.ok(tokSub && tokVal, `Tokens stat subtext and value must render (${lang})`);
+      assert.ok(tokVal.title.includes(expNote), `Tokens tooltip must include localized local-scope note (${lang})`);
+      if (withSubagent) {
+        const expSubPct = withArchived ? 47 : 50;
+        assert.equal(tokSub.textContent, ui.swarmSplitSub(100 - expSubPct, expSubPct), 'Tokens subtext must preserve swarm split when subagent tokens exist');
+      } else {
+        assert.equal(tokSub.textContent, expTag, `Tokens subtext must show local-only tag (${lang})`);
+      }
+
+      const cacheSub = dom.doc.querySelector('[data-stat="cache"] .ag-cs-home-stat-sub');
+      const cacheVal = dom.doc.querySelector('[data-stat="cache"] .ag-cs-home-stat-value');
+      assert.ok(cacheSub && cacheVal);
+      assert.equal(cacheSub.textContent, expTag);
+      assert.ok(cacheVal.title.includes(expNote));
+
+      if (withArchived) {
+        const sesSub = dom.doc.querySelector('[data-stat="sessions"] .ag-cs-home-stat-sub');
+        assert.ok(sesSub && !sesSub.textContent.includes(expTag), 'Sessions archived breakdown must remain cleanly separated from local-only tag');
+      }
+
+      const heatEl = dom.doc.querySelector('.ag-cs-home-heat');
+      assert.ok(heatEl);
+      assert.equal(heatEl.getAttribute('data-local-only'), '1');
+      assert.equal(heatEl.getAttribute('aria-label'), expNote);
+      assert.equal(heatEl.title, '', 'Heatmap must not set native title to avoid overlapping hover tips');
+
+      const noteOverview = dom.doc.querySelector('.ag-cs-home-local-note');
+      assert.ok(noteOverview);
+      assert.equal(noteOverview.getAttribute('data-local-scope-note'), '1');
+      assert.equal(noteOverview.textContent, expNote);
+      if (NON_CJK.has(lang)) {
+        assert.equal(HAN_RE.test(cacheSub.textContent), false, `Local tag must have zero Han chars in ${lang}`);
+        assert.equal(HAN_RE.test(noteOverview.textContent), false, `Local scope note must have zero Han chars in ${lang}`);
+      }
+
+      const clickTab = (tabId) => {
+        const btn = dom.doc.querySelectorAll('.ag-cs-home-tab').find((b) => b.getAttribute('data-tab') === tabId);
+        assert.ok(btn);
+        btn.click();
+      };
+
+      clickTab('models');
+      const noteModels = dom.doc.querySelector('.ag-cs-home-local-note');
+      assert.ok(noteModels, 'Models tab with data must render local-scope note');
+      assert.equal(noteModels.textContent, expNote);
+
+      clickTab('quotas');
+      assert.equal(dom.doc.querySelector('.ag-cs-home-local-note'), null, 'Quotas tab must not render local-scope note');
+    };
+
+    for (const lang of Object.keys(EXPECTED_LOCAL_8)) {
+      await runScenario(lang, false, false);
+    }
+    await runScenario('en', true, false);
+    await runScenario('en', true, true);
+    await runScenario('zh-CN', true, true);
+
+    // Empty Models tab also displays local-scope note
+    const emptyDom = createMockStudioDom('obsidian-prism — Antigravity');
+    globalThis.document = emptyDom.doc;
+    globalThis.window = { document: emptyDom.doc, location: { href: 'vscode-file://vscode-app/workbench.html' } };
+    const emptyCtl = homeStudioPanel.createHomeStudioPanelController({
+      usageCore,
+      storageUsageCacheKey: 'test:local-note:empty',
+      isDestroyed: () => false,
+      getHomeLayout: () => 'studio',
+      getLang: () => 'de',
+      uiText: () => ({}),
+      getDisplayName: () => 'Dev',
+      ensureHooks: () => null,
+      canMountRealCanvas: () => false,
+      setAttrIfChanged: (el, k, v) => el?.setAttribute?.(k, v),
+      runGuardedMut: (fn) => fn(),
+    });
+    emptyCtl.renderHomePanel(true);
+    const modelsTab = emptyDom.doc.querySelectorAll('.ag-cs-home-tab').find((b) => b.getAttribute('data-tab') === 'models');
+    modelsTab.click();
+    assert.ok(emptyDom.doc.querySelector('.ag-cs-home-models-empty'));
+    const emptyNote = emptyDom.doc.querySelector('.ag-cs-home-local-note');
+    assert.ok(emptyNote, 'Empty Models tab must still render local-scope note');
+    assert.equal(emptyNote.textContent, EXPECTED_LOCAL_8.de[1]);
+  } finally {
+    if (prevWin === undefined) delete globalThis.window;
+    else globalThis.window = prevWin;
+    if (prevDoc === undefined) delete globalThis.document;
+    else globalThis.document = prevDoc;
+    if (prevStorage === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = prevStorage;
+  }
 });
 

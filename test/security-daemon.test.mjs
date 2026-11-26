@@ -1262,7 +1262,7 @@ test('security-daemon 11 (#229 P1-2, P1-4, P2-4): WALLPAPER_BINDING 禁内联 To
             ready: true,
             isHostDom: domAliveIsHost,
             href: 'vscode-file://vscode-app/workbench.html',
-            prismAttr: '1.0.7',
+            prismAttr: '1.0.8-beta.3',
             hasPrism: domAliveIsHost,
             hasRepoBridge: domAliveIsHost,
             hasThoughtBridge: domAliveIsHost,
@@ -1500,6 +1500,128 @@ test('security-daemon 11 (#229 P1-2, P1-4, P2-4): WALLPAPER_BINDING 禁内联 To
       'WALLPAPER_BINDING hasTrackedFrames===false branch must fail-closed when !isAutomatedTestRuntime()'
     );
   } finally {
+    if (daemon) await daemon.stop(false).catch(() => {});
+    fs.rmSync(workDir, { recursive: true, force: true });
+  }
+});
+
+test('Privacy hardline: autoUpdate="off" performs 0 background git fetch / GitHub API calls across timers, update-status & updateChannel switch while preserving manual check-update', async () => {
+  const workDir = makeTempDir('prism-autoupdate-privacy-');
+  const pluginDir = path.join(workDir, 'plugin');
+  fs.mkdirSync(pluginDir, { recursive: true });
+  let cfg = { autoUpdate: 'off', updateChannel: 'stable', omniModule: 'off' };
+  fs.writeFileSync(
+    path.join(pluginDir, 'cdp.js'),
+    "module.exports={PLUGIN_VERSION:'1.0.8',DEFAULT_CONFIG:{autoUpdate:'off',updateChannel:'stable',omniModule:'off'},readConfig:()=>({...global.__prismPrivacyCfg}),validateConfigEntry:()=>true,buildInjectExpression:()=>'(()=>{})()',buildConfigRefreshExpression:()=>'(()=>({refreshed:true}))()'};\n",
+    'utf8'
+  );
+  global.__prismPrivacyCfg = cfg;
+
+  let gitFetchCalls = 0;
+  let releaseApiCalls = 0;
+  let activeChannel = 'stable';
+  const mockUpdateSvc = {
+    channel: 'stable',
+    currentVersion: '1.0.8',
+    applying: false,
+    setChannel(ch) {
+      const next = ch === 'beta' ? 'beta' : 'stable';
+      const changed = next !== activeChannel;
+      activeChannel = next;
+      this.channel = next;
+      return changed;
+    },
+    getStatus() {
+      return {
+        ok: true,
+        channel: activeChannel,
+        currentVersion: '1.0.8',
+        latestVersion: '1.0.8',
+        hasUpdate: false,
+        checkedAt: null,
+        lastError: null,
+      };
+    },
+    async checkForUpdates({ channel }) {
+      releaseApiCalls += 1;
+      return {
+        ok: true,
+        channel: channel || activeChannel,
+        currentVersion: '1.0.8',
+        latestVersion: '1.0.9',
+        hasUpdate: true,
+        checkedAt: Date.now(),
+        lastError: null,
+      };
+    },
+  };
+
+  let daemon = null;
+  try {
+    daemon = new PrismDaemon({
+      rootDir: pluginDir,
+      bundleCachePath: false,
+      silent: true,
+      enableAutoUpdateTimer: true,
+      enableStorageGuardTimer: false,
+      watchFiles: false,
+      pollIntervalMs: 60000,
+      updateCheckInitialDelayMs: 15,
+      updateCheckIntervalMs: 25,
+      _testUpdateService: mockUpdateSvc,
+    });
+    daemon.tick = async () => {};
+    daemon._inspectGitRepoState = async ({ fetchRemote = false } = {}) => {
+      if (fetchRemote) gitFetchCalls += 1;
+      return {
+        isGitRepo: false,
+        hasRemote: false,
+        noRemote: true,
+        behind: 0,
+        branch: 'standalone',
+        commit: '1.0.8',
+        blockedUnc: false,
+      };
+    };
+
+    // 1) Starting daemon with default autoUpdate='off' must fire 0 timer network checks
+    daemon.start();
+    await new Promise((r) => setTimeout(r, 85));
+    assert.equal(gitFetchCalls, 0, 'Startup 45s & 6h timers must NOT run git fetch when autoUpdate=off');
+    assert.equal(releaseApiCalls, 0, 'Startup 45s & 6h timers must NOT call GitHub API when autoUpdate=off');
+
+    // 2) Passive update-status probe on settings mount must fire 0 network checks when autoUpdate=off
+    const stOff = await daemon.executeRepoAction({ action: 'update-status' });
+    assert.equal(stOff.ok, true);
+    assert.equal(stOff.autoUpdate, 'off');
+    assert.equal(stOff.checking, false);
+    await new Promise((r) => setTimeout(r, 25));
+    assert.equal(gitFetchCalls, 0, 'Passive update-status must NOT trigger git fetch when autoUpdate=off');
+    assert.equal(releaseApiCalls, 0, 'Passive update-status must NOT trigger GitHub API when autoUpdate=off');
+
+    // 3) Switching updateChannel during broadcastConfigRefresh must fire 0 background checks when autoUpdate=off
+    global.__prismPrivacyCfg = { ...global.__prismPrivacyCfg, updateChannel: 'beta' };
+    await daemon.broadcastConfigRefresh();
+    await new Promise((r) => setTimeout(r, 25));
+    assert.equal(gitFetchCalls, 0, 'updateChannel broadcast switch must NOT trigger git fetch when autoUpdate=off');
+    assert.equal(releaseApiCalls, 0, 'updateChannel broadcast switch must NOT trigger GitHub API when autoUpdate=off');
+
+    // 4) Manual user-triggered check-update MUST still work normally even when autoUpdate=off
+    const manualRes = await daemon.executeRepoAction({ action: 'check-update', manual: true, force: true });
+    assert.equal(manualRes.ok, true);
+    assert.equal(manualRes.action, 'check-update');
+    assert.equal(manualRes.hasUpdate, true);
+    assert.equal(manualRes.latestVersion, '1.0.9');
+    assert.equal(gitFetchCalls, 1, 'Manual check-update must run git fetch once');
+    assert.equal(releaseApiCalls, 1, 'Manual check-update must call updateService.checkForUpdates once');
+
+    // 5) Enabling autoUpdate='on' allows scheduled periodic timer (min 1000ms) to resume background checks
+    global.__prismPrivacyCfg = { ...global.__prismPrivacyCfg, autoUpdate: 'on' };
+    await new Promise((r) => setTimeout(r, 1120));
+    assert.ok(gitFetchCalls >= 2, 'Scheduled timer must resume once autoUpdate=on');
+    assert.ok(releaseApiCalls >= 2, 'Scheduled timer must query updates once autoUpdate=on');
+  } finally {
+    delete global.__prismPrivacyCfg;
     if (daemon) await daemon.stop(false).catch(() => {});
     fs.rmSync(workDir, { recursive: true, force: true });
   }

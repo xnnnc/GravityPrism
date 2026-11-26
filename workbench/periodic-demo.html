@@ -1,0 +1,1876 @@
+<!doctype html>
+<html
+  lang="zh-CN"
+  data-ag-cs-theme="dark"
+  data-ag-cs-palette="obsidian"
+  data-ag-cs-light-preset="crystal"
+  data-ag-cs-accent="follow"
+  data-ag-cs-corners="soft"
+  data-ag-cs-ambient="100"
+  data-ag-cs-lang="zh-CN"
+  data-demo-zoom="normal"
+  data-demo-focus="hero"
+>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Obsidian Prism · V14 PRISM-118 Precision Hardware Desk Console (Google Official Spectrum · Dark/Light Banner · #0 Orch Dual-Core)</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%23161920'/%3E%3Cpath fill='%233B82F6' d='M12 2.2c.23 0 .43.16.49.38c.19.72.44 1.43.73 2.11c1.13 2.62 3.1 4.6 5.73 5.73c.68.29 1.39.54 2.11.73c.22.06.38.26.38.49s-.16.43-.38.49a15 15 0 0 0-2.11.73c-2.63 1.13-4.6 3.11-5.73 5.73c-.29.68-.54 1.39-.73 2.11a.5.5 0 0 1-.98 0a15 15 0 0 0-.73-2.11c-1.13-2.62-3.1-4.6-5.73-5.73a15 15 0 0 0-2.11-.73a.5.5 0 0 1 0-.98c.72-.19 1.43-.44 2.11-.73c2.63-1.13 4.6-3.11 5.73-5.73c.29-.68.54-1.39.73-2.11c.06-.22.26-.38.49-.38Z'/%3E%3C/svg%3E" />
+  <style>
+    /* V12 Antigravity In-Flow Push-Up Desk Dock Workspace Tokens (4 Dark/Light Themes) */
+    :root,
+    html[data-ag-cs-theme="dark"][data-ag-cs-palette="obsidian"] {
+      --demo-bg: #090d14;
+      --ide-chrome-bg: #06090f;
+      --ide-sidebar-bg: #0c111b;
+      --ide-chat-bg: radial-gradient(110% 80% at 50% 0%, rgba(46, 108, 146, 0.11) 0%, rgba(11, 16, 25, 0.98) 64%);
+      --ide-inspector-bg: #0d131e;
+      --demo-card: linear-gradient(180deg, rgba(22, 30, 44, 0.92) 0%, rgba(14, 20, 30, 0.96) 100%);
+      --demo-card-soft: rgba(20, 28, 42, 0.72);
+      --demo-user-bubble: linear-gradient(135deg, rgba(44, 92, 132, 0.34) 0%, rgba(28, 56, 86, 0.26) 100%);
+      --demo-debug-bg: rgba(10, 14, 22, 0.88);
+      --demo-border: rgba(196, 216, 244, 0.11);
+      --demo-bevel: rgba(255, 255, 255, 0.12);
+      --demo-text: #eef3fb;
+      --demo-muted: #93a3b8;
+      --demo-pill: rgba(255, 255, 255, 0.055);
+      --demo-pill-active: rgba(255, 255, 255, 0.15);
+      --demo-accent: #60a5fa;
+      --demo-ok: #7dd3fc;
+      --demo-orch: #a884e8;
+      --tok-kw: #82b8f8;
+      --tok-fn: #62ccba;
+      --tok-ty: #bca4fa;
+      --tok-str: #eea37e;
+      --tok-num: #f2ca7e;
+      --tok-cm: #60728c;
+      --ag-cs-popover-bg: rgba(20, 25, 34, 0.94);
+      --ag-cs-border-2: rgba(255, 255, 255, 0.12);
+      --foreground: #eef3fb;
+      --muted-foreground: #93a3b8;
+    }
+
+    html[data-ag-cs-theme="dark"][data-ag-cs-palette="warm"],
+    html[data-ag-cs-theme="dark"][data-ag-cs-palette="claude"] {
+      --demo-bg: #110e0c;
+      --ide-chrome-bg: #0a0806;
+      --ide-sidebar-bg: #15120f;
+      --ide-chat-bg: radial-gradient(110% 80% at 50% 0%, rgba(196, 118, 72, 0.11) 0%, rgba(19, 15, 13, 0.98) 64%);
+      --ide-inspector-bg: #16120f;
+      --demo-card: linear-gradient(180deg, rgba(36, 29, 24, 0.93) 0%, rgba(22, 18, 15, 0.96) 100%);
+      --demo-card-soft: rgba(34, 28, 23, 0.74);
+      --demo-user-bubble: linear-gradient(135deg, rgba(164, 88, 56, 0.30) 0%, rgba(98, 54, 36, 0.24) 100%);
+      --demo-debug-bg: rgba(17, 14, 12, 0.88);
+      --demo-border: rgba(238, 216, 192, 0.12);
+      --demo-bevel: rgba(255, 246, 232, 0.12);
+      --demo-text: #f6eee5;
+      --demo-muted: #a99b8e;
+      --demo-pill: rgba(255, 244, 230, 0.06);
+      --demo-pill-active: rgba(255, 244, 230, 0.15);
+      --demo-accent: #d47652;
+      --demo-ok: #58b0a0;
+      --demo-orch: #c084fc;
+      --tok-kw: #eca27c;
+      --tok-fn: #70c4b0;
+      --tok-ty: #d4a9f0;
+      --tok-str: #f0be82;
+      --tok-num: #f4ce8a;
+      --tok-cm: #786b60;
+      --ag-cs-popover-bg: rgba(25, 21, 19, 0.95);
+      --ag-cs-border-2: rgba(228, 212, 194, 0.14);
+      --foreground: #f6eee5;
+      --muted-foreground: #a99b8e;
+    }
+
+    html[data-ag-cs-theme="light"][data-ag-cs-light-preset="crystal"] {
+      --demo-bg: #e5ecf6;
+      --ide-chrome-bg: #dae3f0;
+      --ide-sidebar-bg: #e8eff8;
+      --ide-chat-bg: radial-gradient(110% 80% at 50% 0%, rgba(59, 130, 246, 0.09) 0%, #f4f8fd 66%);
+      --ide-inspector-bg: #edf3fb;
+      --demo-card: linear-gradient(180deg, #ffffff 0%, #f5f9fe 100%);
+      --demo-card-soft: rgba(255, 255, 255, 0.84);
+      --demo-user-bubble: linear-gradient(135deg, rgba(37, 99, 235, 0.12) 0%, rgba(14, 165, 233, 0.08) 100%);
+      --demo-debug-bg: rgba(248, 251, 255, 0.90);
+      --demo-border: rgba(15, 23, 42, 0.10);
+      --demo-bevel: rgba(255, 255, 255, 0.96);
+      --demo-text: #0f172a;
+      --demo-muted: #4b596e;
+      --demo-pill: rgba(15, 23, 42, 0.055);
+      --demo-pill-active: #ffffff;
+      --demo-accent: #2563eb;
+      --demo-ok: #0d7a6b;
+      --demo-orch: #7c3aed;
+      --tok-kw: #1d4ed8;
+      --tok-fn: #0f766e;
+      --tok-ty: #6d28d9;
+      --tok-str: #b45309;
+      --tok-num: #c2410c;
+      --tok-cm: #75849b;
+      --ag-cs-popover-bg: rgba(249, 251, 254, 0.96);
+      --ag-cs-border-2: rgba(30, 41, 59, 0.13);
+      --foreground: #0f172a;
+      --muted-foreground: #4b596e;
+    }
+
+    html[data-ag-cs-theme="light"][data-ag-cs-light-preset="alabaster"],
+    html[data-ag-cs-theme="light"][data-ag-cs-palette="warm"],
+    html[data-ag-cs-theme="light"][data-ag-cs-palette="claude"] {
+      --demo-bg: #ebe4d8;
+      --ide-chrome-bg: #dfd7c9;
+      --ide-sidebar-bg: #eee7db;
+      --ide-chat-bg: radial-gradient(110% 80% at 50% 0%, rgba(180, 108, 42, 0.09) 0%, #faf6ee 66%);
+      --ide-inspector-bg: #f3ede2;
+      --demo-card: linear-gradient(180deg, #fffdf9 0%, #f7f1e6 100%);
+      --demo-card-soft: rgba(255, 253, 248, 0.86);
+      --demo-user-bubble: linear-gradient(135deg, rgba(180, 83, 9, 0.12) 0%, rgba(161, 98, 7, 0.08) 100%);
+      --demo-debug-bg: rgba(252, 249, 242, 0.90);
+      --demo-border: rgba(68, 56, 42, 0.12);
+      --demo-bevel: rgba(255, 253, 248, 0.96);
+      --demo-text: #1c1917;
+      --demo-muted: #5c5349;
+      --demo-pill: rgba(68, 56, 42, 0.06);
+      --demo-pill-active: #fffdf9;
+      --demo-accent: #b44a32;
+      --demo-ok: #1d6e60;
+      --demo-orch: #6d28d9;
+      --tok-kw: #9a3412;
+      --tok-fn: #115e59;
+      --tok-ty: #6b21a8;
+      --tok-str: #92400e;
+      --tok-num: #b45309;
+      --tok-cm: #857a6d;
+      --ag-cs-popover-bg: rgba(250, 246, 238, 0.97);
+      --ag-cs-border-2: rgba(68, 56, 42, 0.15);
+      --foreground: #1c1917;
+      --muted-foreground: #5c5349;
+    }
+
+    html[data-ag-cs-accent="cobalt"] { --demo-accent: #4285f4; }
+    html[data-ag-cs-accent="iris"] { --demo-accent: #a58af8; }
+    html[data-ag-cs-accent="amber"] { --demo-accent: #f2b84b; }
+    html[data-ag-cs-accent="mono"] { --demo-accent: var(--demo-text); }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100vh;
+      min-height: 100vh;
+      overflow: hidden;
+      background-color: var(--demo-bg);
+      color: var(--demo-text);
+      font-family: "Plus Jakarta Sans", "Google Sans", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", sans-serif;
+    }
+
+    /* Floating V12 Studio Control Bar (?clean=1 hides it) */
+    .demo-studio-bar {
+      position: fixed;
+      top: 5px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 2147483646;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      max-width: calc(100vw - 16px);
+      padding: 3.5px 7px;
+      border-radius: 999px;
+      background: var(--demo-debug-bg);
+      border: 1px solid var(--demo-border);
+      box-shadow: inset 0 1px 0 var(--demo-bevel), 0 8px 24px rgba(0, 0, 0, 0.22);
+      backdrop-filter: blur(20px) saturate(1.2);
+      -webkit-backdrop-filter: blur(20px) saturate(1.2);
+      user-select: none;
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+    .demo-studio-bar::-webkit-scrollbar { display: none; }
+    html[data-demo-clean="1"] .demo-studio-bar { display: none !important; }
+    .demo-studio-bar[data-stage="fullscreen"] { top: 58px; }
+
+    .demo-studio-tag {
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      padding: 0 6px 0 4px;
+      color: var(--demo-ok);
+      white-space: nowrap;
+      font-family: "JetBrains Mono", monospace;
+    }
+
+    .demo-studio-sep {
+      width: 1px;
+      height: 13px;
+      background: var(--demo-border);
+      flex: 0 0 auto;
+      margin: 0 2px;
+    }
+
+    .demo-btn {
+      appearance: none;
+      border: 1px solid transparent;
+      background: var(--demo-pill);
+      color: var(--demo-text);
+      font-size: 10.5px;
+      font-weight: 650;
+      padding: 3.5px 8px;
+      border-radius: 999px;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 140ms ease, border-color 140ms ease, transform 100ms ease;
+    }
+    .demo-btn:hover {
+      border-color: var(--demo-accent);
+    }
+    .demo-btn[data-active="1"] {
+      background: var(--demo-pill-active);
+      border-color: var(--demo-accent);
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+    }
+
+    /* Full-Viewport Antigravity Host Shell */
+    .ag-host-shell {
+      width: 100vw;
+      height: 100vh;
+      display: grid;
+      grid-template-rows: 36px minmax(0, 1fr) 24px;
+      background: var(--demo-bg);
+    }
+
+    .ag-titlebar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 14px;
+      background: var(--ide-chrome-bg);
+      border-bottom: 1px solid var(--demo-border);
+      font-size: 11px;
+      color: var(--demo-muted);
+    }
+    .ag-title-left, .ag-title-right {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .ag-traffic {
+      display: inline-flex;
+      gap: 6px;
+    }
+    .ag-traffic i {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+    .ag-traffic .c-r { background: #ef4444; }
+    .ag-traffic .c-y { background: #f59e0b; }
+    .ag-traffic .c-g { background: #10b981; }
+
+    .ag-badge-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 10px;
+      font-weight: 700;
+      font-family: "JetBrains Mono", monospace;
+      background: var(--demo-pill);
+      border: 1px solid var(--demo-border);
+      color: var(--demo-ok);
+    }
+
+    .ag-workspace-grid {
+      display: grid;
+      grid-template-columns: 184px minmax(0, 1fr) 268px;
+      min-height: 0;
+    }
+    @media (max-width: 1680px) {
+      .ag-workspace-grid {
+        grid-template-columns: minmax(0, 1fr);
+      }
+      .ag-left-nav, .ag-right-code {
+        display: none !important;
+      }
+    }
+    html[data-demo-clean="1"] .ag-workspace-grid {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    html[data-demo-clean="1"] .ag-left-nav,
+    html[data-demo-clean="1"] .ag-right-code {
+      display: none !important;
+    }
+
+    /* Left Conversation Threads Sidebar */
+    .ag-left-nav {
+      background: var(--ide-sidebar-bg);
+      border-right: 1px solid var(--demo-border);
+      padding: 12px 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      font-size: 11.5px;
+    }
+    .ag-nav-kicker {
+      font-size: 9.5px;
+      font-weight: 750;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--demo-muted);
+      padding: 2px 8px 4px;
+    }
+    .ag-thread-item {
+      padding: 7px 9px;
+      border-radius: 9px;
+      color: var(--demo-muted);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      border: 1px solid transparent;
+    }
+    .ag-thread-item.is-active {
+      background: var(--demo-card-soft);
+      color: var(--demo-text);
+      border-color: var(--demo-border);
+      font-weight: 650;
+    }
+    .ag-thread-tag {
+      font-size: 9.5px;
+      font-family: "JetBrains Mono", monospace;
+      color: var(--demo-ok);
+    }
+
+    /* 1:1 Host [data-testid="conversation-view"] Flex-Col Stage:
+       1) Scrollable .ag-chat-stream (flex: 1 1 auto)
+       2) Editable [data-testid="agent-input-box"] composer (flex: 0 0 auto)
+       3) V12 In-Flow Push-Up Desk Dock mounts right below input box as last flex child! */
+    .ag-chat-stage {
+      background: var(--ide-chat-bg);
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-start;
+      flex: 1 1 auto;
+      min-width: 0;
+      min-height: 0;
+      overflow: hidden;
+      position: relative;
+      transition: max-width 220ms cubic-bezier(0.22, 1, 0.36, 1);
+    }
+    html[data-demo-narrow="1"] .ag-chat-stage {
+      width: 860px;
+      max-width: 860px;
+      margin: 0 auto;
+      border-left: 1px dashed var(--demo-border);
+      border-right: 1px dashed var(--demo-border);
+    }
+    html[data-demo-medium="1"] .ag-chat-stage {
+      width: 1060px;
+      max-width: 1060px;
+      margin: 0 auto;
+      border-left: 1px dashed var(--demo-border);
+      border-right: 1px dashed var(--demo-border);
+    }
+
+    .ag-chat-stream {
+      flex: 1 1 auto;
+      min-height: 0;
+      width: 100%;
+      overflow-y: auto;
+      padding: 14px 24px 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .ag-chat-stream-inner {
+      max-width: 920px;
+      width: 100%;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .ag-stream-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid var(--demo-border);
+    }
+    .ag-stream-title {
+      font-size: 13px;
+      font-weight: 750;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .ag-stream-meta {
+      font-size: 10.5px;
+      font-family: "JetBrains Mono", monospace;
+      color: var(--demo-muted);
+    }
+
+    .ag-msg-user {
+      align-self: flex-end;
+      max-width: 82%;
+      padding: 9px 13px;
+      border-radius: 14px 14px 4px 14px;
+      background: var(--demo-user-bubble);
+      border: 1px solid var(--demo-border);
+      font-size: 12.5px;
+      line-height: 1.48;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.08);
+    }
+
+    .ag-msg-agent {
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+      padding: 11px 14px;
+      border-radius: 14px;
+      background: var(--demo-card);
+      border: 1px solid var(--demo-border);
+      box-shadow: inset 0 1px 0 var(--demo-bevel), 0 8px 22px rgba(0, 0, 0, 0.10);
+    }
+
+    .ag-thought-bar {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      font-size: 11px;
+      color: var(--demo-muted);
+      padding: 3.5px 9px;
+      border-radius: 8px;
+      background: var(--demo-pill);
+      width: fit-content;
+    }
+    .ag-thought-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--demo-ok);
+      box-shadow: 0 0 8px var(--demo-ok);
+    }
+
+    .ag-agent-prose {
+      font-size: 12.2px;
+      line-height: 1.52;
+      margin: 0;
+    }
+
+    .ag-tool-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+    }
+    .ag-tool-chip {
+      font-size: 10px;
+      font-family: "JetBrains Mono", monospace;
+      padding: 2.5px 8px;
+      border-radius: 6px;
+      background: var(--demo-pill);
+      border: 1px solid var(--demo-border);
+      color: var(--demo-muted);
+    }
+    .ag-tool-chip.is-live {
+      color: var(--demo-ok);
+      border-color: rgba(82, 184, 166, 0.36);
+    }
+
+    /* Editable Host Composer ([data-testid="agent-input-box"]) — pushed upward smoothly by V12 Dock */
+    .demo-composer-outer {
+      flex: 0 0 auto;
+      width: 100%;
+      padding: 4px 24px 10px;
+    }
+    .demo-composer-wrap {
+      max-width: 920px;
+      width: 100%;
+      margin: 0 auto;
+      padding: 9px 13px 8px;
+      border-radius: 15px;
+      background: var(--demo-card);
+      border: 1px solid var(--demo-border);
+      box-shadow: inset 0 1px 0 var(--demo-bevel), 0 8px 22px rgba(0, 0, 0, 0.14);
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .demo-native-menu {
+      position: absolute;
+      left: 12px;
+      bottom: calc(100% + 8px);
+      min-width: 250px;
+      padding: 6px;
+      border-radius: 12px;
+      background: var(--ag-cs-popover-bg);
+      border: 1px solid var(--ag-cs-border-2);
+      box-shadow: 0 16px 38px rgba(0, 0, 0, 0.34);
+      display: none;
+      flex-direction: column;
+      gap: 2px;
+      z-index: 40;
+    }
+    .demo-native-menu[data-open="1"] { display: flex; }
+
+    .demo-native-item {
+      appearance: none;
+      border: 0;
+      background: transparent;
+      color: var(--demo-text);
+      text-align: left;
+      padding: 6px 10px;
+      border-radius: 8px;
+      font-size: 11.5px;
+      cursor: pointer;
+    }
+    .demo-native-item:hover {
+      background: var(--demo-pill-active);
+    }
+
+    .demo-composer-textarea {
+      width: 100%;
+      min-height: 36px;
+      max-height: 84px;
+      resize: none;
+      border: 0;
+      outline: none;
+      background: transparent;
+      color: var(--demo-text);
+      font-family: inherit;
+      font-size: 12.5px;
+      line-height: 1.45;
+      padding: 0;
+    }
+    .demo-composer-textarea::placeholder {
+      color: var(--demo-muted);
+    }
+
+    .demo-composer-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .demo-trigger-group {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .demo-model-trigger {
+      appearance: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4.5px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--demo-border);
+      background: var(--demo-pill);
+      color: var(--demo-text);
+      font-size: 11.5px;
+      font-weight: 650;
+      cursor: pointer;
+      transition: border-color 150ms ease, background 150ms ease;
+    }
+    .demo-model-trigger:hover {
+      border-color: var(--demo-accent);
+      background: var(--demo-pill-active);
+    }
+    .ag-cs-model-glyph {
+      display: inline-flex;
+      align-items: center;
+      color: var(--demo-accent);
+    }
+
+    .demo-composer-right {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .demo-hint {
+      font-size: 10px;
+      color: var(--demo-muted);
+      font-family: "JetBrains Mono", monospace;
+    }
+
+    .demo-send-btn {
+      appearance: none;
+      border: 1px solid var(--demo-border);
+      background: var(--demo-pill-active);
+      color: var(--demo-text);
+      font-size: 11px;
+      font-weight: 700;
+      height: 26px;
+      padding: 0 11px;
+      border-radius: 999px;
+      cursor: pointer;
+      transition: border-color 140ms ease, transform 100ms ease;
+    }
+    .demo-send-btn:hover {
+      border-color: var(--demo-ok);
+    }
+    .demo-send-btn:active {
+      transform: scale(0.96);
+    }
+
+    /* Right Live Telemetry & Orchestrator Planner Readout Inspector */
+    .ag-right-code {
+      background: var(--ide-inspector-bg);
+      border-left: 1px solid var(--demo-border);
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 9px;
+      overflow-y: auto;
+    }
+    .demo-card {
+      padding: 10px 11px;
+      border-radius: 11px;
+      background: var(--demo-card);
+      border: 1px solid var(--demo-border);
+      box-shadow: inset 0 1px 0 var(--demo-bevel);
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .demo-card-lbl {
+      font-size: 9.5px;
+      font-weight: 750;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--demo-muted);
+    }
+    .demo-stat-val {
+      font-size: 13px;
+      font-weight: 800;
+      color: var(--demo-text);
+    }
+    .demo-stat-orch {
+      font-size: 11.5px;
+      font-weight: 750;
+      font-family: "JetBrains Mono", monospace;
+      color: var(--demo-orch);
+    }
+    .demo-stat-sub {
+      font-size: 10.5px;
+      line-height: 1.44;
+      color: var(--demo-muted);
+    }
+    .demo-code-snippet {
+      font-family: "JetBrains Mono", monospace;
+      font-size: 10px;
+      line-height: 1.5;
+      padding: 8px 9px;
+      border-radius: 9px;
+      background: var(--demo-pill);
+      border: 1px solid var(--demo-border);
+      overflow-x: auto;
+    }
+    .tok-kw { color: var(--tok-kw); }
+    .tok-fn { color: var(--tok-fn); }
+    .tok-ty { color: var(--tok-ty); }
+    .tok-str { color: var(--tok-str); }
+    .tok-num { color: var(--tok-num); }
+    .tok-cm { color: var(--tok-cm); }
+
+    /* Bottom Status Bar */
+    .ide-statusbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 14px;
+      background: var(--ide-chrome-bg);
+      border-top: 1px solid var(--demo-border);
+      font-size: 10.5px;
+      font-family: "JetBrains Mono", monospace;
+      color: var(--demo-muted);
+    }
+    .ide-status-group {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    /* Macro Zoom helper support */
+    html[data-demo-zoom="macro"] #ag-prism-periodic-picker-root .ag-pp-stage {
+      width: var(--demo-macro-stage-w, clamp(1640px, 142vw, 2240px)) !important;
+      max-width: none !important;
+      transform: translateY(var(--demo-macro-offset-y, 0px));
+    }
+    .demo-macro-exit { display: none; }
+    html[data-demo-zoom="macro"] .demo-macro-exit { display: inline-flex; }
+  </style>
+</head>
+<body>
+  <!-- Top Floating Studio Bar -->
+  <nav class="demo-studio-bar" aria-label="V12 In-Flow Desk Dock Debug Bar">
+    <span class="demo-studio-tag" id="demo-mini-status">V12 DOCK</span>
+    <button type="button" class="demo-btn" id="btn-open-picker">呼出/收起底坞</button>
+    <button type="button" class="demo-btn" id="btn-stage-mode" data-active="0" title="切换内嵌上推底坞 ↔ 全屏 3D 展台 (非打字态按 F)">全屏展台 (F)</button>
+    <button type="button" class="demo-btn" id="btn-mock-orchestrator" data-active="0" title="切换 #0 Orch 机械自锁双核开关 + orchestratorPlanners 白名单降暗">#0 Orch 自锁</button>
+    <button type="button" class="demo-btn" id="btn-flip-card" data-active="0" title="3D 翻转左翼卡片：2026Q4 评测榜 ↔ 512K 实时遥测">3D 翻牌卡</button>
+    <button type="button" class="demo-btn" id="btn-narrow-dock" data-active="0" title="模拟会话窄栏 (< 1100px) 触发紧凑摘要条折叠">窄栏 &lt;1100</button>
+    <button type="button" class="demo-btn" id="btn-cycle-telemetry" title="循环模拟 512K 宿主上下文水位 (27% / 54% / 84%)">512K: 27%</button>
+    <span class="demo-studio-sep"></span>
+    <button type="button" class="demo-btn" id="btn-kit-obsidian" data-active="1">Obsidian</button>
+    <button type="button" class="demo-btn" id="btn-kit-warm" data-active="0">Warm</button>
+    <button type="button" class="demo-btn" id="btn-kit-crystal" data-active="0">Crystal</button>
+    <button type="button" class="demo-btn" id="btn-kit-alabaster" data-active="0">Alabaster</button>
+    <span class="demo-studio-sep"></span>
+    <button type="button" class="demo-btn" id="btn-accent-follow" data-active="1">Follow</button>
+    <button type="button" class="demo-btn" id="btn-accent-cobalt" data-active="0">Cobalt</button>
+    <button type="button" class="demo-btn" id="btn-accent-iris" data-active="0">Iris</button>
+    <button type="button" class="demo-btn" id="btn-accent-amber" data-active="0">Amber</button>
+    <button type="button" class="demo-btn" id="btn-toggle-mono" data-active="0">Mono</button>
+    <span class="demo-studio-sep"></span>
+    <button type="button" class="demo-btn" id="btn-orbit-tour" data-active="0">3D Tour</button>
+    <button type="button" class="demo-btn" id="btn-reset-view">回正 (R)</button>
+    <button type="button" class="demo-btn" id="btn-flick-test" data-active="0">局部追光</button>
+    <button type="button" class="demo-btn" id="btn-toggle-macro" data-active="0">微距</button>
+    <button type="button" class="demo-btn" id="btn-mock-non-element">Opus 会话</button>
+  </nav>
+
+  <!-- 1:1 Simulated Antigravity IDE Workspace -->
+  <div class="ag-host-shell">
+    <header class="ag-titlebar">
+      <div class="ag-title-left">
+        <span class="ag-traffic" aria-hidden="true"><i class="c-r"></i><i class="c-y"></i><i class="c-g"></i></span>
+        <strong>Antigravity IDE · V14 PRISM-118 Precision Hardware Desk Console</strong>
+      </div>
+      <div class="ag-title-right">
+        <span class="ag-badge-pill" id="demo-filter-badge">V12 READY</span>
+      </div>
+    </header>
+
+    <div class="ag-workspace-grid">
+      <!-- Left Thread List -->
+      <aside class="ag-left-nav" aria-label="Workspace Threads">
+        <div class="ag-nav-kicker">Active Conversations</div>
+        <div class="ag-thread-item is-active">
+          <span>V12 In-Flow Push-Up Dock</span>
+          <span class="ag-thread-tag">26:58:16</span>
+        </div>
+        <div class="ag-thread-item">
+          <span>#0 Orch Latching Switch</span>
+          <span class="ag-thread-tag">+1H</span>
+        </div>
+        <div class="ag-thread-item">
+          <span>2026Q4 Raw Benchmarks</span>
+          <span class="ag-thread-tag">AA v5</span>
+        </div>
+        <div class="ag-thread-item">
+          <span>140px Cool-White Rim</span>
+          <span class="ag-thread-tag">1px</span>
+        </div>
+      </aside>
+
+      <!-- 1:1 Host [data-testid="conversation-view"] Flex-Column Container -->
+      <main class="ag-chat-stage flex-col" data-testid="conversation-view" aria-label="Ongoing Antigravity Conversation Stream">
+        <div class="ag-chat-stream" id="demo-chat-stream">
+          <div class="ag-chat-stream-inner" id="demo-chat-messages">
+            <div class="ag-stream-header">
+              <div class="ag-stream-title">
+                <span>V14 PRISM-118 Precision Hardware Desk Console · Google 官方模型光谱 &amp; 深浅双模全幅显示屏</span>
+              </div>
+              <span class="ag-stream-meta" id="demo-telemetry-inline">Context: 142K / 512K (27%) · KV Cache 94%</span>
+            </div>
+
+            <div class="ag-msg-user">
+              在锁定 V13.1 CNC 三联硬件底座的基础上升级 V14 视觉系统：对标 Google DeepMind 官方 Gemini 4 发布配图光谱（6C 皇家钴蓝虹彩晶簇、10Ne 清透珊瑚暖金莫比乌斯玻璃带、18Ar 电光靛紫同心透镜、1H 晴空冰蓝星环），内嵌 1600×480 显示屏升级为深浅双模全幅静态官方雕塑 Banner（零程序化多面体动画、浅色模式告别黑砖屏），并升级磨砂海玻璃宝石键帽与双色折射晶轴！
+            </div>
+
+            <article class="ag-msg-agent">
+              <div class="ag-thought-bar">
+                <span class="ag-thought-dot" aria-hidden="true"></span>
+                <span>Thought for 1.8s · 已挂载至 [data-testid="conversation-view"] 末尾并激活打字零干扰键盘守卫</span>
+              </div>
+              <p class="ag-agent-prose">
+                V14 PRISM-118 精密硬件台已就绪：内嵌显示屏呈现全幅无缝深浅双模光学玻璃雕塑 Banner（静止态 <strong>0fps</strong> 休眠，切换时辅以 200ms 视差渐变与磨砂胶囊阻尼滑移），四枚核心元素键帽升级为半透磨砂宝石海玻璃配 Google 官方双色折射透明晶轴，<strong>AUX-06</strong> 配备品牌微槽光导与阳极双色 <strong>#0 ORCH</strong> 键帽。
+              </p>
+              <div class="ag-tool-row">
+                <span class="ag-tool-chip is-live">● PRISM-118 // CNC-6063</span>
+                <span class="ag-tool-chip is-live">● 6C Cobalt Iridescent Crystal</span>
+                <span class="ag-tool-chip">Dark &amp; Light Full-Bleed Screen</span>
+                <span class="ag-tool-chip">Artisan Gemstone Keycaps</span>
+              </div>
+            </article>
+          </div>
+        </div>
+
+        <div class="demo-composer-outer">
+          <footer class="demo-composer-wrap" data-testid="agent-input-box" role="toolbar" aria-label="Simulated Antigravity Composer">
+            <div class="demo-native-menu" id="demo-native-menu" data-testid="model-selector-panel" role="menu"></div>
+            <textarea
+              id="demo-chat-input"
+              class="demo-composer-textarea"
+              data-testid="demo-chat-textarea"
+              rows="2"
+              placeholder="开着下方 3D 底坞直接在此打字测试（试着输入 f、r、空格并按 Enter 发送消息，100% 零拦截）..."
+            ></textarea>
+            <div class="demo-composer-bar">
+              <div class="demo-trigger-group">
+                <button
+                  type="button"
+                  class="demo-model-trigger"
+                  id="demo-model-btn"
+                  data-testid="model-selector-trigger"
+                  aria-haspopup="menu"
+                >
+                  <span class="ag-cs-model-glyph" data-ag-no-i18n="1" aria-hidden="true">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                      <path d="M12 2.2c.23 0 .43.16.49.38.19.72.44 1.43.73 2.11 1.13 2.62 3.1 4.6 5.73 5.73.68.29 1.39.54 2.11.73.22.06.38.26.38.49s-.16.43-.38.49a15 15 0 0 0-2.11.73c-2.63 1.13-4.6 3.11-5.73 5.73-.29.68-.54 1.39-.73 2.11a.5.5 0 0 1-.98 0 15 15 0 0 0-.73-2.11c-1.13-2.62-3.1-4.6-5.73-5.73a15 15 0 0 0-2.11-.73.5.5 0 0 1 0-.98c.72-.19 1.43-.44 2.11-.73 2.63-1.13 4.6-3.11 5.73-5.73.29-.68.54-1.39.73-2.11.06-.22.26-.38.49-.38Z"/>
+                    </svg>
+                  </span>
+                  <span id="demo-trigger-label">Gemini 4 Carbon (High)</span>
+                </button>
+                <button type="button" class="demo-btn demo-macro-exit" id="btn-exit-macro">标准全景 (1x)</button>
+              </div>
+              <div class="demo-composer-right">
+                <span class="demo-hint">长按 420ms 呼出 · 点微键帽快收 · Enter 发送对话</span>
+                <button type="button" class="demo-send-btn" id="demo-send-btn">发送 ↵</button>
+              </div>
+            </div>
+          </footer>
+        </div>
+        <!-- V12 #ag-prism-periodic-picker-root mounts here as last child of [data-testid="conversation-view"]! -->
+      </main>
+
+      <!-- Right Live Host Sync & Orchestrator Contract Readout -->
+      <aside class="ag-right-code" aria-label="Host Sync & Orchestrator Readout">
+        <div class="demo-card">
+          <span class="demo-card-lbl">当前宿主激活模型 (Live Sync)</span>
+          <div class="demo-stat-val" id="demo-current-model">Gemini 4 Carbon (High)</div>
+          <div class="demo-stat-sub" id="demo-sync-log">V12 内嵌底坞已停靠于输入框正下方：二次点击唯一浮空键帽可 115ms 触底回弹并 260ms 平滑收起。</div>
+        </div>
+        <div class="demo-card">
+          <span class="demo-card-lbl">Orchestrator 白名单与 orchestratorPick 契约</span>
+          <div class="demo-stat-orch" id="demo-orch-state">orchLatched = false (单模型直连)</div>
+          <div class="demo-stat-sub" id="demo-orch-log">白名单主核：10Ne · 6C · 18Ar · Opus 5.5（锁存 #0 时 1H / Flash / Sonnet / GPT 自动熄灯锁定）</div>
+        </div>
+        <div class="demo-card">
+          <span class="demo-card-lbl">套件与模型矩阵盘点</span>
+          <div class="demo-stat-sub" id="demo-kit-summary">当前套件：Obsidian Space Black</div>
+          <div class="demo-stat-sub" id="demo-matched-summary">4 颗元素键帽 + 5 颗副盘键帽已点亮</div>
+        </div>
+        <div class="demo-code-snippet" aria-hidden="true">
+          <div><span class="tok-cm">// V12 Host Orchestrator Planner Contract</span></div>
+          <div><span class="tok-kw">const</span> MAX_CTX = <span class="tok-num">524288</span>; <span class="tok-cm">// 512K</span></div>
+          <div><span class="tok-fn">orchestratorPick</span>.<span class="tok-fn">select</span>(plannerOpt.value);</div>
+          <div><span class="tok-cm">// Allowed: 10Ne, 6C, 18Ar, Claude Opus 5.5</span></div>
+        </div>
+      </aside>
+    </div>
+
+    <footer class="ide-statusbar" aria-hidden="true">
+      <div class="ide-status-group">
+        <span>⎇ feat/periodic-picker</span>
+        <span id="demo-statusbar-tokens">Tokens: 142K / 512K</span>
+        <span>V14 PRISM-118 CNC Triptych · Google Official Spectrum · Dark/Light Banner</span>
+      </div>
+      <div class="ide-status-group">
+        <span>UTF-8 · LF</span>
+        <span>0fps Sleep · globalPermissionWrites = 0</span>
+      </div>
+    </footer>
+  </div>
+
+  <script src="../vendor/periodic-picker/pbr-grain-assets.js"></script>
+  <script src="../vendor/periodic-picker/audio-fx.js"></script>
+  <script src="../vendor/periodic-picker/model-catalog.js"></script>
+  <script src="../vendor/periodic-picker/host-bridge.js"></script>
+  <script src="../vendor/periodic-picker/oled-cyber-screen.js"></script>
+  <script src="../vendor/periodic-picker/keyboard-3d-gl.js"></script>
+  <script src="../vendor/periodic-picker/bento-ui.js"></script>
+  <script src="../vendor/periodic-picker/periodic-picker.js"></script>
+  <script>
+    (function () {
+      'use strict';
+
+      /* 4 Periodic Element Families + 5 Non-Element 2x3 Aux Macro Pad Models */
+      var MOCK_OPTIONS = [
+        /* 1 H · Hydrogen (4 tiers — dimmed in Orchestrator mode as background runner) */
+        { label: 'Gemini 4 Hydrogen (Low)', value: 'gemini-4-hydrogen-low', modelId: 'gemini-4-hydrogen-low' },
+        { label: 'Gemini 4 Hydrogen (Medium)', value: 'gemini-4-hydrogen-medium', modelId: 'gemini-4-hydrogen-medium' },
+        { label: 'Gemini 4 Hydrogen (High)', value: 'gemini-4-hydrogen-high', modelId: 'gemini-4-hydrogen-high' },
+        { label: 'Gemini 4 Hydrogen (XHigh)', value: 'gemini-4-hydrogen-xhigh', modelId: 'gemini-4-hydrogen-xhigh' },
+
+        /* 6 C · Carbon (3 tiers — allowed Orchestrator planner) */
+        { label: 'Gemini 4 Carbon (Low)', value: 'gemini-4-carbon-low', modelId: 'gemini-4-carbon-low' },
+        { label: 'Gemini 4 Carbon (Medium)', value: 'gemini-4-carbon-medium', modelId: 'gemini-4-carbon-medium' },
+        { label: 'Gemini 4 Carbon (High)', value: 'gemini-4-carbon-high', modelId: 'gemini-4-carbon-high' },
+
+        /* 10 Ne · Neon (4 tiers — allowed Orchestrator planner) */
+        { label: 'Gemini 4 Neon (Low)', value: 'gemini-4-neon-low', modelId: 'gemini-4-neon-low' },
+        { label: 'Gemini 4 Neon (Medium)', value: 'gemini-4-neon-medium', modelId: 'gemini-4-neon-medium' },
+        { label: 'Gemini 4 Neon (High)', value: 'gemini-4-neon-high', modelId: 'gemini-4-neon-high' },
+        { label: 'Gemini 4 Neon Extra', value: 'gemini-4-neon-xhigh', modelId: 'gemini-4-neon-xhigh' },
+
+        /* 18 Ar · Argon (3 tiers — allowed Orchestrator planner) */
+        { label: 'Gemini 4 Argon (Low)', value: 'gemini-4-argon-low', modelId: 'gemini-4-argon-low' },
+        { label: 'Gemini 4 Argon (Medium)', value: 'gemini-4-argon-medium', modelId: 'gemini-4-argon-medium' },
+        { label: 'Gemini 4 Argon (High)', value: 'gemini-4-argon-high', modelId: 'gemini-4-argon-high' },
+
+        /* 5 Non-Element Host Models -> Right 2x3 Aux Macro Pad (#0 Orchestrator Latching Switch) */
+        { label: 'Orchestrator', value: 'orchestrator', modelId: 'antigravity-orchestrator' },
+        { label: 'Gemini 3.8 Flash (Low)', value: 'gemini-3.8-flash-low', modelId: 'gemini-3.8-flash-low' },
+        { label: 'Gemini 3.8 Flash (Medium)', value: 'gemini-3.8-flash-medium', modelId: 'gemini-3.8-flash-medium' },
+        { label: 'Gemini 3.8 Flash (High)', value: 'gemini-3.8-flash-high', modelId: 'gemini-3.8-flash-high' },
+        { label: 'Claude Opus 5.5 (Low)', value: 'claude-opus-5-5-low', modelId: 'claude-opus-5-5-low' },
+        { label: 'Claude Opus 5.5 (Medium)', value: 'claude-opus-5-5-medium', modelId: 'claude-opus-5-5-medium' },
+        { label: 'Claude Opus 5.5 (High)', value: 'claude-opus-5-5-high', modelId: 'claude-opus-5-5-high' },
+        { label: 'Claude Sonnet 5.5 (Low)', value: 'claude-sonnet-5-5-low', modelId: 'claude-sonnet-5-5-low' },
+        { label: 'Claude Sonnet 5.5 (Medium)', value: 'claude-sonnet-5-5-medium', modelId: 'claude-sonnet-5-5-medium' },
+        { label: 'Claude Sonnet 5.5 (High)', value: 'claude-sonnet-5-5-high', modelId: 'claude-sonnet-5-5-high' },
+        { label: 'GPT-OSS 120B (Medium)', value: 'gpt-oss-120b-medium', modelId: 'gpt-oss-120b-medium' },
+        { label: 'GPT-OSS 120B (High)', value: 'gpt-oss-120b-high', modelId: 'gpt-oss-120b-high' }
+      ];
+
+      /* Authentic Host orchestratorPlanners Whitelist (10Ne, 6C, 18Ar, Claude Opus 5.5 ONLY) */
+      var MOCK_ORCH_PLANNERS = MOCK_OPTIONS.filter(function (opt) {
+        var id = opt.modelId || '';
+        return (
+          id.indexOf('gemini-4-neon-') === 0 ||
+          id.indexOf('gemini-4-carbon-') === 0 ||
+          id.indexOf('gemini-4-argon-') === 0 ||
+          id.indexOf('claude-opus-') === 0
+        );
+      });
+
+      /* Simulated Live 512K Host Telemetry Profiles (524,288 Max Context Window) */
+      var TELEMETRY_PROFILES = [
+        {
+          tag: '27%',
+          usedTokens: 142336,
+          maxTokens: 524288,
+          cacheHitRate: 0.94,
+          tps: 148,
+          history: [0.16, 0.19, 0.18, 0.22, 0.24, 0.21, 0.25, 0.26, 0.24, 0.27, 0.28, 0.27]
+        },
+        {
+          tag: '54%',
+          usedTokens: 283115,
+          maxTokens: 524288,
+          cacheHitRate: 0.91,
+          tps: 132,
+          history: [0.28, 0.33, 0.36, 0.39, 0.42, 0.45, 0.44, 0.48, 0.51, 0.50, 0.53, 0.54]
+        },
+        {
+          tag: '84%',
+          usedTokens: 440402,
+          maxTokens: 524288,
+          cacheHitRate: 0.87,
+          tps: 108,
+          history: [0.56, 0.61, 0.65, 0.68, 0.72, 0.75, 0.74, 0.78, 0.80, 0.82, 0.83, 0.84]
+        }
+      ];
+      var telemetryIdx = 0;
+
+      function applyTelemetryProfile(idx) {
+        telemetryIdx = ((idx % TELEMETRY_PROFILES.length) + TELEMETRY_PROFILES.length) % TELEMETRY_PROFILES.length;
+        var p = TELEMETRY_PROFILES[telemetryIdx];
+        window.__agPrismTelemetry = {
+          usedTokens: p.usedTokens,
+          maxTokens: p.maxTokens,
+          cacheHitRate: p.cacheHitRate,
+          tps: p.tps,
+          history: p.history.slice()
+        };
+        var usedK = Math.round(p.usedTokens / 1024) + 'K';
+        var inlineEl = document.getElementById('demo-telemetry-inline');
+        var statusBarTok = document.getElementById('demo-statusbar-tokens');
+        var btnTele = document.getElementById('btn-cycle-telemetry');
+        if (inlineEl) {
+          inlineEl.textContent =
+            'Context: ' + usedK + ' / 512K (' + p.tag + ') · KV Cache ' + Math.round(p.cacheHitRate * 100) + '%';
+        }
+        if (statusBarTok) {
+          statusBarTok.textContent = 'Tokens: ' + usedK + ' / 512K';
+        }
+        if (btnTele) {
+          btnTele.textContent = '512K: ' + p.tag;
+        }
+      }
+      applyTelemetryProfile(0);
+
+      var KIT_SPECS = {
+        obsidian: { theme: 'dark', palette: 'obsidian', lightPreset: 'crystal', label: 'Obsidian Space Black (玄黑微晶阳极)' },
+        warm: { theme: 'dark', palette: 'claude', lightPreset: 'crystal', label: 'Warm Dark (黑金曜石微倒角)' },
+        crystal: { theme: 'light', palette: 'obsidian', lightPreset: 'crystal', label: 'Crystal Light (冷雾银冰晶底板)' },
+        alabaster: { theme: 'light', palette: 'warm', lightPreset: 'alabaster', label: 'Alabaster Light (暖白玉冰晶底板)' }
+      };
+
+      var ACCENT_LABELS = {
+        follow: 'Follow (冷白微色散)',
+        cobalt: 'Cobalt (冰青微色散)',
+        iris: 'Iris (瑾瑜微色散)',
+        amber: 'Amber (琥珀微色散)',
+        mono: 'Mono (消色差铂银)'
+      };
+
+      var params = new URLSearchParams(window.location.search || '');
+      var rawThemeParam = (params.get('theme') || params.get('kit') || 'obsidian').toLowerCase();
+      var initKit = 'obsidian';
+      if (rawThemeParam === 'warm' || rawThemeParam === 'claude' || rawThemeParam === 'warm-dark' || rawThemeParam === 'espresso') {
+        initKit = 'warm';
+      } else if (rawThemeParam === 'crystal' || rawThemeParam === 'light' || rawThemeParam === 'crystal-light' || rawThemeParam === 'minimal') {
+        initKit = 'crystal';
+      } else if (rawThemeParam === 'alabaster' || rawThemeParam === '9009' || rawThemeParam === 'alabaster-light') {
+        initKit = 'alabaster';
+      }
+
+      var rawAccentParam = (params.get('accent') || (params.get('mono') === '1' ? 'mono' : 'follow')).toLowerCase();
+      var initAccent = ACCENT_LABELS[rawAccentParam] ? rawAccentParam : 'follow';
+      var initCorners = params.get('corners') || 'soft';
+      var initLang = params.get('lang') === 'en' ? 'en' : 'zh-CN';
+      var sessionParam = (params.get('session') || (params.get('orch') === '1' ? 'orchestrator' : '')).toLowerCase();
+      var autoOpen = params.get('open') !== '0';
+      var isCleanShot = params.get('debug') === '0' || params.get('clean') === '1';
+      var autoTour = params.get('tour') === '1';
+      var autoFlick = params.get('orbit') === '1' || params.get('glide') === '1' || params.get('flick') === '1';
+      var initFlipCard = params.get('flip') === '1';
+      var tierParam = (params.get('tier') || '').toLowerCase();
+      var isMediumSim = tierParam === 'medium' || params.get('medium') === '1';
+      var isNarrowSim = tierParam === 'narrow' || params.get('narrow') === '1' || params.get('compact') === '1';
+      if (isMediumSim) {
+        document.documentElement.setAttribute('data-demo-medium', '1');
+      }
+
+      var hasOrbitParam = params.has('orbitPitch') || params.has('orbitYaw');
+      function parseOrbitRad(rawVal) {
+        var v = parseFloat(rawVal || '0');
+        if (!Number.isFinite(v)) return 0;
+        return Math.abs(v) > 1.5 ? (v * Math.PI) / 180 : v;
+      }
+      var initOrbitPitch = parseOrbitRad(params.get('orbitPitch'));
+      var initOrbitYaw = parseOrbitRad(params.get('orbitYaw'));
+
+      var rawStageParam = (params.get('mode') || params.get('stage') || '').toLowerCase();
+      var initStageMode =
+        rawStageParam === 'fullscreen' || rawStageParam === 'full' || hasOrbitParam || autoTour
+          ? 'fullscreen'
+          : 'drawer';
+
+      var rawZoom = (params.get('zoom') || '').trim().toLowerCase();
+      var rawFocus = (params.get('focus') || 'hero').trim().toLowerCase();
+      var numericZoom = parseFloat(rawZoom);
+      var isMacro =
+        rawZoom === 'macro' ||
+        rawZoom === 'closeup' ||
+        rawZoom === 'close' ||
+        (Number.isFinite(numericZoom) && numericZoom > 1.05);
+      var customScaleMul = Number.isFinite(numericZoom) && numericZoom > 1.05 ? Math.min(2.6, numericZoom) : 0;
+
+      var hasPoseParam = params.has('yaw') || params.has('pitch');
+      function normalizePoseInput(rawVal) {
+        var v = parseFloat(rawVal || '0');
+        if (!Number.isFinite(v)) return 0;
+        var scaled = Math.abs(v) > 1.5 ? v / 15 : v;
+        return Math.max(-1, Math.min(1, scaled));
+      }
+      var initYawNorm = normalizePoseInput(params.get('yaw'));
+      var initPitchNorm = normalizePoseInput(params.get('pitch'));
+
+      var rawNear = (params.get('near') || '').trim();
+      var hasNearParam = false;
+      var initNearDx = 0;
+      var initNearDy = 0;
+      if (rawNear) {
+        var nearParts = rawNear.split(',');
+        if (nearParts.length >= 2) {
+          var ndx = parseFloat(nearParts[0]);
+          var ndy = parseFloat(nearParts[1]);
+          if (Number.isFinite(ndx) && Number.isFinite(ndy)) {
+            hasNearParam = true;
+            initNearDx = ndx;
+            initNearDy = ndy;
+          }
+        }
+      }
+
+      var rawElParam = (params.get('el') || params.get('z') || '6').trim().toLowerCase();
+      var elAliasToZ = {
+        '1': 1, h: 1, hydrogen: 1,
+        '6': 6, c: 6, carbon: 6,
+        '10': 10, ne: 10, neon: 10,
+        '18': 18, ar: 18, argon: 18
+      };
+      var initZParam = elAliasToZ[rawElParam] || parseInt(rawElParam, 10) || 6;
+      var initEffortParam = (params.get('effort') || 'high').trim().toLowerCase();
+      if (initEffortParam === 'extra') initEffortParam = 'xhigh';
+      if (initEffortParam === 'med') initEffortParam = 'medium';
+
+      function findOptionByModelIdPrefix(prefix) {
+        for (var i = 0; i < MOCK_OPTIONS.length; i += 1) {
+          if ((MOCK_OPTIONS[i].modelId || '').indexOf(prefix) === 0) return MOCK_OPTIONS[i];
+        }
+        return MOCK_OPTIONS[6];
+      }
+
+      var carbonHighOption = findOptionByModelIdPrefix('gemini-4-carbon-high');
+      var defaultElementOption = carbonHighOption;
+      var zPrefixMap = { 1: 'hydrogen', 6: 'carbon', 10: 'neon', 18: 'argon' };
+      var targetSlug = zPrefixMap[initZParam] || 'carbon';
+      var exactMatchedOption = null;
+      var sameElementFallbackOption = null;
+      for (var oi = 0; oi < MOCK_OPTIONS.length; oi += 1) {
+        var mId = MOCK_OPTIONS[oi].modelId || '';
+        if (mId.indexOf('gemini-4-' + targetSlug + '-') === 0) {
+          sameElementFallbackOption = MOCK_OPTIONS[oi];
+          if (mId.indexOf('gemini-4-' + targetSlug + '-' + initEffortParam) === 0) {
+            exactMatchedOption = MOCK_OPTIONS[oi];
+            break;
+          }
+        }
+      }
+      if (exactMatchedOption) {
+        defaultElementOption = exactMatchedOption;
+      } else if (sameElementFallbackOption) {
+        defaultElementOption = sameElementFallbackOption;
+      }
+
+      var orchestratorOption = findOptionByModelIdPrefix('antigravity-orchestrator');
+      var flashOption = findOptionByModelIdPrefix('gemini-3.8-flash-high');
+      var claudeOption = findOptionByModelIdPrefix('claude-opus-5-5-high');
+      var sonnetOption = findOptionByModelIdPrefix('claude-sonnet-5-5-high');
+      var gptOption = findOptionByModelIdPrefix('gpt-oss-120b-high');
+
+      var initialSelectedOption = defaultElementOption;
+      if (sessionParam === 'orchestrator' || sessionParam === 'orch') {
+        initialSelectedOption = orchestratorOption;
+      } else if (sessionParam === 'flash') {
+        initialSelectedOption = flashOption;
+      } else if (sessionParam === 'claude' || sessionParam === 'opus') {
+        initialSelectedOption = claudeOption;
+      } else if (sessionParam === 'sonnet') {
+        initialSelectedOption = sonnetOption;
+      } else if (sessionParam === 'gpt') {
+        initialSelectedOption = gptOption;
+      }
+
+      var currentEl = document.getElementById('demo-current-model');
+      var triggerLbl = document.getElementById('demo-trigger-label');
+      var syncLogEl = document.getElementById('demo-sync-log');
+      var orchStateEl = document.getElementById('demo-orch-state');
+      var orchLogEl = document.getElementById('demo-orch-log');
+      var kitSummaryEl = document.getElementById('demo-kit-summary');
+      var nativeMenu = document.getElementById('demo-native-menu');
+      var modelBtn = document.getElementById('demo-model-btn');
+      var miniStatusEl = document.getElementById('demo-mini-status');
+      var btnStageMode = document.getElementById('btn-stage-mode');
+      var btnOrchToggle = document.getElementById('btn-mock-orchestrator');
+      var btnFlipCard = document.getElementById('btn-flip-card');
+      var btnNarrowDock = document.getElementById('btn-narrow-dock');
+      var chatStreamEl = document.getElementById('demo-chat-stream');
+      var chatMessagesEl = document.getElementById('demo-chat-messages');
+      var chatInputEl = document.getElementById('demo-chat-input');
+      var chatSendBtn = document.getElementById('demo-send-btn');
+
+      var kitButtons = {
+        obsidian: document.getElementById('btn-kit-obsidian'),
+        warm: document.getElementById('btn-kit-warm'),
+        crystal: document.getElementById('btn-kit-crystal'),
+        alabaster: document.getElementById('btn-kit-alabaster')
+      };
+      var accentButtons = {
+        follow: document.getElementById('btn-accent-follow'),
+        cobalt: document.getElementById('btn-accent-cobalt'),
+        iris: document.getElementById('btn-accent-iris'),
+        amber: document.getElementById('btn-accent-amber'),
+        mono: document.getElementById('btn-toggle-mono')
+      };
+      var btnOrbitTour = document.getElementById('btn-orbit-tour');
+      var btnResetView = document.getElementById('btn-reset-view');
+      var btnFlick = document.getElementById('btn-flick-test');
+      var btnMacro = document.getElementById('btn-toggle-macro');
+      var btnExitMacro = document.getElementById('btn-exit-macro');
+
+      var currentKitKey = initKit;
+      var currentAccent = initAccent;
+      var picker = null;
+      var activeFlickRaf = 0;
+      var activeTourRaf = 0;
+      var activeFlickBadgeTimer = 0;
+      var autoFlickTimer = 0;
+
+      function cancelFlickAnimation() {
+        if (activeFlickRaf) {
+          cancelAnimationFrame(activeFlickRaf);
+          activeFlickRaf = 0;
+        }
+        if (activeTourRaf) {
+          cancelAnimationFrame(activeTourRaf);
+          activeTourRaf = 0;
+        }
+        if (activeFlickBadgeTimer) {
+          clearTimeout(activeFlickBadgeTimer);
+          activeFlickBadgeTimer = 0;
+        }
+        if (btnFlick) btnFlick.setAttribute('data-active', '0');
+        if (btnOrbitTour) btnOrbitTour.setAttribute('data-active', '0');
+      }
+
+      function applyNarrowSimulation(enableNarrow) {
+        isNarrowSim = Boolean(enableNarrow);
+        document.documentElement.setAttribute('data-demo-narrow', isNarrowSim ? '1' : '0');
+        if (btnNarrowDock) btnNarrowDock.setAttribute('data-active', isNarrowSim ? '1' : '0');
+        try {
+          window.dispatchEvent(new Event('resize'));
+        } catch (e) {}
+      }
+
+      function applyMacroZoomState(enableMacro, focusHint) {
+        isMacro = Boolean(enableMacro);
+        var de = document.documentElement;
+        var resolvedFocus =
+          focusHint === 'left' || focusHint === 'center' || focusHint === 'oled' || focusHint === 'switch'
+            ? focusHint
+            : 'hero';
+        de.setAttribute('data-demo-zoom', isMacro ? 'macro' : 'normal');
+        de.setAttribute('data-demo-focus', resolvedFocus);
+
+        if (isMacro) {
+          if (customScaleMul > 0) {
+            de.style.setProperty('--demo-macro-stage-w', Math.round(customScaleMul * 100) + 'vw');
+          } else {
+            de.style.removeProperty('--demo-macro-stage-w');
+          }
+        } else {
+          de.style.removeProperty('--demo-macro-stage-w');
+        }
+        if (btnMacro) btnMacro.setAttribute('data-active', isMacro ? '1' : '0');
+        try {
+          window.dispatchEvent(new Event('resize'));
+        } catch (e) {}
+      }
+
+      function applyPrismSuite(kitKey, accentArg) {
+        var spec = KIT_SPECS[kitKey] || KIT_SPECS.obsidian;
+        currentKitKey = KIT_SPECS[kitKey] ? kitKey : 'obsidian';
+        if (typeof accentArg === 'string' && ACCENT_LABELS[accentArg]) {
+          currentAccent = accentArg;
+        }
+
+        var de = document.documentElement;
+        de.setAttribute('data-ag-cs-theme', spec.theme);
+        de.setAttribute('data-ag-cs-palette', spec.palette);
+        de.setAttribute('data-ag-cs-light-preset', spec.lightPreset);
+        de.setAttribute('data-ag-cs-accent', currentAccent);
+        de.classList.toggle('light', spec.theme === 'light');
+        de.classList.toggle('dark', spec.theme === 'dark');
+        document.body.classList.toggle('light', spec.theme === 'light');
+        document.body.classList.toggle('dark', spec.theme === 'dark');
+
+        Object.keys(kitButtons).forEach(function (k) {
+          if (kitButtons[k]) kitButtons[k].setAttribute('data-active', k === currentKitKey ? '1' : '0');
+        });
+        Object.keys(accentButtons).forEach(function (ak) {
+          if (accentButtons[ak]) accentButtons[ak].setAttribute('data-active', ak === currentAccent ? '1' : '0');
+        });
+        kitSummaryEl.textContent = '当前套件：' + spec.label + ' · 光学边：' + ACCENT_LABELS[currentAccent];
+      }
+
+      document.documentElement.setAttribute('data-ag-cs-lang', initLang);
+      document.documentElement.setAttribute('data-ag-cs-corners', initCorners);
+      if (isCleanShot) {
+        document.documentElement.setAttribute('data-demo-clean', '1');
+      }
+      applyPrismSuite(initKit, initAccent);
+      applyNarrowSimulation(isNarrowSim);
+      applyMacroZoomState(isMacro, rawFocus);
+
+      /* Pin initial chat scroll to bottom so V12 Dock push-up scroll compensation can be observed directly */
+      if (chatStreamEl) {
+        chatStreamEl.scrollTop = chatStreamEl.scrollHeight;
+      }
+
+      /* Live Chat Message Send (Verifies 100% Typing & Enter Freedom While Dock Is Open!) */
+      function sendDemoChatMessage() {
+        if (!chatInputEl || !chatMessagesEl || !chatStreamEl) return;
+        var text = String(chatInputEl.value || '').trim();
+        if (!text) return;
+        var userBubble = document.createElement('div');
+        userBubble.className = 'ag-msg-user';
+        userBubble.textContent = text;
+        chatMessagesEl.appendChild(userBubble);
+        chatInputEl.value = '';
+        chatStreamEl.scrollTop = chatStreamEl.scrollHeight;
+        syncLogEl.textContent = '对话消息已无阻发送（底坞保持内嵌展开，打字与 Enter 零冲突）："' + text.slice(0, 36) + '"';
+      }
+
+      if (chatInputEl) {
+        chatInputEl.addEventListener('keydown', function (ev) {
+          if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing) {
+            ev.preventDefault();
+            sendDemoChatMessage();
+          }
+        });
+      }
+      if (chatSendBtn) {
+        chatSendBtn.addEventListener('click', sendDemoChatMessage);
+      }
+
+      var initialPlannerForOrch =
+        MOCK_ORCH_PLANNERS.indexOf(defaultElementOption) !== -1 ? defaultElementOption : carbonHighOption;
+
+      var mockHost = {
+        conversationId: 'sandbox-conv-v12',
+        modelOptions: MOCK_OPTIONS,
+        selectedModel: initialSelectedOption,
+        orchestratorPlanners: MOCK_ORCH_PLANNERS,
+        orchestratorDefaultPlanner: carbonHighOption,
+        orchestratorPick: {
+          model: initialPlannerForOrch,
+          select: function (val, resolvedOpt) {
+            var matchedPlanner = resolvedOpt || null;
+            if (!matchedPlanner) {
+              for (var i = 0; i < MOCK_ORCH_PLANNERS.length; i += 1) {
+                var p = MOCK_ORCH_PLANNERS[i];
+                if (p.value === val || p.modelId === val || p.label === val) {
+                  matchedPlanner = p;
+                  break;
+                }
+              }
+            }
+            if (matchedPlanner) {
+              mockHost.orchestratorPick.model = matchedPlanner;
+            }
+            if (orchLogEl) {
+              orchLogEl.textContent =
+                'orchestratorPick.select("' +
+                String(val) +
+                '") -> 主规划核：' +
+                (matchedPlanner ? matchedPlanner.label : String(val)) +
+                ' + 1H 常规卸载';
+            }
+          }
+        },
+        setIsOpen: function (openFlag) {
+          nativeMenu.setAttribute('data-open', openFlag ? '1' : '0');
+        },
+        setModelConfigByLabelForConversation: function (label) {
+          for (var i = 0; i < MOCK_OPTIONS.length; i += 1) {
+            if (MOCK_OPTIONS[i].label === label) {
+              mockHost.selectedModel = MOCK_OPTIONS[i];
+              break;
+            }
+          }
+          currentEl.textContent = label;
+          triggerLbl.textContent = label;
+          syncLogEl.textContent = 'Live Sync 已同步至宿主会话 -> ' + label;
+          if (picker && typeof picker.syncBadges === 'function') {
+            picker.syncBadges();
+          }
+          requestAnimationFrame(updateHeaderBadge);
+        }
+      };
+
+      window.__agPeriodicMockHost = mockHost;
+      currentEl.textContent = mockHost.selectedModel.label;
+      triggerLbl.textContent = mockHost.selectedModel.label;
+
+      /* Populate simulated short-click native dropdown */
+      var previewShortItems = [
+        carbonHighOption,
+        findOptionByModelIdPrefix('gemini-4-hydrogen-high'),
+        findOptionByModelIdPrefix('gemini-4-neon-high'),
+        findOptionByModelIdPrefix('gemini-4-argon-high'),
+        orchestratorOption,
+        flashOption,
+        claudeOption,
+        sonnetOption,
+        gptOption
+      ];
+      for (var m = 0; m < previewShortItems.length; m += 1) {
+        (function (opt) {
+          var item = document.createElement('button');
+          item.type = 'button';
+          item.className = 'demo-native-item';
+          item.textContent = opt.label;
+          item.addEventListener('click', function () {
+            mockHost.setModelConfigByLabelForConversation(opt.label);
+            mockHost.setIsOpen(false);
+          });
+          nativeMenu.appendChild(item);
+        })(previewShortItems[m]);
+      }
+
+      modelBtn.addEventListener('click', function () {
+        var nextOpen = nativeMenu.getAttribute('data-open') !== '1';
+        mockHost.setIsOpen(nextOpen);
+      });
+
+      document.addEventListener('click', function (ev) {
+        if (!nativeMenu.contains(ev.target) && !modelBtn.contains(ev.target)) {
+          mockHost.setIsOpen(false);
+        }
+      });
+
+      var factory = window.__agPrismPeriodicPickerFactory;
+      if (!factory) {
+        document.getElementById('demo-filter-badge').textContent = '未加载 periodic-picker.js';
+        return;
+      }
+
+      var matched = factory.matchGoogleElementModels(MOCK_OPTIONS);
+      var matchedAux =
+        typeof factory.matchHostAuxModels === 'function'
+          ? factory.matchHostAuxModels(MOCK_OPTIONS, null, MOCK_ORCH_PLANNERS).filter(function (s) {
+              return s.available;
+            })
+          : [];
+      var symbols = matched.map(function (e) { return e.z + ' ' + e.symbol; }).join(' · ');
+
+      picker = factory.createPeriodicModelPickerController({
+        root: window,
+        doc: document,
+        mode: 'on',
+        initialStageMode: initStageMode
+      });
+
+      function syncStudioControlsUi() {
+        if (!picker) return;
+        var st = picker.getStatus();
+        var isFull = st.stageMode === 'fullscreen';
+        var demoBarEl = document.querySelector('.demo-studio-bar');
+        var targetStageAttr = st.open && isFull ? 'fullscreen' : 'drawer';
+        if (demoBarEl && demoBarEl.getAttribute('data-stage') !== targetStageAttr) {
+          demoBarEl.setAttribute('data-stage', targetStageAttr);
+        }
+        if (btnStageMode) {
+          btnStageMode.setAttribute('data-active', isFull ? '1' : '0');
+          btnStageMode.textContent = isFull ? '内嵌底坞 (F)' : '全屏展台 (F)';
+        }
+        if (btnOrchToggle) {
+          btnOrchToggle.setAttribute('data-active', st.orchLatched ? '1' : '0');
+        }
+        if (btnFlipCard) {
+          btnFlipCard.setAttribute('data-active', st.cardFlipped ? '1' : '0');
+        }
+        if (orchStateEl) {
+          var activePlannerLbl =
+            mockHost.orchestratorPick && mockHost.orchestratorPick.model
+              ? mockHost.orchestratorPick.model.label
+              : 'Carbon';
+          orchStateEl.textContent = st.orchLatched
+            ? 'orchLatched = true · ' + activePlannerLbl
+            : 'orchLatched = false (单模型直连)';
+        }
+      }
+
+      function updateHeaderBadge() {
+        if (!picker) return;
+        var st = picker.getStatus();
+        var modeUpper = String(st.rendererMode || 'ready').toUpperCase();
+        var sMode = String(st.stageMode || 'drawer').toUpperCase();
+        var orchTag = st.orchLatched ? ' · ORCH+1H' : '';
+        document.getElementById('demo-filter-badge').textContent =
+          'V14 ' + modeUpper + ' · ' + sMode + orchTag + ' · 512K · ' + st.availableCount + ' Avail Elements';
+        if (miniStatusEl) {
+          miniStatusEl.textContent = 'V14 ' + (st.orchLatched ? 'ORCH' : sMode);
+        }
+        syncStudioControlsUi();
+      }
+
+      document.getElementById('demo-matched-summary').textContent =
+        matched.length + ' 颗元素 (' + symbols + ') + ' + matchedAux.length + ' 颗 2×3 副盘键帽已点亮';
+
+      function emitSyntheticPointerMove(targetNode, cx, cy) {
+        if (typeof picker.setPointerClient === 'function') {
+          picker.setPointerClient(cx, cy, true);
+        }
+        if (targetNode && typeof targetNode.dispatchEvent === 'function') {
+          var PtrCtor = typeof PointerEvent === 'function' ? PointerEvent : MouseEvent;
+          targetNode.dispatchEvent(
+            new PtrCtor('pointermove', {
+              bubbles: true,
+              cancelable: true,
+              clientX: cx,
+              clientY: cy,
+              pointerId: 1,
+              pointerType: 'mouse'
+            })
+          );
+        }
+      }
+
+      function smootherstep01(x) {
+        var u = Math.max(0, Math.min(1, x));
+        return u * u * u * (u * (u * 6 - 15) + 10);
+      }
+
+      /* Sweep along top 1px hairline & left card rim to showcase the 140px Cool-White Micro-Dispersion Rim */
+      function triggerRimSweepDemo(opts) {
+        var o = opts && typeof opts === 'object' ? opts : {};
+        cancelFlickAnimation();
+        if (!picker.isOpen()) {
+          picker.open(modelBtn);
+          updateHeaderBadge();
+        }
+        if (btnFlick) btnFlick.setAttribute('data-active', '1');
+
+        var durationMs = Number(o.durationMs) > 120 ? Number(o.durationMs) : 1600;
+        var startTs = 0;
+
+        function stepSweep(now) {
+          var rootEl = document.getElementById('ag-prism-periodic-picker-root');
+          if (!rootEl) {
+            cancelFlickAnimation();
+            return;
+          }
+          if (!startTs) startTs = now;
+          var t = Math.min(1, Math.max(0, (now - startTs) / durationMs));
+          var r = rootEl.getBoundingClientRect();
+          var cx = r.left + r.width * (0.08 + 0.84 * smootherstep01(t));
+          var cy = r.top + 6 + Math.sin(t * Math.PI) * 32;
+          emitSyntheticPointerMove(rootEl, cx, cy);
+          if (t < 1) {
+            activeFlickRaf = requestAnimationFrame(stepSweep);
+            return;
+          }
+          activeFlickRaf = 0;
+          if (typeof picker.setPointerClient === 'function') {
+            picker.setPointerClient(-9999, -9999, false);
+          }
+          syncLogEl.textContent = '1px 局部 140px 冷白微色散光学边掠射演示已完成，鼠标移开即归于零常亮静默';
+          activeFlickBadgeTimer = setTimeout(function () {
+            activeFlickBadgeTimer = 0;
+            if (btnFlick) btnFlick.setAttribute('data-active', '0');
+          }, 320);
+        }
+        activeFlickRaf = requestAnimationFrame(stepSweep);
+      }
+
+      function lerpKeyframes(p, frames) {
+        var u = Math.max(0, Math.min(1, p));
+        for (var i = 0; i < frames.length - 1; i += 1) {
+          var a = frames[i];
+          var b = frames[i + 1];
+          if (u <= b.t || i === frames.length - 2) {
+            var span = Math.max(1e-5, b.t - a.t);
+            var w = smootherstep01((u - a.t) / span);
+            return {
+              pitch: a.pitch + (b.pitch - a.pitch) * w,
+              yaw: a.yaw + (b.yaw - a.yaw) * w
+            };
+          }
+        }
+        var last = frames[frames.length - 1];
+        return { pitch: last.pitch, yaw: last.yaw };
+      }
+
+      function triggerOrbitTour(opts) {
+        var o = opts && typeof opts === 'object' ? opts : {};
+        cancelFlickAnimation();
+        if (!picker.isOpen()) {
+          picker.open(modelBtn);
+        }
+        if (typeof picker.getStageMode === 'function' && picker.getStageMode() !== 'fullscreen') {
+          picker.setStageMode('fullscreen');
+        }
+        updateHeaderBadge();
+        if (btnOrbitTour) btnOrbitTour.setAttribute('data-active', '1');
+
+        var durationMs = Number(o.durationMs) > 200 ? Number(o.durationMs) : 2550;
+        var returnHome = Boolean(o.returnHome);
+        var startOrbit =
+          typeof picker.getChassisOrbit === 'function' ? picker.getChassisOrbit() : { pitch: 0, yaw: 0 };
+        var keyframes = [
+          { t: 0.0, pitch: startOrbit.pitch || 0, yaw: startOrbit.yaw || 0 },
+          { t: 0.34, pitch: 0.34, yaw: -0.58 },
+          { t: 0.72, pitch: -0.44, yaw: 0.52 },
+          { t: 1.0, pitch: returnHome ? 0 : 0.24, yaw: returnHome ? 0 : -0.38 }
+        ];
+        var startTs = 0;
+
+        function stepTour(now) {
+          if (!picker.isOpen()) {
+            cancelFlickAnimation();
+            return;
+          }
+          if (!startTs) startTs = now;
+          var t = Math.min(1, Math.max(0, (now - startTs) / durationMs));
+          var pose = lerpKeyframes(t, keyframes);
+          if (typeof picker.setChassisOrbit === 'function') {
+            picker.setChassisOrbit(pose.pitch, pose.yaw);
+          }
+          var rootEl = document.getElementById('ag-prism-periodic-picker-root');
+          var stageNode = rootEl && rootEl.querySelector('.ag-pp-stage');
+          if (stageNode && typeof stageNode.getBoundingClientRect === 'function') {
+            var sr = stageNode.getBoundingClientRect();
+            if (sr && sr.width > 80) {
+              var ang = -Math.PI * 0.65 + t * Math.PI * 2.15;
+              emitSyntheticPointerMove(
+                rootEl,
+                sr.left + sr.width * (0.5 + Math.cos(ang) * 0.38),
+                sr.top + sr.height * (0.48 + Math.sin(ang) * 0.34)
+              );
+            }
+          }
+          if (t < 1) {
+            activeTourRaf = requestAnimationFrame(stepTour);
+            return;
+          }
+          activeTourRaf = 0;
+          syncLogEl.textContent =
+            '全屏 3D 展台环绕检视完成 -> 可左键自由拖拽 (0.0046 rad/px) 或按 F 无缝迁回输入框下方内嵌底坞';
+          activeFlickBadgeTimer = setTimeout(function () {
+            activeFlickBadgeTimer = 0;
+            if (btnOrbitTour) btnOrbitTour.setAttribute('data-active', '0');
+          }, 320);
+        }
+        activeTourRaf = requestAnimationFrame(stepTour);
+      }
+
+      function triggerResetOrbitView() {
+        cancelFlickAnimation();
+        if (!picker.isOpen()) {
+          picker.open(modelBtn);
+          updateHeaderBadge();
+        }
+        if (typeof picker.resetChassisOrbit === 'function') {
+          picker.resetChassisOrbit();
+        }
+        syncLogEl.textContent = 'Reset View (R) 已触发 -> 黄金俯视角弹簧丝滑归正';
+      }
+
+      window.__agDemoTriggerOrbit = triggerRimSweepDemo;
+      window.__agDemoTriggerFlick = triggerRimSweepDemo;
+      window.__agDemoTriggerOrbitTour = triggerOrbitTour;
+      window.__agDemoResetOrbitView = triggerResetOrbitView;
+
+      function isTypingInDemoInput(ev) {
+        var t = ev && ev.target;
+        if (!t || typeof t !== 'object') return false;
+        var tag = (t.tagName || '').toUpperCase();
+        return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || t.isContentEditable === true;
+      }
+
+      document.addEventListener('keydown', function (ev) {
+        if (isTypingInDemoInput(ev)) return;
+        if (!ev.altKey && !ev.ctrlKey && !ev.metaKey && (ev.key === 'f' || ev.key === 'F')) {
+          requestAnimationFrame(updateHeaderBadge);
+          return;
+        }
+        if (!ev.altKey || ev.ctrlKey || ev.metaKey) return;
+        if (ev.key === '1') { applyPrismSuite('obsidian', currentAccent); }
+        else if (ev.key === '2') { applyPrismSuite('warm', currentAccent); }
+        else if (ev.key === '3') { applyPrismSuite('crystal', currentAccent); }
+        else if (ev.key === '4') { applyPrismSuite('alabaster', currentAccent); }
+        else if (ev.key === '5') { applyPrismSuite(currentKitKey, 'follow'); }
+        else if (ev.key === '6') { applyPrismSuite(currentKitKey, 'cobalt'); }
+        else if (ev.key === '7') { applyPrismSuite(currentKitKey, 'iris'); }
+        else if (ev.key === '8') { applyPrismSuite(currentKitKey, 'amber'); }
+        else if (ev.key === '9' || ev.key === 'm' || ev.key === 'M') {
+          applyPrismSuite(currentKitKey, currentAccent === 'mono' ? 'follow' : 'mono');
+        } else if (ev.key === 'o' || ev.key === 'O') {
+          ev.preventDefault();
+          triggerOrbitTour();
+        } else if (ev.key === 'g' || ev.key === 'G') {
+          ev.preventDefault();
+          triggerRimSweepDemo();
+        } else if (ev.key === 'z' || ev.key === 'Z') {
+          customScaleMul = 0;
+          applyMacroZoomState(!isMacro, rawFocus);
+          updateHeaderBadge();
+        }
+      });
+
+      document.addEventListener('click', function () {
+        requestAnimationFrame(updateHeaderBadge);
+      });
+      document.addEventListener('keydown', function () {
+        requestAnimationFrame(updateHeaderBadge);
+      });
+
+      if (btnStageMode) {
+        btnStageMode.addEventListener('click', function () {
+          if (!picker.isOpen()) {
+            picker.open(modelBtn);
+          }
+          picker.toggleStageMode();
+          updateHeaderBadge();
+          syncLogEl.textContent =
+            picker.getStageMode() === 'fullscreen'
+              ? '已提升至 doc.body 全屏 3D 展台：左键 0.0046 rad/px 自由旋转 + 50ms 动量惯性已解锁'
+              : '已无缝迁回 [data-testid="conversation-view"] 输入框正下方内嵌底坞并自动归正视角';
+        });
+      }
+
+      if (btnOrchToggle) {
+        btnOrchToggle.addEventListener('click', function () {
+          if (!picker.isOpen()) {
+            picker.open(modelBtn);
+          }
+          var rootEl = document.getElementById('ag-prism-periodic-picker-root');
+          var aux0 = rootEl && rootEl.querySelector('button[data-aux-index="0"]');
+          if (aux0) {
+            aux0.click();
+          }
+          updateHeaderBadge();
+        });
+      }
+
+      if (btnFlipCard) {
+        btnFlipCard.addEventListener('click', function () {
+          if (!picker.isOpen()) {
+            picker.open(modelBtn);
+          }
+          if (typeof picker.toggleCardFlip === 'function') {
+            picker.toggleCardFlip();
+          } else {
+            var rootEl = document.getElementById('ag-prism-periodic-picker-root');
+            var flipBtn = rootEl && rootEl.querySelector('[data-testid="ag-pp-card-flip-btn"]');
+            if (flipBtn) flipBtn.click();
+          }
+          updateHeaderBadge();
+        });
+      }
+
+      if (btnNarrowDock) {
+        btnNarrowDock.addEventListener('click', function () {
+          if (!picker.isOpen()) {
+            picker.open(modelBtn);
+          }
+          applyNarrowSimulation(!isNarrowSim);
+          updateHeaderBadge();
+        });
+      }
+
+      document.getElementById('btn-cycle-telemetry').addEventListener('click', function () {
+        applyTelemetryProfile(telemetryIdx + 1);
+        if (!picker.isOpen()) {
+          picker.open(modelBtn);
+        } else {
+          document.documentElement.setAttribute(
+            'data-ag-cs-ambient',
+            document.documentElement.getAttribute('data-ag-cs-ambient') === '100' ? '99' : '100'
+          );
+        }
+        updateHeaderBadge();
+      });
+
+      Object.keys(kitButtons).forEach(function (key) {
+        kitButtons[key].addEventListener('click', function () {
+          applyPrismSuite(key, currentAccent);
+          if (!picker.isOpen()) picker.open(modelBtn);
+          updateHeaderBadge();
+        });
+      });
+
+      Object.keys(accentButtons).forEach(function (accKey) {
+        if (!accentButtons[accKey]) return;
+        accentButtons[accKey].addEventListener('click', function () {
+          var nextAcc = accKey === 'mono' && currentAccent === 'mono' ? 'follow' : accKey;
+          applyPrismSuite(currentKitKey, nextAcc);
+          if (!picker.isOpen()) picker.open(modelBtn);
+          updateHeaderBadge();
+        });
+      });
+
+      if (btnOrbitTour) btnOrbitTour.addEventListener('click', function () { triggerOrbitTour(); });
+      if (btnResetView) btnResetView.addEventListener('click', function () { triggerResetOrbitView(); });
+      if (btnFlick) btnFlick.addEventListener('click', function () { triggerRimSweepDemo(); });
+
+      if (btnMacro) {
+        btnMacro.addEventListener('click', function () {
+          customScaleMul = 0;
+          applyMacroZoomState(!isMacro, rawFocus);
+          if (!picker.isOpen()) picker.open(modelBtn);
+          updateHeaderBadge();
+        });
+      }
+      if (btnExitMacro) {
+        btnExitMacro.addEventListener('click', function () {
+          customScaleMul = 0;
+          applyMacroZoomState(false, rawFocus);
+          updateHeaderBadge();
+        });
+      }
+
+      document.getElementById('btn-mock-non-element').addEventListener('click', function () {
+        mockHost.setModelConfigByLabelForConversation(claudeOption.label);
+        picker.open(modelBtn);
+        updateHeaderBadge();
+      });
+
+      document.getElementById('btn-open-picker').addEventListener('click', function () {
+        if (picker.isOpen()) {
+          var rootEl = document.getElementById('ag-prism-periodic-picker-root');
+          var closeBtn = rootEl && rootEl.querySelector('[data-testid="ag-pp-close-btn"]');
+          if (closeBtn) closeBtn.click();
+          else picker.close();
+        } else {
+          picker.open(modelBtn);
+        }
+        updateHeaderBadge();
+      });
+
+      window.addEventListener('beforeunload', function () {
+        cancelFlickAnimation();
+        if (autoFlickTimer) {
+          clearTimeout(autoFlickTimer);
+          autoFlickTimer = 0;
+        }
+      });
+
+      function applyUrlCameraPoseIfNeeded() {
+        if (!picker || !picker.isOpen()) return;
+        if (initFlipCard && !picker.getStatus().cardFlipped && typeof picker.toggleCardFlip === 'function') {
+          picker.toggleCardFlip();
+        }
+        if (hasOrbitParam && typeof picker.setChassisOrbit === 'function') {
+          picker.setChassisOrbit(initOrbitPitch, initOrbitYaw);
+        }
+        if (hasPoseParam) {
+          picker.setPointerNorm(initYawNorm, initPitchNorm, true);
+        }
+        if (hasNearParam) {
+          var rootEl = document.getElementById('ag-prism-periodic-picker-root');
+          var keyBtn = rootEl && rootEl.querySelector('button[data-z="' + initZParam + '"]');
+          if (keyBtn) {
+            var kr = keyBtn.getBoundingClientRect();
+            if (kr && kr.width > 1) {
+              emitSyntheticPointerMove(rootEl, kr.left + kr.width * 0.5 + initNearDx, kr.top + kr.height * 0.5 + initNearDy);
+            }
+          }
+        }
+      }
+
+      if (autoOpen) {
+        picker.open(modelBtn);
+        updateHeaderBadge();
+        applyUrlCameraPoseIfNeeded();
+        requestAnimationFrame(function () {
+          try { window.dispatchEvent(new Event('resize')); } catch (e) {}
+          applyUrlCameraPoseIfNeeded();
+          updateHeaderBadge();
+          if (autoTour) {
+            autoFlickTimer = setTimeout(function () {
+              autoFlickTimer = 0;
+              triggerOrbitTour();
+            }, 140);
+          } else if (autoFlick) {
+            autoFlickTimer = setTimeout(function () {
+              autoFlickTimer = 0;
+              triggerRimSweepDemo();
+            }, 120);
+          }
+        });
+      } else {
+        updateHeaderBadge();
+      }
+    })();
+  </script>
+</body>
+</html>

@@ -8,13 +8,14 @@
  *    （含 plugin.json、assets/logo.svg、THIRD_PARTY_NOTICES.md、sidecars/daemon/sidecar.json、全部运行时与 vendor/）；
  * 2. 自动停用并清理旧临时插件目录 ~/.gemini/config/plugins/antigravity-prism（若存在用户配置则平滑迁入新目录）；
  * 3. 写入 repo-meta.json 链接本地 Git 源码目录，支持设置面板「检查 / 同步 Git 更新」；
- * 4. 通过 PowerShell Start-Process -WindowStyle Hidden 脱离终端 Job Object 确保后台守护实例已启动并接管当前 CDP 窗口！
+ * 4. 通过纯 Node detached + windowsHide 脱离派生确保后台守护实例已启动并接管当前 CDP 窗口！
  */
 
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const zlib = require("node:zlib");
 const { spawnBreakawayNodeProcess, isPidAlive } = require("./patch-asar.cjs");
 
 const ROOT_DIR = path.resolve(__dirname, "..");
@@ -34,27 +35,34 @@ function isAutomatedTestRuntime() {
   return Array.isArray(process.execArgv) && process.execArgv.some((a) => a === "--test" || a.startsWith("--test-"));
 }
 
+function pathsEqual(a, b, platform = process.platform) {
+  if (!a || !b) return false;
+  const ra = path.resolve(a);
+  const rb = path.resolve(b);
+  return platform === "win32" ? ra.toLowerCase() === rb.toLowerCase() : ra === rb;
+}
+
 function getDefaultPluginTargetDir() {
   return path.join(os.homedir(), ".gemini", "config", "plugins", "obsidian-prism");
 }
 
-function getLegacyTempPluginDir(targetDir = getDefaultPluginTargetDir()) {
+function getLegacyTempPluginDir(targetDir = getDefaultPluginTargetDir(), platform = process.platform) {
   const parent = path.dirname(path.resolve(targetDir));
   const candidate = path.join(parent, "antigravity-prism");
-  if (path.resolve(candidate).toLowerCase() === path.resolve(targetDir).toLowerCase()) {
+  if (pathsEqual(candidate, targetDir, platform)) {
     return null;
   }
   return candidate;
 }
 
-function resolveHostGeminiConfigDir(targetDir, explicitHostDir = null) {
+function resolveHostGeminiConfigDir(targetDir, explicitHostDir = null, platform = process.platform) {
   if (explicitHostDir) return path.resolve(explicitHostDir);
   if (process.env.AG_PRISM_GEMINI_CONFIG_DIR) {
     return path.resolve(process.env.AG_PRISM_GEMINI_CONFIG_DIR);
   }
   const defaultTarget = path.resolve(getDefaultPluginTargetDir());
   const resolvedTarget = path.resolve(targetDir || defaultTarget);
-  if (resolvedTarget.toLowerCase() === defaultTarget.toLowerCase()) {
+  if (pathsEqual(resolvedTarget, defaultTarget, platform)) {
     return path.join(os.homedir(), ".gemini", "config");
   }
   const parentDir = path.dirname(resolvedTarget);
@@ -111,6 +119,51 @@ function resolveTelemetryDir(hostConfigDir, explicitTelemetryDir = null) {
   if (!hostConfigDir) return null;
   const geminiRoot = path.dirname(path.resolve(hostConfigDir));
   return path.join(geminiRoot, "antigravity", "sidecar_data", "obsidian-prism", "telemetry");
+}
+
+function isAllowedAddonsOverrideDir(candidatePath, hostConfigDir = null) {
+  if (!candidatePath) return false;
+  const resolved = path.resolve(candidatePath);
+  if (isProtectedUserDataPath(resolved)) return false;
+  const home = path.resolve(os.homedir());
+  const allowedRoots = [path.join(home, ".gemini"), os.tmpdir()];
+  if (process.platform === "darwin") {
+    allowedRoots.push("/tmp", "/private/tmp");
+  }
+  if (hostConfigDir) {
+    const resolvedCfg = path.resolve(hostConfigDir);
+    const parent = path.dirname(resolvedCfg);
+    if (path.basename(parent).toLowerCase() === ".gemini") {
+      allowedRoots.push(parent);
+    }
+  }
+  const underAllowedRoot = allowedRoots.some((root) => isSubPath(resolved, root));
+  if (!underAllowedRoot) return false;
+  const segments = resolved
+    .split(/[\\/]+/)
+    .filter(Boolean)
+    .map((s) => s.toLowerCase());
+  return segments.includes("addons") || segments.includes("obsidian-prism");
+}
+
+function resolveAddonsDir(hostConfigDir, explicitAddonsDir = null) {
+  if (explicitAddonsDir !== null && explicitAddonsDir !== undefined) {
+    const explicitStr = typeof explicitAddonsDir === "string" ? explicitAddonsDir.trim() : "";
+    if (!explicitStr || !isAllowedAddonsOverrideDir(explicitStr, hostConfigDir)) {
+      return null;
+    }
+    return path.resolve(explicitStr);
+  }
+  if (process.env.AG_PRISM_ADDONS_DIR) {
+    const envDir = process.env.AG_PRISM_ADDONS_DIR.trim();
+    if (!envDir || !isAllowedAddonsOverrideDir(envDir, hostConfigDir)) {
+      return null;
+    }
+    return path.resolve(envDir);
+  }
+  if (!hostConfigDir) return null;
+  const geminiRoot = path.dirname(path.resolve(hostConfigDir));
+  return path.join(geminiRoot, "antigravity", "sidecar_data", "obsidian-prism", "addons");
 }
 
 function isValidConfigJsonContent(raw) {
@@ -560,10 +613,10 @@ function normalizeMacosAntigravityAppPath(rawPath) {
   return normalized.toLowerCase().endsWith(".app") ? normalized : fallback;
 }
 
-function generateMacosLauncherInfoPlist(version = "1.0.7") {
-  const safeShort = escapeXmlText(version || "1.0.7");
-  const numericMatch = String(version || "1.0.7").match(/^\d+(?:\.\d+){0,2}/);
-  const safeBundleVer = escapeXmlText(numericMatch ? numericMatch[0] : "1.0.7");
+function generateMacosLauncherInfoPlist(version = "1.0.8-beta.3") {
+  const safeShort = escapeXmlText(version || "1.0.8-beta.3");
+  const numericMatch = String(version || "1.0.8-beta.3").match(/^\d+(?:\.\d+){0,2}/);
+  const safeBundleVer = escapeXmlText(numericMatch ? numericMatch[0] : "1.0.8");
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -864,9 +917,9 @@ function createMacosLosslessLauncher(opts = {}) {
   if (!version) {
     try {
       const pkg = JSON.parse(fs.readFileSync(path.join(opts.sourceDir || ROOT_DIR, "package.json"), "utf8"));
-      version = pkg?.version || "1.0.7";
+      version = pkg?.version || "1.0.8-beta.3";
     } catch {
-      version = "1.0.7";
+      version = "1.0.8-beta.3";
     }
   }
   const targetApp = normalizeMacosAntigravityAppPath(opts.targetApp || "/Applications/Antigravity.app");
@@ -957,6 +1010,308 @@ function removeMacosLosslessLauncher(opts = {}) {
     removed: !fs.existsSync(appPath),
     refused: false,
     appPath,
+  };
+}
+
+const LINUX_LAUNCHER_DESKTOP_NAME = "antigravity-prism.desktop";
+const LINUX_LAUNCHER_ICON_NAME = "obsidian-prism.png";
+
+const PNG_CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) {
+      c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    }
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+
+function pngCrc32(buf) {
+  let c = 0xffffffff;
+  for (let i = 0; i < buf.length; i++) {
+    c = PNG_CRC_TABLE[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
+  }
+  return (c ^ 0xffffffff) >>> 0;
+}
+
+function makePngChunk(type, data) {
+  const len = Buffer.alloc(4);
+  len.writeUInt32BE(data.length, 0);
+  const typeBuf = Buffer.from(type, "ascii");
+  const combined = Buffer.concat([typeBuf, data]);
+  const crcBuf = Buffer.alloc(4);
+  crcBuf.writeUInt32BE(pngCrc32(combined), 0);
+  return Buffer.concat([len, combined, crcBuf]);
+}
+
+function renderPrismIconPng(size = 256) {
+  const dim = Math.max(16, Math.min(1024, Number(size) || 256));
+  const rgba = Buffer.alloc(dim * dim * 4);
+  const half = dim * 0.5;
+  const maxR = dim * 0.4;
+  for (let y = 0; y < dim; y++) {
+    for (let x = 0; x < dim; x++) {
+      const idx = (y * dim + x) * 4;
+      const dx = (x + 0.5 - half) / maxR;
+      const dy = (y + 0.5 - half) / maxR;
+      const starMetric = Math.pow(Math.abs(dx), 0.62) + Math.pow(Math.abs(dy), 0.62);
+      if (starMetric <= 1.04) {
+        const edgeAlpha =
+          starMetric <= 0.96
+            ? 255
+            : Math.max(0, Math.min(255, Math.round(((1.04 - starMetric) / 0.08) * 255)));
+        let r, g, b;
+        const diamond = Math.abs(dx) + Math.abs(dy);
+        if (diamond <= 0.28) {
+          r = 248; g = 250; b = 255;
+        } else if (dx <= 0 && dy <= 0) {
+          r = 66; g = 133; b = 244;
+        } else if (dx > 0 && dy <= 0) {
+          r = 234; g = 67; b = 53;
+        } else if (dx > 0 && dy > 0) {
+          r = 251; g = 188; b = 4;
+        } else {
+          r = 52; g = 168; b = 83;
+        }
+        rgba[idx] = r;
+        rgba[idx + 1] = g;
+        rgba[idx + 2] = b;
+        rgba[idx + 3] = edgeAlpha;
+      }
+    }
+  }
+  const stride = dim * 4 + 1;
+  const raw = Buffer.alloc(stride * dim);
+  for (let y = 0; y < dim; y++) {
+    raw[y * stride] = 0;
+    rgba.copy(raw, y * stride + 1, y * dim * 4, (y + 1) * dim * 4);
+  }
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(dim, 0);
+  ihdr.writeUInt32BE(dim, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 6;
+  const idat = zlib.deflateSync(raw, { level: 9 });
+  return Buffer.concat([
+    Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+    makePngChunk("IHDR", ihdr),
+    makePngChunk("IDAT", idat),
+    makePngChunk("IEND", Buffer.alloc(0)),
+  ]);
+}
+
+function getDefaultLinuxXdgDataHome(opts = {}) {
+  const home = opts.homeDir ? path.resolve(opts.homeDir) : os.homedir();
+  const env = opts.env || process.env;
+  const hasCustomHome = Boolean(opts.homeDir && path.resolve(opts.homeDir) !== path.resolve(os.homedir()));
+  if (!hasCustomHome && env && typeof env.XDG_DATA_HOME === "string" && env.XDG_DATA_HOME.trim()) {
+    return path.resolve(env.XDG_DATA_HOME.trim());
+  }
+  return path.join(home, ".local", "share");
+}
+
+function getDefaultLinuxLauncherDir(opts = {}) {
+  if (typeof opts.launcherDir === "string" && opts.launcherDir.trim()) {
+    return path.resolve(opts.launcherDir.trim());
+  }
+  if (typeof process.env.AG_PRISM_LAUNCHER_DIR === "string" && process.env.AG_PRISM_LAUNCHER_DIR.trim()) {
+    return path.resolve(process.env.AG_PRISM_LAUNCHER_DIR.trim());
+  }
+  return path.join(getDefaultLinuxXdgDataHome(opts), "applications");
+}
+
+function getLinuxLauncherDesktopPath(opts = {}) {
+  return path.join(getDefaultLinuxLauncherDir(opts), LINUX_LAUNCHER_DESKTOP_NAME);
+}
+
+function getLinuxLauncherIconPath(opts = {}) {
+  if (typeof opts.iconDir === "string" && opts.iconDir.trim()) {
+    return path.join(path.resolve(opts.iconDir.trim()), LINUX_LAUNCHER_ICON_NAME);
+  }
+  return path.join(getDefaultLinuxXdgDataHome(opts), "icons", "hicolor", "256x256", "apps", LINUX_LAUNCHER_ICON_NAME);
+}
+
+function formatDesktopExecArg(arg) {
+  const s = String(arg || "").replace(/[\r\n]+/g, "").trim();
+  if (!s) return "antigravity";
+  if (/[\s"'`\\$<>~|&;()*?#]/.test(s)) {
+    const escaped = s.replace(/([\\"`$])/g, "\\$1");
+    return `"${escaped}"`;
+  }
+  return s;
+}
+
+function resolveLinuxLauncherTargetExe(opts = {}) {
+  const existsFn = typeof opts.existsSync === "function" ? opts.existsSync : fs.existsSync;
+  const explicit = String(opts.targetExe || "").trim();
+  if (explicit) return explicit;
+  const env = opts.env || process.env;
+  if (env && typeof env.APPIMAGE === "string" && env.APPIMAGE.trim()) {
+    return env.APPIMAGE.trim();
+  }
+  const home = opts.homeDir ? path.resolve(opts.homeDir) : os.homedir();
+  const candidates = [
+    "/usr/share/antigravity/antigravity",
+    "/opt/Antigravity/antigravity",
+    "/usr/bin/antigravity",
+    path.join(home, ".local", "bin", "antigravity"),
+  ];
+  for (const cand of candidates) {
+    try {
+      if (existsFn(cand)) return cand;
+    } catch {}
+  }
+  return "antigravity";
+}
+
+function generateLinuxLauncherDesktop({ targetExe = "antigravity", iconPath = "obsidian-prism", version = "1.0.8-beta.3" } = {}) {
+  const safeIcon = String(iconPath || "obsidian-prism").replace(/[\r\n]+/g, "").trim() || "obsidian-prism";
+  const safeVersion = String(version || "1.0.8-beta.3").replace(/[\r\n]+/g, "").trim() || "1.0.8-beta.3";
+  const execToken = formatDesktopExecArg(targetExe);
+  return [
+    "[Desktop Entry]",
+    "Version=1.0",
+    "Type=Application",
+    "Name=Antigravity Prism",
+    "GenericName=Antigravity (Obsidian Prism)",
+    "Comment=Launch Antigravity with Obsidian Prism optical bridge (--remote-debugging-port=0)",
+    `Exec=${execToken} --remote-debugging-port=0 %U`,
+    `Icon=${safeIcon}`,
+    "Terminal=false",
+    "Categories=Development;IDE;",
+    "StartupNotify=true",
+    "StartupWMClass=antigravity",
+    "X-ObsidianPrism-Managed=true",
+    `X-ObsidianPrism-Version=${safeVersion}`,
+    "",
+  ].join("\n");
+}
+
+function isManagedLinuxLauncherDesktop(desktopPath) {
+  if (!desktopPath) return false;
+  try {
+    const st = fs.lstatSync(desktopPath);
+    if (st.isSymbolicLink() || !st.isFile()) return false;
+    const content = fs.readFileSync(desktopPath, "utf8");
+    return /^\s*X-ObsidianPrism-Managed\s*=\s*true\s*$/im.test(content);
+  } catch {
+    return false;
+  }
+}
+
+function createLinuxLosslessLauncher(opts = {}) {
+  const plat = opts.platformOverride || process.platform;
+  if (plat !== "linux") {
+    return { supported: false, created: false, desktopPath: null, appPath: null, iconPath: null, skippedReason: "non-linux" };
+  }
+  const appsDir = getDefaultLinuxLauncherDir(opts);
+  const desktopPath = path.join(appsDir, LINUX_LAUNCHER_DESKTOP_NAME);
+  const iconFilePath = getLinuxLauncherIconPath(opts);
+  const iconDir = path.dirname(iconFilePath);
+  const stopRoot = opts.stopRoot || opts.homeDir || null;
+
+  assertNoSymbolicLinkInChain(appsDir, stopRoot, "Linux applications directory");
+  const existingStat = assertNotSymbolicLink(desktopPath, "Linux launcher .desktop");
+  const existedBefore = Boolean(existingStat);
+  if (existingStat) {
+    if (!existingStat.isFile() || !isManagedLinuxLauncherDesktop(desktopPath)) {
+      throw new Error(`Refusing to overwrite unmanaged Linux desktop launcher: ${desktopPath}`);
+    }
+  }
+
+  let version = opts.version || "";
+  if (!version) {
+    try {
+      const pkg = JSON.parse(fs.readFileSync(path.join(opts.sourceDir || ROOT_DIR, "package.json"), "utf8"));
+      version = pkg?.version || "1.0.8-beta.3";
+    } catch {
+      version = "1.0.8-beta.3";
+    }
+  }
+
+  let iconWritten = false;
+  let iconRef = "obsidian-prism";
+  try {
+    assertNoSymbolicLinkInChain(iconDir, stopRoot, "Linux icons directory");
+    assertNotSymbolicLink(iconFilePath, "Linux launcher icon");
+    fs.mkdirSync(iconDir, { recursive: true });
+    const iconBuf = Buffer.isBuffer(opts.iconBuffer) ? opts.iconBuffer : renderPrismIconPng(256);
+    atomicWriteFileSync(iconFilePath, iconBuf, { encoding: null, mode: 0o644 });
+    iconWritten = true;
+    iconRef = iconFilePath;
+  } catch (err) {
+    if (err && /symbolic link/i.test(err.message)) throw err;
+  }
+
+  fs.mkdirSync(appsDir, { recursive: true });
+  assertNoSymbolicLinkInChain(appsDir, stopRoot, "Linux applications directory");
+  const targetExe = resolveLinuxLauncherTargetExe(opts);
+  const desktopContent = generateLinuxLauncherDesktop({ targetExe, iconPath: iconRef, version });
+  atomicWriteFileSync(desktopPath, desktopContent, { encoding: "utf8", mode: 0o644 });
+
+  return {
+    supported: true,
+    created: true,
+    updated: existedBefore,
+    managed: true,
+    desktopPath,
+    appPath: desktopPath,
+    iconPath: iconWritten ? iconFilePath : null,
+    iconWritten,
+    targetExe,
+  };
+}
+
+function removeLinuxLosslessLauncher(opts = {}) {
+  const plat = opts.platformOverride || process.platform;
+  if (plat !== "linux") {
+    return { supported: false, removed: false, refused: false, desktopPath: null, appPath: null, skippedReason: "non-linux" };
+  }
+  const appsDir = getDefaultLinuxLauncherDir(opts);
+  const desktopPath = path.join(appsDir, LINUX_LAUNCHER_DESKTOP_NAME);
+  const iconFilePath = getLinuxLauncherIconPath(opts);
+  const stopRoot = opts.stopRoot || opts.homeDir || null;
+
+  let desktopStat = null;
+  try {
+    desktopStat = fs.lstatSync(desktopPath);
+  } catch (err) {
+    if (err && err.code === "ENOENT") {
+      return { supported: true, removed: false, refused: false, desktopPath, appPath: desktopPath, skippedReason: "not-found" };
+    }
+    return { supported: true, removed: false, refused: true, reason: "stat-error", desktopPath, appPath: desktopPath };
+  }
+
+  try {
+    assertNoSymbolicLinkInChain(appsDir, stopRoot, "Linux applications directory");
+  } catch {
+    return { supported: true, removed: false, refused: true, reason: "symlink", desktopPath, appPath: desktopPath };
+  }
+  if (desktopStat.isSymbolicLink()) {
+    return { supported: true, removed: false, refused: true, reason: "symlink", desktopPath, appPath: desktopPath };
+  }
+  if (!isManagedLinuxLauncherDesktop(desktopPath)) {
+    return { supported: true, removed: false, refused: true, reason: "unmanaged-desktop", desktopPath, appPath: desktopPath };
+  }
+
+  fs.unlinkSync(desktopPath);
+  let iconRemoved = false;
+  try {
+    assertNoSymbolicLinkInChain(path.dirname(iconFilePath), stopRoot, "Linux icons directory");
+    if (safeUnlinkNoSymlink(iconFilePath, "Linux launcher icon")) {
+      iconRemoved = true;
+    }
+  } catch {}
+
+  return {
+    supported: true,
+    removed: !fs.existsSync(desktopPath),
+    iconRemoved,
+    refused: false,
+    desktopPath,
+    appPath: desktopPath,
   };
 }
 
@@ -1123,9 +1478,14 @@ async function verifyLiveWindowAttach(targetCdp, portOverride = null) {
         2000
       );
       if (state && state.hasPrism && state.hasStyle) {
+        const rawTitle = page.title || page.url || "";
+        const safeTitle =
+          typeof targetCdp.redactSensitiveUrl === "function"
+            ? targetCdp.redactSensitiveUrl(rawTitle)
+            : String(rawTitle).replace(/([?&](?:token|auth|signature|key|secret)=)[^&\s#"']+/gi, "$1<REDACTED>");
         attachedPages.push({
           id: page.id,
-          title: page.title || page.url,
+          title: safeTitle,
           version: state.version,
           hasRepoBridge: state.hasRepoBridge,
           hasSidebarBridge: state.hasSidebarBridge,
@@ -1269,7 +1629,8 @@ async function installPlugin(opts = {}) {
   // Ensure ~/.gemini/config/config.json (including 0-byte empty file) registers `obsidian-prism` cleanly
   const registrySynced = syncHostPluginRegistry(hostConfigDir, true);
 
-  const isDefaultTarget = path.resolve(targetDir).toLowerCase() === path.resolve(getDefaultPluginTargetDir()).toLowerCase();
+  const effectivePlatform = opts.platformOverride || process.platform;
+  const isDefaultTarget = pathsEqual(targetDir, getDefaultPluginTargetDir(), effectivePlatform);
   const hasExplicitShortcutScope = Boolean(opts.shortcutSearchDirs || opts.shortcutAdapter);
   const shouldSyncShortcuts =
     opts.syncShortcuts !== undefined
@@ -1281,39 +1642,80 @@ async function installPlugin(opts = {}) {
     shortcuts = ensureAntigravityShortcutsCdpFlag({
       pluginDir: targetDir,
       searchDirs: opts.shortcutSearchDirs || null,
+      systemDirs: opts.shortcutSystemDirs || null,
+      userApplicationsDir: opts.userApplicationsDir || null,
+      homeDir: opts.homeDir || null,
+      env: opts.env || null,
       shortcutAdapter: opts.shortcutAdapter,
-      platformOverride: opts.platformOverride,
+      platformOverride: effectivePlatform,
     });
   }
 
-  const effectivePlatform = opts.platformOverride || process.platform;
-  const shouldCreateLauncher =
-    opts.createLauncher === false
-      ? false
-      : opts.createLauncher === true || Boolean(opts.launcherDir)
-        ? effectivePlatform === "darwin"
-        : effectivePlatform === "darwin" && isDefaultTarget && !isAutomatedTestRuntime();
-
-  let launcher = { supported: effectivePlatform === "darwin", created: false, appPath: null };
-  if (shouldCreateLauncher) {
-    try {
-      launcher = createMacosLosslessLauncher({
-        sourceDir,
-        launcherDir: opts.launcherDir,
-        targetApp: opts.targetApp,
-        version: opts.version,
-        iconPath: opts.iconPath,
-        stopRoot: opts.launcherStopRoot,
-        platformOverride: effectivePlatform,
-      });
-    } catch (err) {
-      if (opts.strictLauncher) throw err;
-      launcher = {
-        supported: true,
-        created: false,
-        appPath: getMacosLauncherAppPath({ launcherDir: opts.launcherDir }),
-        error: err && err.message ? err.message : String(err),
-      };
+  let launcher = { supported: effectivePlatform === "darwin" || effectivePlatform === "linux", created: false, appPath: null };
+  if (effectivePlatform === "darwin") {
+    const shouldCreateMacLauncher =
+      opts.createLauncher === false
+        ? false
+        : opts.createLauncher === true || Boolean(opts.launcherDir)
+          ? true
+          : isDefaultTarget && !isAutomatedTestRuntime();
+    if (shouldCreateMacLauncher) {
+      try {
+        launcher = createMacosLosslessLauncher({
+          sourceDir,
+          launcherDir: opts.launcherDir,
+          targetApp: opts.targetApp,
+          version: opts.version,
+          iconPath: opts.iconPath,
+          stopRoot: opts.launcherStopRoot,
+          platformOverride: effectivePlatform,
+        });
+      } catch (err) {
+        if (opts.strictLauncher) throw err;
+        launcher = {
+          supported: true,
+          created: false,
+          appPath: getMacosLauncherAppPath({ launcherDir: opts.launcherDir }),
+          error: err && err.message ? err.message : String(err),
+        };
+      }
+    }
+  } else if (effectivePlatform === "linux") {
+    const envForLinux = opts.env || process.env;
+    const isPortableOrNoDesktop =
+      Boolean(opts.targetExe) ||
+      Boolean(envForLinux && typeof envForLinux.APPIMAGE === "string" && envForLinux.APPIMAGE.trim()) ||
+      Number(shortcuts?.matched || 0) === 0;
+    const shouldCreateLinuxLauncher =
+      opts.createLauncher === false
+        ? false
+        : opts.createLauncher === true || Boolean(opts.launcherDir) || Boolean(opts.targetExe)
+          ? true
+          : isDefaultTarget && !isAutomatedTestRuntime() && isPortableOrNoDesktop;
+    if (shouldCreateLinuxLauncher) {
+      try {
+        launcher = createLinuxLosslessLauncher({
+          sourceDir,
+          launcherDir: opts.launcherDir,
+          iconDir: opts.iconDir,
+          homeDir: opts.homeDir,
+          env: opts.env,
+          targetExe: opts.targetExe,
+          version: opts.version,
+          stopRoot: opts.launcherStopRoot,
+          platformOverride: effectivePlatform,
+        });
+      } catch (err) {
+        if (opts.strictLauncher) throw err;
+        const dp = getLinuxLauncherDesktopPath({ launcherDir: opts.launcherDir, homeDir: opts.homeDir, env: opts.env });
+        launcher = {
+          supported: true,
+          created: false,
+          desktopPath: dp,
+          appPath: dp,
+          error: err && err.message ? err.message : String(err),
+        };
+      }
     }
   }
 
@@ -1364,7 +1766,6 @@ async function installPlugin(opts = {}) {
 
     const spawnRes = spawnBreakawayNodeProcess(daemonArgs, {
       cwd: path.dirname(daemonScript),
-      disablePowerShellBreakaway: Boolean(opts.disablePowerShellBreakaway),
     });
 
     const pidFile = path.join(targetDir, ".daemon.pid");
@@ -1491,11 +1892,25 @@ async function uninstallPlugin(opts = {}) {
             if (s) s.close();
           }
         }
+        if (typeof cdp.listSwarmTargets === "function" && cdp.SWARM_I18N_REMOVE_EXPRESSION) {
+          const swarmTargets = await cdp.listSwarmTargets(port).catch(() => []);
+          for (const st of swarmTargets) {
+            let s = null;
+            try {
+              s = await cdp.CdpSession.connect(st.webSocketDebuggerUrl, 2000);
+              await s.evaluate(cdp.SWARM_I18N_REMOVE_EXPRESSION);
+            } catch {
+            } finally {
+              if (s) s.close();
+            }
+          }
+        }
       }
     } catch {}
   }
 
-  const isDefaultTarget = path.resolve(targetDir).toLowerCase() === path.resolve(getDefaultPluginTargetDir()).toLowerCase();
+  const effectivePlatform = opts.platformOverride || process.platform;
+  const isDefaultTarget = pathsEqual(targetDir, getDefaultPluginTargetDir(), effectivePlatform);
   const hasExplicitShortcutScope = Boolean(opts.shortcutSearchDirs || opts.shortcutAdapter);
   const shouldSyncShortcuts =
     opts.syncShortcuts !== undefined
@@ -1507,26 +1922,40 @@ async function uninstallPlugin(opts = {}) {
     shortcuts = restoreAntigravityShortcutsCdpFlag({
       pluginDir: targetDir,
       searchDirs: opts.shortcutSearchDirs || null,
+      systemDirs: opts.shortcutSystemDirs || null,
+      userApplicationsDir: opts.userApplicationsDir || null,
+      homeDir: opts.homeDir || null,
+      env: opts.env || null,
       shortcutAdapter: opts.shortcutAdapter,
-      platformOverride: opts.platformOverride,
+      platformOverride: effectivePlatform,
     });
   }
 
-  const effectivePlatform = opts.platformOverride || process.platform;
   const shouldRemoveLauncher =
     opts.removeLauncher === false
       ? false
       : opts.removeLauncher === true || Boolean(opts.launcherDir)
-        ? effectivePlatform === "darwin"
-        : effectivePlatform === "darwin" && isDefaultTarget && !isAutomatedTestRuntime();
+        ? effectivePlatform === "darwin" || effectivePlatform === "linux"
+        : (effectivePlatform === "darwin" || effectivePlatform === "linux") && isDefaultTarget && !isAutomatedTestRuntime();
 
-  let launcher = { supported: effectivePlatform === "darwin", removed: false, refused: false, appPath: null };
+  let launcher = { supported: effectivePlatform === "darwin" || effectivePlatform === "linux", removed: false, refused: false, appPath: null };
   if (shouldRemoveLauncher) {
-    launcher = removeMacosLosslessLauncher({
-      launcherDir: opts.launcherDir,
-      stopRoot: opts.launcherStopRoot,
-      platformOverride: effectivePlatform,
-    });
+    if (effectivePlatform === "darwin") {
+      launcher = removeMacosLosslessLauncher({
+        launcherDir: opts.launcherDir,
+        stopRoot: opts.launcherStopRoot,
+        platformOverride: effectivePlatform,
+      });
+    } else if (effectivePlatform === "linux") {
+      launcher = removeLinuxLosslessLauncher({
+        launcherDir: opts.launcherDir,
+        iconDir: opts.iconDir,
+        homeDir: opts.homeDir,
+        env: opts.env,
+        stopRoot: opts.launcherStopRoot,
+        platformOverride: effectivePlatform,
+      });
+    }
   }
 
   const hostConfigDir = resolveHostGeminiConfigDir(opts.targetDir ? targetDir : null, opts.hostConfigDir || null);
@@ -1576,9 +2005,11 @@ async function uninstallPlugin(opts = {}) {
           "obsidian-prism-thought.json",
           "obsidian-prism-thought-cache.json",
           "obsidian-prism-usage-rollup-cache.json",
+          "obsidian-prism-storage-guard-state.json",
           "obsidian-prism-sidebar.json",
           "obsidian-prism-sidebar.json.lock",
           "obsidian-prism-wallpaper.json",
+          "obsidian-prism-suggester.json",
         ];
         for (const name of exactFiles) {
           const fp = path.join(hostConfigDir, name);
@@ -1621,6 +2052,24 @@ async function uninstallPlugin(opts = {}) {
     }
   }
 
+  if (purgeData || opts.purgeAddons === true) {
+    const addonsDir = resolveAddonsDir(hostConfigDir, opts.addonsDir || null);
+    if (addonsDir && !isProtectedUserDataPath(addonsDir) && fs.existsSync(addonsDir)) {
+      try {
+        const pluginDataDir = path.dirname(addonsDir);
+        const sidecarDataDir = path.dirname(pluginDataDir);
+        assertNoSymbolicLinkInChain(addonsDir, null, "addons directory");
+        assertNotSymbolicLink(sidecarDataDir, "sidecar_data directory");
+        assertNotSymbolicLink(pluginDataDir, "sidecar_data/obsidian-prism directory");
+        const addonsStat = assertNotSymbolicLink(addonsDir, "addons directory");
+        if (addonsStat && addonsStat.isDirectory()) {
+          fs.rmSync(addonsDir, { recursive: true, force: true });
+          purgedPaths.push(addonsDir);
+        }
+      } catch {}
+    }
+  }
+
   return {
     ok: true,
     targetDir,
@@ -1649,6 +2098,23 @@ function isStandaloneWatcherInstalled(opts = {}) {
       customDir ||
       path.join(os.homedir(), "Library", "Application Support", "obsidian-prism");
     return fs.existsSync(path.join(base, "obsidian-prism-watcher"));
+  }
+  if (plat === "linux") {
+    const home = opts.homeDir ? path.resolve(opts.homeDir) : os.homedir();
+    const env = opts.env || process.env;
+    const hasCustomHome = Boolean(opts.homeDir && path.resolve(opts.homeDir) !== path.resolve(os.homedir()));
+    const xdgData =
+      !hasCustomHome && env && typeof env.XDG_DATA_HOME === "string" && env.XDG_DATA_HOME.trim()
+        ? path.resolve(env.XDG_DATA_HOME.trim())
+        : path.join(home, ".local", "share");
+    const xdgConfig =
+      !hasCustomHome && env && typeof env.XDG_CONFIG_HOME === "string" && env.XDG_CONFIG_HOME.trim()
+        ? path.resolve(env.XDG_CONFIG_HOME.trim())
+        : path.join(home, ".config");
+    const base = customDir || path.join(xdgData, "obsidian-prism");
+    if (fs.existsSync(path.join(base, "obsidian-prism-watcher"))) return true;
+    if (!customDir && fs.existsSync(path.join(xdgConfig, "systemd", "user", "obsidian-prism.service"))) return true;
+    return false;
   }
   return false;
 }
@@ -1732,45 +2198,59 @@ function formatInstallSelfCheckSummary(res) {
   const patchedCount = Array.isArray(res?.shortcuts?.patched) ? res.shortcuts.patched.length : 0;
   const alreadySetCount = Array.isArray(res?.shortcuts?.alreadySet) ? res.shortcuts.alreadySet.length : 0;
   const skippedCount = Array.isArray(res?.shortcuts?.skipped) ? res.shortcuts.skipped.length : 0;
+  const shadowCount = Array.isArray(res?.shortcuts?.shadowCreated) ? res.shortcuts.shadowCreated.length : 0;
   const attachedCount = Array.isArray(res?.live?.attachedPages) ? res.live.attachedPages.length : 0;
   const thoughtMode = sc.thoughtTranslateMode || "off";
+  const isLinuxLauncher = Boolean(res?.launcher?.desktopPath);
+  const launcherPath = res?.launcher?.desktopPath || res?.launcher?.appPath || null;
   const lines = [
     "",
     "================ Obsidian Prism 安装自检摘要 / Self-Check Summary ================",
     `[中文] 插件目录: ${res?.targetDir || getDefaultPluginTargetDir()}`,
-    `[中文] 后台守护: ${daemonAlive ? "运行中 (PID " + (res?.daemon?.pid || "?") + ")" : "未启动"} | 已连接窗口: ${attachedCount} | 思考翻译模块: ${sc.hasThoughtTranslator ? "已就绪" : "缺失"} | 壁纸通道(Ch7): ${sc.hasWallpaperChannel ? "已就绪" : "缺失"} | 独立Watcher: ${sc.watcherInstalled ? "已安装" : "未安装(源码模式)"}`,
-    `[中文] 快捷方式 --remote-debugging-port=0: 本次新补齐 ${patchedCount} 个，已就绪 ${alreadySetCount} 个${skippedCount > 0 ? `，权限不足跳过 ${skippedCount} 个（系统目录需管理员权限）` : ""}。`,
+    `[中文] 后台守护: ${daemonAlive ? "运行中 (PID " + (res?.daemon?.pid || "?") + ")" : "未启动"} | 已连接窗口: ${attachedCount} | 思考翻译模块: ${sc.hasThoughtTranslator ? "已就绪" : "缺失"} | 壁纸通道(Ch7): ${sc.hasWallpaperChannel ? "已就绪" : "缺失"} | 独立Watcher: ${sc.watcherInstalled ? "已安装" : "未安装(原生Sidecar/源码模式)"}`,
+    `[中文] 快捷方式 --remote-debugging-port=0: 本次新补齐 ${patchedCount} 个，已就绪 ${alreadySetCount} 个${shadowCount > 0 ? `（含 ${shadowCount} 个 XDG 影子覆写，零 root 权限，卸载自动撤回）` : ""}${skippedCount > 0 ? `，权限不足跳过 ${skippedCount} 个（系统目录需管理员权限或安全拦截）` : ""}。`,
     ...(res?.registrySynced === false
       ? ["[中文] 提示: 未能自动写入 ~/.gemini/config/config.json（目标可能为符号链接或只读），请确认 plugins[\"obsidian-prism\"].enabled 为 true。"]
       : []),
     ...(res?.shortcuts?.error
       ? [`[中文] 快捷方式维护提示（非致命）: ${res.shortcuts.error}`]
       : []),
-    ...(res?.launcher?.created && res?.launcher?.appPath
-      ? [`[中文] macOS 无损启动器已就绪: ${res.launcher.appPath}（可拖进 Dock 一键带参启动，零修改 Antigravity.app 本体）。`]
+    ...(res?.launcher?.created && launcherPath
+      ? [
+          isLinuxLauncher
+            ? `[中文] Linux 无损桌面启动器已就绪: ${launcherPath}（可从应用菜单一键带参启动，零修改 Antigravity 本体与 app.asar）。`
+            : `[中文] macOS 无损启动器已就绪: ${launcherPath}（可拖进 Dock 一键带参启动，零修改 Antigravity.app 本体）。`,
+        ]
       : []),
     ...(res?.launcher?.error
-      ? [`[中文] macOS 无损启动器提示（非致命）: ${res.launcher.error}`]
+      ? [`[中文] ${isLinuxLauncher ? "Linux" : "macOS"} 无损启动器提示（非致命）: ${res.launcher.error}`]
       : []),
     thoughtMode === "off"
       ? "[中文] 提示: 思考过程翻译默认处于关闭态 (off, 0 B 注入)，请打开 Antigravity「设置 -> 外观 -> Obsidian Prism」手动开启「机器翻译」或「AI 流式转译」。"
       : `[中文] 思考过程翻译当前模式: ${thoughtMode}（如翻译异常，可在设置卡片点击「一键诊断」排查）。`,
     sc.bareAntigravityRunning || sc.needsHostRelaunch
-      ? "[中文] 重要提醒: 检测到当前 Antigravity 为无调试端口裸启实例（常见于客户端在线更新后），请关闭并通过已修补的桌面/开始菜单快捷方式重新打开 Antigravity 一次即可自动激活！"
+      ? "[中文] 重要提醒: 检测到当前 Antigravity 为无调试端口裸启实例（常见于客户端在线更新后），请关闭并通过已修补的桌面/应用菜单快捷方式重新打开 Antigravity 一次即可自动激活！"
       : "[中文] 当前未检测到裸启冲突；随时可运行 `node tools/install-plugin.cjs --status` 复核插件状态。",
     `[EN] Plugin Dir: ${res?.targetDir || getDefaultPluginTargetDir()}`,
     `[EN] Daemon: ${daemonAlive ? "alive (PID " + (res?.daemon?.pid || "?") + ")" : "stopped"} | Attached Windows: ${attachedCount} | ThoughtTranslator: ${sc.hasThoughtTranslator ? "ready" : "missing"} | Wallpaper(Ch7): ${sc.hasWallpaperChannel ? "ready" : "missing"} | Watcher: ${sc.watcherInstalled ? "installed" : "not-installed"}`,
+    ...(shadowCount > 0
+      ? [`[EN] XDG Shadow Override: created ${shadowCount} user-level override(s) in ~/.local/share/applications (rootless, fully reverted on uninstall).`]
+      : []),
     thoughtMode === "off"
       ? "[EN] Note: Thought Translator is OFF by default (0 B injected). Enable Machine or AI streaming mode in Settings -> Appearance -> Obsidian Prism."
       : `[EN] Thought Translator mode: ${thoughtMode} (use the 1-click Diagnose bar in Settings if translation fails).`,
     sc.bareAntigravityRunning || sc.needsHostRelaunch
-      ? "[EN] Action Required: Antigravity is currently running bare without --remote-debugging-port=0 (common after an in-app update). Close and relaunch Antigravity once via a patched shortcut to activate."
+      ? "[EN] Action Required: Antigravity is currently running bare without --remote-debugging-port=0 (common after an in-app update). Close and relaunch Antigravity once via a patched shortcut or launcher to activate."
       : "[EN] Status healthy. Run `node tools/install-plugin.cjs --status` anytime to verify.",
-    ...(res?.launcher?.created && res?.launcher?.appPath
-      ? [`[EN] macOS lossless launcher ready: ${res.launcher.appPath} (pin to Dock for 1-click launch without modifying Antigravity.app).`]
+    ...(res?.launcher?.created && launcherPath
+      ? [
+          isLinuxLauncher
+            ? `[EN] Linux lossless launcher ready: ${launcherPath} (1-click XDG launch without modifying Antigravity or app.asar).`
+            : `[EN] macOS lossless launcher ready: ${launcherPath} (pin to Dock for 1-click launch without modifying Antigravity.app).`,
+        ]
       : []),
     ...(res?.launcher?.error
-      ? [`[EN] macOS launcher note (non-fatal): ${res.launcher.error}`]
+      ? [`[EN] ${isLinuxLauncher ? "Linux" : "macOS"} launcher note (non-fatal): ${res.launcher.error}`]
       : []),
     "==================================================================================",
   ];
@@ -1789,6 +2269,7 @@ function parseCliArgs(argv) {
   let purgeData = false;
   let createLauncher = undefined;
   let launcherDir = null;
+  let targetExe = null;
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === "--install") action = "install";
@@ -1803,6 +2284,7 @@ function parseCliArgs(argv) {
     else if (a === "--create-launcher") createLauncher = true;
     else if (a === "--no-launcher") createLauncher = false;
     else if (a === "--launcher-dir" && args[i + 1]) launcherDir = args[++i];
+    else if (a === "--target-exe" && args[i + 1]) targetExe = args[++i];
     else if (a === "--target" && args[i + 1]) targetDir = args[++i];
     else if (a === "--cdp-port" && args[i + 1]) cdpPort = parseInt(args[++i], 10);
   }
@@ -1817,6 +2299,7 @@ function parseCliArgs(argv) {
     purgeData,
     createLauncher,
     launcherDir,
+    targetExe,
   };
 }
 
@@ -1848,6 +2331,7 @@ if (require.main === module) {
       syncShortcuts: cli.noShortcuts ? false : undefined,
       createLauncher: cli.createLauncher,
       launcherDir: cli.launcherDir,
+      targetExe: cli.targetExe,
     });
     console.log(JSON.stringify(res, null, 2));
     console.error(formatInstallSelfCheckSummary(res));
@@ -1864,10 +2348,15 @@ module.exports = {
   MACOS_LAUNCHER_APP_NAME,
   MACOS_LAUNCHER_BUNDLE_ID,
   MACOS_LAUNCHER_MARKER_REL,
+  LINUX_LAUNCHER_DESKTOP_NAME,
+  LINUX_LAUNCHER_ICON_NAME,
+  pathsEqual,
+  renderPrismIconPng,
   getDefaultPluginTargetDir,
   getLegacyTempPluginDir,
   resolveHostGeminiConfigDir,
   resolveTelemetryDir,
+  resolveAddonsDir,
   isProtectedUserDataPath,
   syncHostPluginRegistry,
   clearReadOnlyIfRegularFile,
@@ -1881,8 +2370,18 @@ module.exports = {
   isManagedMacosLauncherBundle,
   createMacosLosslessLauncher,
   removeMacosLosslessLauncher,
+  getDefaultLinuxLauncherDir,
+  getLinuxLauncherDesktopPath,
+  getLinuxLauncherIconPath,
+  formatDesktopExecArg,
+  resolveLinuxLauncherTargetExe,
+  generateLinuxLauncherDesktop,
+  isManagedLinuxLauncherDesktop,
+  createLinuxLosslessLauncher,
+  removeLinuxLosslessLauncher,
   installPlugin,
   uninstallPlugin,
+  verifyLiveWindowAttach,
   getPluginInstallStatus,
   isStandaloneWatcherInstalled,
   detectBareAntigravityRunningSync,

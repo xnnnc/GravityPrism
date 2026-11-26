@@ -820,7 +820,7 @@ test('macOS lossless wrapper launcher: sandbox creation, Info.plist/marker/scrip
       launcherDir,
       stopRoot: workDir,
       targetApp: trickyTarget,
-      version: '1.0.7',
+      version: '1.0.8-beta.3',
       iconPath: iconFile,
     });
     assert.equal(created.supported, true);
@@ -847,7 +847,7 @@ test('macOS lossless wrapper launcher: sandbox creation, Info.plist/marker/scrip
     const marker = JSON.parse(fs.readFileSync(created.markerPath, 'utf8'));
     assert.equal(marker.managedBy, 'obsidian-prism');
     assert.equal(marker.bundleIdentifier, 'io.github.rmvdesi.obsidian-prism.launcher');
-    assert.equal(marker.version, '1.0.7');
+    assert.equal(marker.version, '1.0.8-beta.3');
     assert.equal(marker.targetApp, "/Users/O'Brien/My Apps/Antigravity.app");
 
     // Verify icon copied
@@ -877,7 +877,7 @@ test('macOS lossless wrapper launcher: sandbox creation, Info.plist/marker/scrip
       launcherDir,
       stopRoot: workDir,
       targetApp: '/Applications/Antigravity.app',
-      version: '1.0.7',
+      version: '1.0.8-beta.3',
     });
     assert.equal(updated.updated, true);
     assert.equal(installPluginMod.isManagedMacosLauncherBundle(created.appPath), true);

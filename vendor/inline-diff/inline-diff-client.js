@@ -189,16 +189,36 @@
     let hookMut = baseMut;
     let hookSetA = baseSetA;
 
+    const normDiffLang = (raw) => {
+      let v = String(raw || '').trim();
+      if (!v || v.toLowerCase() === 'auto') {
+        const navObj = win && 'navigator' in win ? win.navigator : (typeof navigator !== 'undefined' ? navigator : null);
+        v = String(navObj?.language || '').trim();
+      }
+      const s = v.toLowerCase().replace(/_/g, '-');
+      if (!s || s === 'auto') return 'en';
+      if (s === 'yue' || s.startsWith('yue-') || s === 'zh-yue' || s.includes('cantonese')) return 'zh-CN';
+      if (/^zh-(tw|hant|hk|mo)/.test(s) || s === 'tw' || s === 'hant') return 'zh-TW';
+      if (/^zh/.test(s)) return 'zh-CN';
+      if (/^(ja|jp)/.test(s) || s === 'japanese') return 'ja';
+      if (/^(ko|kr)/.test(s) || s === 'korean') return 'ko';
+      if (/^es/.test(s) || s === 'spanish') return 'es';
+      if (/^fr/.test(s) || s === 'french') return 'fr';
+      if (/^de/.test(s) || s === 'german') return 'de';
+      return 'en';
+    };
+
     const getLang = () => {
       if (typeof hookGetLang === 'function') {
         try {
           const v = String(hookGetLang() || '').trim();
-          if (v && v !== 'auto') return v;
+          if (v && v !== 'auto') return normDiffLang(v);
         } catch {}
       }
       const cfgLang = String(currentConfig.language || currentConfig.lang || '').trim();
-      if (cfgLang && cfgLang !== 'auto') return cfgLang;
-      return String(doc?.documentElement?.getAttribute?.('data-ag-cs-lang') || 'en').trim() || 'en';
+      if (cfgLang && cfgLang !== 'auto') return normDiffLang(cfgLang);
+      const attrLang = String(doc?.documentElement?.getAttribute?.('data-ag-cs-lang') || '').trim();
+      return normDiffLang(attrLang);
     };
     const mut = (fn) => (typeof hookMut === 'function' ? hookMut(fn) : fn());
     const setA = (el, name, val) => {
@@ -235,6 +255,119 @@
       return e;
     };
 
+    const DIFF_FALLBACK = {
+      inlineDiffOpenSidebar: {
+        'zh-CN': '在侧栏打开完整对比',
+        'zh-TW': '在側欄開啟完整對比',
+        en: 'Open full diff in Sidebar',
+        ja: 'サイドバーで完全な差分を開く',
+        ko: '사이드바에서 전체 차이 열기',
+        es: 'Abrir diff completo en la barra lateral',
+        fr: 'Ouvrir le diff complet dans la barre latérale',
+        de: 'Vollständigen Diff in Seitenleiste öffnen',
+      },
+      inlineDiffCollapse: {
+        'zh-CN': '收起',
+        'zh-TW': '收合',
+        en: 'Collapse',
+        ja: '閉じる',
+        ko: '접기',
+        es: 'Contraer',
+        fr: 'Réduire',
+        de: 'Einklappen',
+      },
+      inlineDiffLoading: {
+        'zh-CN': '正在读取差异...',
+        'zh-TW': '正在讀取差異...',
+        en: 'Loading diff...',
+        ja: '差分を読み込み中...',
+        ko: '차이점 불러오는 중...',
+        es: 'Cargando diff...',
+        fr: 'Chargement du diff...',
+        de: 'Diff wird geladen...',
+      },
+      inlineDiffBinary: {
+        'zh-CN': '二进制文件暂不支持行内预览，请右键在侧栏打开。',
+        'zh-TW': '二進位檔案暫不支援行內預覽，請右鍵在側欄開啟。',
+        en: 'Binary file cannot be previewed inline. Right-click to open in Sidebar.',
+        ja: 'バイナリファイルはインライン表示できません。右クリックでサイドバーから開けます。',
+        ko: '바이너리 파일은 인라인으로 미리 볼 수 없습니다. 우클릭하여 사이드바에서 여세요.',
+        es: 'Los archivos binarios no tienen vista previa en línea. Haz clic derecho para abrir en la barra lateral.',
+        fr: 'Les fichiers binaires ne peuvent pas être prévisualisés en ligne. Clic droit pour ouvrir dans la barre latérale.',
+        de: 'Binärdateien können nicht inline angezeigt werden. Rechtsklick zum Öffnen in der Seitenleiste.',
+      },
+      inlineDiffNoPreview: {
+        'zh-CN': '当前步骤暂无行内差异，请右键在侧栏打开。',
+        'zh-TW': '目前步驟暫無行內差異，請右鍵在側欄開啟。',
+        en: 'Inline diff is unavailable for this step. Right-click to open in Sidebar.',
+        ja: 'このステップには差分テキストがありません。右クリックでサイドバーから開けます。',
+        ko: '이 단계에는 인라인 차이가 없습니다. 우클릭하여 사이드바에서 여세요.',
+        es: 'El diff en línea no está disponible para este paso. Haz clic derecho para abrir en la barra lateral.',
+        fr: 'Le diff en ligne est indisponible pour cette étape. Clic droit pour ouvrir dans la barre latérale.',
+        de: 'Inline-Diff ist für diesen Schritt nicht verfügbar. Rechtsklick zum Öffnen in der Seitenleiste.',
+      },
+      inlineDiffSnapshotNotice: {
+        'zh-CN': '未受 Git 追踪 · 预览当前文件内容（右键可在侧栏打开完整对比）',
+        'zh-TW': '未受 Git 追蹤 · 預覽目前檔案內容（右鍵可在側欄開啟完整對比）',
+        en: 'Not tracked by Git · previewing current file (right-click to open full diff in Sidebar)',
+        ja: 'Git 未追跡 · 現在のファイルを表示中（右クリックでサイドバーで完全な差分を開く）',
+        ko: 'Git 추적 안 됨 · 현재 파일 미리보기(우클릭하여 사이드바에서 전체 차이 열기)',
+        es: 'No rastreado por Git · vista previa del archivo actual (clic derecho para abrir diff completo)',
+        fr: 'Non suivi par Git · aperçu du fichier actuel (clic droit pour ouvrir le diff complet)',
+        de: 'Nicht von Git verfolgt · Vorschau der aktuellen Datei (Rechtsklick für vollständigen Diff)',
+      },
+      inlineDiffLongLinesTag: {
+        'zh-CN': '单行长改',
+        'zh-TW': '單行長改',
+        en: 'long line',
+        ja: '長行',
+        ko: '긴 줄',
+        es: 'línea larga',
+        fr: 'ligne longue',
+        de: 'lange Zeile',
+      },
+      inlineDiffMenuExpand: {
+        'zh-CN': '展开行内对比',
+        'zh-TW': '展開行內對比',
+        en: 'Expand inline diff',
+        ja: 'インライン差分を展開',
+        ko: '인라인 차이 펼치기',
+        es: 'Expandir diff en línea',
+        fr: 'Déplier le diff en ligne',
+        de: 'Inline-Diff ausklappen',
+      },
+      inlineDiffMenuCollapse: {
+        'zh-CN': '收起行内对比',
+        'zh-TW': '收合行內對比',
+        en: 'Collapse inline diff',
+        ja: 'インライン差分を閉じる',
+        ko: '인라인 차이 접기',
+        es: 'Contraer diff en línea',
+        fr: 'Replier le diff en ligne',
+        de: 'Inline-Diff einklappen',
+      },
+      inlineDiffMenuCopyPath: {
+        'zh-CN': '复制文件路径',
+        'zh-TW': '複製檔案路徑',
+        en: 'Copy file path',
+        ja: 'ファイルパスをコピー',
+        ko: '파일 경로 복사',
+        es: 'Copiar ruta del archivo',
+        fr: 'Copier le chemin du fichier',
+        de: 'Dateipfad kopieren',
+      },
+      inlineDiffLargeExpandBtn: {
+        'zh-CN': '⋯ 大文件仅节选关键片段 · 点击在右侧栏查看完整对比',
+        'zh-TW': '⋯ 大檔案僅節選關鍵片段 · 點擊在右側欄檢視完整對比',
+        en: '⋯ Showing key hunks · Click to open full diff in Sidebar',
+        ja: '⋯ 大きなファイルのため一部のみ表示 · クリックしてサイドバーで全体を見る',
+        ko: '⋯ 대용량 파일 주요 변경만 표시 · 클릭하여 사이드바에서 전체 보기',
+        es: '⋯ Mostrando fragmentos clave · Haz clic para abrir el diff completo',
+        fr: '⋯ Extraits clés affichés · Cliquer pour ouvrir le diff complet',
+        de: '⋯ Wichtige Bereiche angezeigt · Klicken für vollständigen Diff',
+      },
+    };
+
     function getUiText(key, fallback) {
       if (typeof hookTFn === 'function') {
         try {
@@ -242,39 +375,13 @@
           if (typeof v === 'string' && v && v !== key) return v;
         } catch {}
       }
-      const l = String(getLang() || '').toLowerCase();
-      const isZh = l.startsWith('zh') || l === 'yue';
-      const isJa = l.startsWith('ja');
-      const map = {
-        inlineDiffOpenSidebar: isZh ? '在侧栏打开完整对比' : isJa ? 'サイドバーで完全な差分を開く' : 'Open full diff in Sidebar',
-        inlineDiffCollapse: isZh ? '收起' : isJa ? '閉じる' : 'Collapse',
-        inlineDiffLoading: isZh ? '正在读取差异...' : isJa ? '差分を読み込み中...' : 'Loading diff...',
-        inlineDiffBinary: isZh
-          ? '二进制文件暂不支持行内预览，请右键在侧栏打开。'
-          : isJa
-            ? 'バイナリファイルはインライン表示できません。右クリックでサイドバーから開けます。'
-            : 'Binary file cannot be previewed inline. Right-click to open in Sidebar.',
-        inlineDiffNoPreview: isZh
-          ? '当前步骤暂无行内差异，请右键在侧栏打开。'
-          : isJa
-            ? 'このステップには差分テキストがありません。右クリックでサイドバーから開けます。'
-            : 'Inline diff is unavailable for this step. Right-click to open in Sidebar.',
-        inlineDiffSnapshotNotice: isZh
-          ? '未受 Git 追踪 · 预览当前文件内容（右键可在侧栏打开完整对比）'
-          : isJa
-            ? 'Git 未追跡 · 現在のファイルを表示中（右クリックでサイドバーで完全な差分を開く）'
-            : 'Not tracked by Git · previewing current file (right-click to open full diff in Sidebar)',
-        inlineDiffLongLinesTag: isZh ? '单行长改' : isJa ? '長行' : 'long line',
-        inlineDiffMenuExpand: isZh ? '展开行内对比' : isJa ? 'インライン差分を展開' : 'Expand inline diff',
-        inlineDiffMenuCollapse: isZh ? '收起行内对比' : isJa ? 'インライン差分を閉じる' : 'Collapse inline diff',
-        inlineDiffMenuCopyPath: isZh ? '复制文件路径' : isJa ? 'ファイルパスをコピー' : 'Copy file path',
-        inlineDiffLargeExpandBtn: isZh
-          ? '⋯ 大文件仅节选关键片段 · 点击在右侧栏查看完整对比'
-          : isJa
-            ? '⋯ 大きなファイルのため一部のみ表示 · クリックしてサイドバーで全体を見る'
-            : '⋯ Showing key hunks · Click to open full diff in Sidebar',
-      };
-      return map[key] || fallback || key;
+      const lang = getLang();
+      try {
+        const ui = (win?.__agCsLocales || G.__agCsLocales)?.getUiStrings?.(lang);
+        if (ui && typeof ui[key] === 'string' && ui[key]) return ui[key];
+      } catch {}
+      const row = DIFF_FALLBACK[key];
+      return (row && (row[lang] || row.en)) || fallback || key;
     }
 
     function mkSvgIcon(kind, size = 14) {
@@ -1084,12 +1191,14 @@
         return false;
       }
 
+      const isRenderableResp = (r) =>
+        Boolean(r && r.ok && ((Array.isArray(r.lines) && r.lines.length > 0) || r.mode === 'binary'));
       const stepStats = { additions: payload.additions || 0, deletions: payload.deletions || 0 };
       let pendingRpc = null;
       if (!payload.lines.length) {
         pendingRpc = requestInlineDiffForStep(payload, stepStats);
         if (!pendingRpc) return false;
-        if (pendingRpc.cached && !(pendingRpc.cached.ok && Array.isArray(pendingRpc.cached.lines) && pendingRpc.cached.lines.length > 0)) {
+        if (pendingRpc.cached && !isRenderableResp(pendingRpc.cached)) {
           return false;
         }
       }
@@ -1110,6 +1219,10 @@
       const applyResp = (resp) => {
         if (resp?.ok && Array.isArray(resp.lines) && resp.lines.length > 0) {
           renderInlineDiffBody(body, resp.lines, 'lines', resp.mode, stepStats, resp, openSb);
+          return true;
+        }
+        if (resp?.ok && resp.mode === 'binary') {
+          renderInlineDiffBody(body, [], 'binary');
           return true;
         }
         clearBoxAnimTimers(box);

@@ -662,16 +662,16 @@ test(
         fs.writeFileSync(daemonPidPath, JSON.stringify({ pid: mockDaemonProc.pid }), 'utf8');
         await waitFor(() => {
           const logText = fs.existsSync(watchLogPath) ? fs.readFileSync(watchLogPath, 'utf8') : '';
-          return logText.includes('检测到原生 Sidecar Daemon 运行中') ||
-            logText.includes('Native Sidecar Daemon detected; Watcher entering standby mode')
+          return logText.includes('检测到本地守护服务运行中') ||
+            logText.includes('Local background daemon detected; Watcher entering standby mode')
             ? true
             : null;
         }, 6000, 120);
         fs.unlinkSync(daemonPidPath);
         await waitFor(() => {
           const logText = fs.existsSync(watchLogPath) ? fs.readFileSync(watchLogPath, 'utf8') : '';
-          return logText.includes('原生 Sidecar Daemon 已离线') ||
-            logText.includes('Native Sidecar Daemon offline; Watcher taking over live injection')
+          return logText.includes('本地守护服务已离线') ||
+            logText.includes('Local background daemon offline; Watcher taking over live injection')
             ? true
             : null;
         }, 6000, 120);
@@ -1765,7 +1765,6 @@ test('Windows C# installer & watcher bilingual i18n coverage: InstallerI18n cont
 
   // 3. Key window/button/relaunch prompt English strings exist
   for (const phrase of [
-    'Obsidian Prism Installer & Patcher',
     'Obsidian Prism Installer',
     'Uninstall & Reset',
     'Open Config Dir',
@@ -2114,7 +2113,7 @@ test(
       const helpEn = fs.readFileSync(outHelpEn, 'utf8');
       const helpZh = fs.readFileSync(outHelpZh, 'utf8');
       assert.equal(/[\u4e00-\u9fa5]/.test(helpEn), false, `English --help must not contain CJK: ${helpEn}`);
-      assert.ok(helpEn.includes('Obsidian Prism Installer & Patcher for Windows'));
+      assert.ok(helpEn.includes('Obsidian Prism Installer for Windows'));
       assert.ok(helpEn.includes('--lang <zh|en>'));
       assert.ok(helpZh.includes('黑曜棱镜') && helpZh.includes('--lang <zh|en>'));
 
@@ -2170,7 +2169,7 @@ test(
       assert.deepEqual(installEnRes.injectedPages, ['Antigravity']);
       assert.equal(/[\u4e00-\u9fa5]/.test(installEnRes.headline), false, `English headline had CJK: ${installEnRes.headline}`);
       assert.equal(/[\u4e00-\u9fa5]/.test(installEnRes.detail), false, `English detail had CJK: ${installEnRes.detail}`);
-      assert.ok(installEnRes.headline.includes('Patched!'));
+      assert.ok(installEnRes.headline.includes('Installed!'));
 
       const watchLogPath = path.join(installDir, 'watch.log');
       const watchLogEn = await waitFor(() => {

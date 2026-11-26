@@ -140,7 +140,7 @@ final class PluginManifest {
         let manifestPath = (baseDir as NSString).appendingPathComponent("manifest.json")
         let text = try String(contentsOfFile: manifestPath, encoding: .utf8)
         let raw = try MiniJson.parseObject(text)
-        let version = raw["version"]?.stringValue ?? "1.0.7"
+        let version = raw["version"]?.stringValue ?? "1.0.8-beta.3"
         let styleId = raw["styleId"]?.stringValue ?? "ag-prism-css"
         let settingBinding = raw["settingBinding"]?.stringValue ?? "__agPrismSetting"
         let removeExpression = raw["removeExpression"]?.stringValue ?? ""
@@ -613,6 +613,19 @@ enum CdpHelper {
         }
         if out["contextMenu"] != nil {
             out["contextMenu"] = .bool(toBoolOnOff(out["contextMenu"]))
+        }
+        if let cr = out["convRipple"] {
+            if case .bool(let b) = cr {
+                out["convRipple"] = .string(b ? "medium" : "off")
+            } else if let s = cr.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+                if s == "on" || s == "true" {
+                    out["convRipple"] = .string("medium")
+                } else if s == "off" || s == "false" {
+                    out["convRipple"] = .string("off")
+                } else if s == "subtle" || s == "medium" || s == "full" {
+                    out["convRipple"] = .string(s)
+                }
+            }
         }
         if let cl = out["codeLigatures"] {
             if case .bool(let b) = cl {
@@ -1740,7 +1753,7 @@ enum CdpHelper {
         sb.append("    } else {\n")
         sb.append("      try { window.__agPrismSidebar?.sync?.(effectiveCfg, window.__agPrismSidebarMeta || null); } catch {}\n")
         sb.append("    }\n")
-        sb.append("    try { if (effectiveCfg.hostLocalization === 'off' || (effectiveCfg.hostLocalization !== 'on' && effectiveCfg.language && effectiveCfg.language !== 'zh-CN' && effectiveCfg.language !== 'auto')) window.__agPrismHostI18n?.destroy?.(); } catch {}\n")
+        sb.append("    try { const hiMode = effectiveCfg.hostLocalization; const hiLang = effectiveCfg.language; const navL = String((typeof navigator !== 'undefined' && ((navigator.languages && navigator.languages[0]) || navigator.language)) || '').trim(); if (hiMode === 'off') window.__agPrismHostI18n?.setMode?.('off'); else if (hiMode === 'on') window.__agPrismHostI18n?.setMode?.('on'); else if ((hiLang && hiLang !== 'zh-CN' && hiLang !== 'auto') || ((!hiLang || hiLang === 'auto') && navL && !/^zh(?:$|-(?:cn|hans|sg)(?:-|$))/i.test(navL))) window.__agPrismHostI18n?.destroy?.(); else window.__agPrismHostI18n?.setMode?.('auto'); } catch {}\n")
         sb.append("    if (document.documentElement) {\n")
         sb.append("      if (effectiveCfg && effectiveCfg.thoughtTranslate && effectiveCfg.thoughtTranslate !== 'off') document.documentElement.setAttribute('data-ag-prism-thought-view', effectiveCfg.thoughtView === 'bilingual' ? 'bilingual' : 'immersive');\n")
         sb.append("      else document.documentElement.removeAttribute('data-ag-prism-thought-view');\n")

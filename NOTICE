@@ -55,7 +55,7 @@ notices are preserved in full in `THIRD_PARTY_NOTICES.md`:
   - LLYSH-HANNARI/antigravity-Codex-Claude-effort-slider (https://github.com/LLYSH-HANNARI/antigravity-Codex-Claude-effort-slider)
     Copyright (c) 2026 月上寒 / LLYSH-HANNARI — MIT License (compatible with GPL-3.0-only),
     absorbed and adapted in `vendor/effort-slider/`
-  - yiheng8023/antigravity-chinese v3.3.19 (https://github.com/yiheng8023/antigravity-chinese)
+  - yiheng8023/antigravity-chinese v3.3.63 (https://github.com/yiheng8023/antigravity-chinese)
     Copyright (c) 2026 Antigravity Chinese Localization Contributors — MIT License (compatible with GPL-3.0-only),
     dictionary & DOM translation reference re-architected into pure CDP Channel 4 in `vendor/host-i18n/`
 
@@ -64,6 +64,7 @@ Design & interaction inspiration is also gratefully credited to:
   - Microqian2th/dsh-codex-effort-slider
   - mobius/dsh-performance-slider
   - claudenoshujin/claude-web (Mascot Pile & Micro-Ecology Interaction Inspiration)
+  - wp3171216237/dsh-TUI (Deepy DeepSeek pixel whale design & water-spout inspiration, MIT License)
 
 ================================================================================
 3. NON-AFFILIATION DISCLAIMER

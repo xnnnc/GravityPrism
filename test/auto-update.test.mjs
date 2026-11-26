@@ -1065,3 +1065,110 @@ test('dual update channels (stable / beta): prerelease selection, automatic stab
   assert.ok(wfYml.includes('--prerelease'), 'release.yml must pass --prerelease to gh release');
   assert.ok(wfYml.includes('index(trimmed, "## [" ver "]") == 1'), 'release.yml must extract exact hyphenated version headers from CHANGELOG.md');
 });
+
+test('UpdateService on linux selects obsidian-prism-linux-portable.tar.gz (with fallback /linux.*\\.tar\\.gz$/i), preserves manual mode, and resolves SHA256SUMS.txt', async () => {
+  const linuxDigest = 'f38d1932efb64ce0c8cde81291a8402efdf917b4dc0fb529b5790053ab0f7573';
+  const fallbackDigest = '1111111111111111111111111111111111111111111111111111111111111111';
+  const shaUrl = 'https://github.com/xnnnc/GravityPrism/releases/download/v1.0.8-beta.1/SHA256SUMS.txt';
+  const linuxExactUrl =
+    'https://github.com/xnnnc/GravityPrism/releases/download/v1.0.8-beta.1/obsidian-prism-linux-portable.tar.gz';
+  const linuxFallbackUrl =
+    'https://github.com/xnnnc/GravityPrism/releases/download/v1.0.8-beta.1/obsidian-prism-linux-x64.tar.gz';
+
+  const shaSumsText = [
+    `aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111  gravity-prism-installer.exe`,
+    `${linuxDigest}  obsidian-prism-linux-portable.tar.gz`,
+    `${fallbackDigest}  obsidian-prism-linux-x64.tar.gz`,
+  ].join('\n');
+
+  let activeRelease = {
+    tag_name: 'v1.0.8-beta.1',
+    draft: false,
+    prerelease: true,
+    html_url: 'https://github.com/xnnnc/GravityPrism/releases/tag/v1.0.8-beta.1',
+    assets: [
+      {
+        name: 'gravity-prism-installer.exe',
+        browser_download_url: 'https://github.com/xnnnc/GravityPrism/releases/download/v1.0.8-beta.1/gravity-prism-installer.exe',
+      },
+      {
+        name: 'obsidian-prism-linux-x64.tar.gz',
+        browser_download_url: linuxFallbackUrl,
+        digest: `sha256:${fallbackDigest}`,
+      },
+      {
+        name: 'obsidian-prism-linux-portable.tar.gz',
+        browser_download_url: linuxExactUrl,
+        digest: `sha256:${linuxDigest}`,
+      },
+      {
+        name: 'SHA256SUMS.txt',
+        browser_download_url: shaUrl,
+      },
+    ],
+  };
+
+  const mockFetch = async (url) => {
+    if (url === RELEASES_LIST_API) {
+      return { ok: true, status: 200, json: async () => [activeRelease] };
+    }
+    if (url === shaUrl) {
+      return {
+        ok: true,
+        status: 200,
+        headers: { 'content-length': String(Buffer.byteLength(shaSumsText)) },
+        arrayBuffer: async () => Buffer.from(shaSumsText, 'utf8'),
+      };
+    }
+    return { ok: false, status: 404, json: async () => ({}) };
+  };
+
+  const svcLinux = new UpdateService({
+    platform: 'linux',
+    currentVersion: '1.0.7',
+    channel: 'beta',
+    fetchFn: mockFetch,
+  });
+
+  // 1) Prefers exact obsidian-prism-linux-portable.tar.gz even when another linux*.tar.gz appears earlier
+  const st = await svcLinux.checkForUpdates({ force: true });
+  assert.equal(st.ok, true);
+  assert.equal(st.hasUpdate, true);
+  assert.equal(st.mode, 'manual');
+  assert.equal(st.manualRequired, true);
+  assert.equal(st.hotReloadCapable, false);
+  assert.equal(st.assetName, 'obsidian-prism-linux-portable.tar.gz');
+  assert.equal(st.downloadUrl, linuxExactUrl);
+  assert.equal(st.expectedSha256, linuxDigest);
+
+  // 2) applyReleaseUpdate keeps manual mode and points directly to the Linux tarball URL
+  const applyRes = await svcLinux.applyReleaseUpdate({ confirm: true, auto: false });
+  assert.equal(applyRes.ok, true);
+  assert.equal(applyRes.applied, false);
+  assert.equal(applyRes.manualRequired, true);
+  assert.equal(applyRes.mode, 'manual');
+  assert.equal(applyRes.downloadUrl, linuxExactUrl);
+
+  // 3) When GitHub asset omits inline digest, _resolveExpectedSha256 falls back to SHA256SUMS.txt for linux tarball
+  const relNoDigest = {
+    ...activeRelease,
+    assets: activeRelease.assets.map((a) =>
+      a.name === 'obsidian-prism-linux-portable.tar.gz' ? { name: a.name, browser_download_url: a.browser_download_url } : a
+    ),
+  };
+  const selNoDigest = svcLinux._selectReleaseAssets(relNoDigest);
+  assert.equal(selNoDigest.targetAsset?.name, 'obsidian-prism-linux-portable.tar.gz');
+  assert.equal(selNoDigest.assetDigestSha256, null);
+  const resolvedSha = await svcLinux._resolveExpectedSha256(selNoDigest);
+  assert.equal(resolvedSha, linuxDigest);
+
+  // 4) Fallback regex /linux.*\.tar\.gz$/i when exact portable filename is absent
+  activeRelease = {
+    ...activeRelease,
+    assets: activeRelease.assets.filter((a) => a.name !== 'obsidian-prism-linux-portable.tar.gz'),
+  };
+  const stFallback = await svcLinux.checkForUpdates({ force: true });
+  assert.equal(stFallback.assetName, 'obsidian-prism-linux-x64.tar.gz');
+  assert.equal(stFallback.downloadUrl, linuxFallbackUrl);
+  assert.equal(stFallback.expectedSha256, fallbackDigest);
+});

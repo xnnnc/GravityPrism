@@ -20,6 +20,10 @@ export function seconds(value) {
 }
 
 export function tokenCount(value) {
+  if (typeof value === 'bigint') {
+    if (value < 0n || value > BigInt(Number.MAX_SAFE_INTEGER)) return null;
+    return Number(value);
+  }
   if (typeof value !== 'number' && !(typeof value === 'string' && /^\d+$/.test(value))) return null;
   const n = Number(value);
   return Number.isSafeInteger(n) && n >= 0 ? n : null;
@@ -537,11 +541,19 @@ export function quotaMetrics(response, now = Date.now()) {
   const object=value=>value&&typeof value==='object'&&!Array.isArray(value);
   const text=value=>typeof value==='string'?value:'';
   const root = object(response?.response)?response.response:object(response)?response:{};
-  const bucketFamily=bucket=>text(bucket?.bucketId).replace(/-(5h|weekly)$/, '');
+  const normWindow=raw=>{
+    const s=text(raw).trim().toLowerCase().replace(/^quota[_-]?window[_-]?/, '');
+    if(/^(?:5h|5hr|5[_-]?hours?|five[_-]?hours?)$/.test(s))return '5h';
+    if(/^(?:weekly|week|1w|7d|7[_-]?days?)$/.test(s))return 'weekly';
+    return null;
+  };
+  const SUFFIX_RE=/[-_](5h|5hr|5[_-]?hours?|five[_-]?hours?|weekly|7[_-]?days?)$/i;
+  const bucketFamily=bucket=>text(bucket?.bucketId).replace(SUFFIX_RE, '');
   const cadence=bucket=>{
     // Do not reinterpret an explicitly different cadence from its name.
-    if(Object.hasOwn(bucket,'window'))return ['5h','weekly'].includes(bucket.window)?bucket.window:null;
-    return text(bucket.bucketId).match(/-(5h|weekly)$/)?.[1]||null;
+    if(Object.hasOwn(bucket,'window'))return normWindow(bucket.window);
+    const m=text(bucket.bucketId).match(SUFFIX_RE);
+    return m?normWindow(m[1]):null;
   };
   const remainingValue=(bucket,field)=>Object.hasOwn(bucket,field)?bucket[field]
     :object(bucket.remaining)?bucket.remaining[field]:undefined;

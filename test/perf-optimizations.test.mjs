@@ -1214,7 +1214,7 @@ test('perf guard 20: Host Turbo alert.css dedup+restore, async img, hidden sidec
     css.includes('pre:not([data-ag-cs-rich-pre="1"]),pre>div:is(.border,.bg-muted)>div:nth-child(2),.agy-md-table.md-table-frame,table:not(.md-table-el)){contain:layout style;}'),
     'Read-only code bodies and Markdown tables must have safe contain:layout style without contain:paint'
   );
-  const blurRuleMatch = css.match(/html\[data-ag-cs-style\]\[data-ag-cs-win-blur="1"\]\{[^\n]+\}/);
+  const blurRuleMatch = css.match(/html\[data-ag-cs-style\](?:\[data-ag-cs-win-blur="1"\]|:is\(\[data-ag-cs-win-blur="1"\],\[data-ag-pp-open="1"\]\))\{[^\n]+\}/);
   assert.ok(blurRuleMatch, 'style.css must define window-blur animation pause rule');
   assert.ok(
     blurRuleMatch[0].includes('animation-play-state:paused !important;') &&

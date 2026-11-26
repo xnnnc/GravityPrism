@@ -1425,14 +1425,20 @@ test('security-sidecar 6: red-team hardening for NT device/mixed-slash UNC white
     assert.equal(pdfRes.statusCode, 200);
     assert.equal(pdfRes.headers['content-security-policy'], undefined, '/stream for .pdf must not force sandbox CSP');
 
-    // Sandbox HTML route (/sandbox/<tok>/<mountId>/page.html) must keep normal interactive preview without default-src none
+    // Sandbox HTML route (/sandbox/<tok>/<mountId>/page.html) must enforce strict opaque-origin sandbox CSP without default-src none
     const htmlFile = path.join(tmpDir, 'page.html');
     const initResp = await httpGet(`${info.baseUrl}/sandbox-init?token=${info.token}&path=${encodeURIComponent(htmlFile)}`);
     assert.equal(initResp.statusCode, 200);
     const initJson = JSON.parse(initResp.body);
     const sbResp = await httpGet(initJson.sandboxUrl);
     assert.equal(sbResp.statusCode, 200);
-    assert.equal(sbResp.headers['content-security-policy'], undefined, 'Isolated /sandbox/ HTML must not set default-src none CSP');
+    const sbCsp = String(sbResp.headers['content-security-policy'] || '');
+    assert.equal(sbCsp.includes("default-src 'none'"), false, 'Isolated /sandbox/ HTML must not set default-src none CSP');
+    assert.equal(
+      sbCsp,
+      "sandbox allow-scripts; connect-src 'none'; form-action 'none'; navigate-to 'none'",
+      'Isolated /sandbox/ HTML must enforce strict opaque-origin sandbox CSP'
+    );
   }
 
   // 4) Workbench kind=pdf must NEVER render unsandboxed .wb-pdf-frame for .html or .svg

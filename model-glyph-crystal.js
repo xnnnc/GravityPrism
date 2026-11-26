@@ -23,75 +23,55 @@
     return String(rawText || '').replace(ZH_EFFORT_PAREN_RE, '').trim();
   };
 
-  const normalizeModelEffortLabel = (rawText) => {
-    return String(rawText || '').replace(ZH_EFFORT_PAREN_RE, (_, t) =>
-      t === '超高' || t === '极高' || t === '超深'
-        ? ' (xhigh)'
-        : t === '中' || t === '中等' || t === '中思考'
-        ? ' (medium)'
-        : t === '低' || t === '低思考' || t === '极低' || t === '最低'
-        ? ' (low)'
-        : t === '自动'
-        ? ' (auto)'
-        : ' (high)'
+  const normalizeModelEffortLabel = (rawText) =>
+    String(rawText || '').replace(ZH_EFFORT_PAREN_RE, (_, t) =>
+      /超高|极高|超深/.test(t) ? ' (xhigh)' : t[0] === '中' ? ' (medium)' : t.includes('低') ? ' (low)' : t === '自动' ? ' (auto)' : ' (high)'
     );
-  };
 
   const readButtonLabelWithoutGlyph = (el) => {
     if (!el) return '';
-    const parts = [];
-    const isG = (n) => n?.classList?.contains?.('ag-cs-model-glyph');
+    const parts = [], isG = (n) => n?.classList?.contains?.('ag-cs-model-glyph') || n?.classList?.contains?.('ag-pp-mini-keycap');
     const collect = (node) => {
       if (!node || isG(node)) return;
-      if (node.nodeType === 3) {
-        parts.push(node.nodeValue || '');
-        return;
-      }
-      if (node.childNodes?.length > 0) {
-        for (const cn of node.childNodes) collect(cn);
-        return;
-      }
+      if (node.nodeType === 3) { parts.push(node.nodeValue || ''); return; }
+      if (node.childNodes?.length > 0) { for (const cn of node.childNodes) collect(cn); return; }
       if (node.children?.length > 0) {
-        let nonGlyph = 0;
-        for (const ch of node.children) {
-          if (isG(ch)) continue;
-          nonGlyph++;
-          collect(ch);
-        }
-        if (!nonGlyph && typeof node._text === 'string' && node._text) parts.push(node._text);
+        let nonG = 0;
+        for (const ch of node.children) if (!isG(ch)) { nonG++; collect(ch); }
+        if (!nonG && typeof node._text === 'string' && node._text) parts.push(node._text);
         return;
       }
       parts.push(node.textContent || '');
     };
     collect(el);
-    const aria = el.getAttribute?.('aria-label') || '';
-    if (aria) parts.push(aria);
-    return parts.join(' ').trim();
+    return parts.join(' ').trim() || (el.getAttribute?.('data-model-label') || '').trim() || (el.getAttribute?.('aria-label') || '').replace(/,\s*(?:model )?cannot be changed.*$/i, '').trim();
   };
+
+  const RE_CL = /\b(claude|anthropic|sonnet|opus|haiku)\b/;
+  const RE_GPT = /\b(gpt|openai|o[134]|codex)\b/;
+  const RE_DS = /\bdeepseek\b/;
 
   const parseModelLabelInfo = (rawText) => {
     const norm = normalizeModelEffortLabel(rawText).toLowerCase();
     const base = stripTranslatedEffortSuffix(rawText).toLowerCase();
     const isOrchestrator = /\borchestrator\b|编排|调度器/.test(base);
     let brand = 'gemini';
-    if (/\bclaude\b|\banthropic\b|\bsonnet\b|\bopus\b|\bhaiku\b/.test(base)) {
-      brand = 'claude';
-    } else if (/\bgpt\b|\bopenai\b|\bo1\b|\bo3\b|\bo4\b|\bcodex\b|\bdeepseek\b/.test(base)) {
-      brand = 'openai';
-    } else if (isOrchestrator) {
-      brand = 'antigravity';
-    } else if (/\bantigravity\b/.test(base) && !/\bgemini\b|\bneon\b|\bargon\b|\bcarbon\b|\bhydrogen\b|\bflash\b/.test(base)) {
-      brand = 'antigravity';
-    }
+    if (RE_CL.test(base)) brand = 'claude';
+    else if (RE_GPT.test(base) || RE_DS.test(base)) brand = 'openai';
+    else if (isOrchestrator || (/\bantigravity\b/.test(base) && !/\b(gemini|neon|argon|carbon|hydrogen|flash)\b/.test(base))) brand = 'antigravity';
 
-    let tier = 'medium';
-    if (/\bgpt-oss\b|\bfixed\b|固定/.test(norm)) tier = 'fixed';
-    else if (/\bxhigh\b|\bextra\b|超高|极高|超深/.test(norm)) tier = 'xhigh';
-    else if (/\bhigh\b|\bmax\b|\bthinking\b|深度思考|高思考|思考|高/.test(norm)) tier = 'high';
-    else if (/\blow\b|\blite\b|\bminimal\b|低思考|极低|最低|低/.test(norm)) tier = 'low';
-    else if (/\bmedium\b|\bmed\b|中思考|中等|中/.test(norm)) tier = 'medium';
-    else if (isOrchestrator) tier = 'auto';
+    const tier = /\b(gpt-oss|fixed)\b|固定/.test(norm) ? 'fixed'
+      : /\b(xhigh|extra)\b|超高|极高|超深/.test(norm) ? 'xhigh'
+      : /\b(high|max|thinking)\b|深度思考|高思考|思考|高/.test(norm) ? 'high'
+      : /\b(low|lite|minimal)\b|低思考|极低|最低|低/.test(norm) ? 'low'
+      : /\b(medium|med)\b|中思考|中等|中/.test(norm) ? 'medium'
+      : isOrchestrator ? 'auto' : 'medium';
     return { brand, tier, isOrchestrator, camp: brand === 'claude' ? 'claude' : 'gemini' };
+  };
+
+  const resolveMascotCamp = (rawText) => {
+    const b = stripTranslatedEffortSuffix(rawText).toLowerCase();
+    return RE_CL.test(b) ? 'claude' : RE_DS.test(b) || b.includes('深度求索') ? 'deepseek' : RE_GPT.test(b) ? 'gpt' : 'gemini';
   };
 
   const createModelGlyphCrystalController = ({
@@ -119,6 +99,7 @@
       mLastMs = 0,
       mWasOrch = false,
       mHideLock = false,
+      mMenuOpen = false,
       mWakeTrk = null,
       mWakeFn = null,
       mMountedAt = 0,
@@ -128,20 +109,24 @@
       mKnobFillSig = '',
       mTrkWidth = 0,
       mStepFillRatio = null;
+    const mBlurTimers = [];
 
-    const svgElementProtoCache = new Map();
+    const svgProto = new Map();
     const K_IC = 'isConnected', K_PE = 'parentElement', K_CL = 'classList';
+    const isF = Number.isFinite, pF = parseFloat, nowMs = () => performance.now(),
+      clamp01 = (v) => Math.max(0, Math.min(1, v));
     const ga = (e, k) => e?.getAttribute?.(k);
     const sa = (e, k, v = '') => e?.setAttribute?.(k, String(v));
     const ra = (e, k) => e?.removeAttribute?.(k);
     const ha = (e, k) => Boolean(e?.hasAttribute?.(k));
-    const qs = (e, s) => (e && e.querySelector ? e.querySelector(s) : null);
-    const qa = (e, s) => (e && e.querySelectorAll ? e.querySelectorAll(s) : []);
-    const cl = (e, s) => (e && e.closest ? e.closest(s) : null);
+    const qs = (e, s) => e?.querySelector?.(s) || null;
+    const qa = (e, s) => e?.querySelectorAll?.(s) || [];
+    const cl = (e, s) => e?.closest?.(s) || null;
     const sp = (e, k, v) => e?.style?.setProperty?.(k, v);
     const clHas = (e, c) => Boolean(e?.[K_CL]?.contains?.(c));
-    const rc = (e) => (typeof e?.getBoundingClientRect === 'function' ? e.getBoundingClientRect() : null);
+    const rc = (e) => e?.getBoundingClientRect?.() || null;
     const docOf = () => (typeof document !== 'undefined' ? document : null);
+    const isHid = () => docOf()?.hidden;
     const rAF = (fn) => (typeof requestAnimationFrame === 'function' ? requestAnimationFrame(fn) : 0);
     const cAF = (id) => { if (id && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(id); };
     const mk = (tag, cls, txt) => {
@@ -155,42 +140,57 @@
       const fn = G.AntigravityCodexEffortSlider?.markNoTranslate;
       if (fn) return fn(el);
       for (const k of ['data-ag-i18n-skip', 'data-ag-no-tr', 'data-no-translate']) sa(el, k, '1');
-      sa(el, 'data-translate', 'no');
-      sa(el, 'translate', 'no');
-      el[K_CL]?.add?.('notranslate');
+      sa(el, 'data-translate', 'no'); sa(el, 'translate', 'no'); el[K_CL]?.add?.('notranslate');
       return el;
     };
 
-    const getRootHtml = () => {
-      return typeof document !== 'undefined' ? document.documentElement : null;
+    const getRootHtml = () => docOf()?.documentElement || null;
+
+    const clearBlurTimers = () => {
+      while (mBlurTimers.length) {
+        try { clearTimeout(mBlurTimers.pop()); } catch {}
+      }
+    };
+
+    const blurModelTriggerIfNotHovered = () => {
+      try {
+        if (isDestroyed() || mMenuOpen) return;
+        const d = docOf();
+        const tr = d && qs(d, '[data-testid="model-selector-trigger"],button[aria-label^="Select model"]');
+        if (tr && d.activeElement === tr && !(tr.matches && tr.matches(':hover'))) tr.blur?.();
+      } catch {}
     };
 
     const syncModelMenuAttrs = (panel) => {
       const h = getRootHtml(), ov = cl(panel, '.agy-overlay');
       if (panel) {
+        clearBlurTimers();
+        mMenuOpen = true;
         h && setAttrIfChanged(h, 'data-ag-cs-model-menu', '1');
         mOv && mOv !== ov && ra(mOv, 'data-ag-cs-model-overlay');
         ov && setAttrIfChanged(ov, 'data-ag-cs-model-overlay', '1');
         mOv = ov;
       } else {
-        ra(h, 'data-ag-cs-model-menu');
-        ra(mOv, 'data-ag-cs-model-overlay');
-        mOv = null;
+        const wasOpen = mMenuOpen;
+        mMenuOpen = false;
+        ra(h, 'data-ag-cs-model-menu'); ra(mOv, 'data-ag-cs-model-overlay'); mOv = null;
         qa(docOf(), '[data-ag-cs-model-overlay]').forEach((e) => ra(e, 'data-ag-cs-model-overlay'));
+        if (wasOpen) {
+          blurModelTriggerIfNotHovered();
+          if (typeof setTimeout === 'function') {
+            mBlurTimers.push(setTimeout(blurModelTriggerIfNotHovered, 0), setTimeout(blurModelTriggerIfNotHovered, 60));
+          }
+        }
       }
     };
 
-    const readRootAccentTone = () => {
-      return ga(getRootHtml(), 'data-ag-cs-accent') || 'follow';
-    };
+    const readRootAccentTone = () => ga(getRootHtml(), 'data-ag-cs-accent') || 'follow';
 
     const resolveCrystalAccentMode = (dark) => {
-      const html = getRootHtml();
-      const tone = ga(html, 'data-ag-cs-accent') || 'follow';
+      const html = getRootHtml(), tone = ga(html, 'data-ag-cs-accent') || 'follow';
       if (tone === 'mono' || tone === 'cobalt' || tone === 'iris' || tone === 'amber') return tone;
       const pal = ga(html, 'data-ag-cs-palette') || 'obsidian';
-      if (pal === 'warm' || pal === 'claude') return 'warm';
-      if (!dark && pal === 'obsidian' && ga(html, 'data-ag-cs-light-preset') === 'alabaster') return 'warm';
+      if (pal === 'warm' || pal === 'claude' || (!dark && pal === 'obsidian' && ga(html, 'data-ag-cs-light-preset') === 'alabaster')) return 'warm';
       return 'default';
     };
 
@@ -205,7 +205,7 @@
     const readRootAmbientFloat = () => {
       const raw = ga(getRootHtml(), 'data-ag-cs-ambient');
       if (G.__agPrismRipple?.parseAmbientScale) return G.__agPrismRipple.parseAmbientScale(raw);
-      if (raw === null || raw === undefined || raw === '') return 1;
+      if (raw == null || raw === '') return 1;
       const n = Number(raw);
       return !Number.isFinite(n) ? 1 : n <= 0 ? 0 : n > 1 ? Math.min(1, n / 100) : n;
     };
@@ -213,29 +213,23 @@
     const cloneCachedSvgElement = (cacheKey, htmlStr) => {
       if (!htmlStr) return null;
       if (typeof HTMLTemplateElement !== 'undefined' && typeof docOf()?.createElement === 'function') {
-        let proto = svgElementProtoCache.get(cacheKey);
+        let proto = svgProto.get(cacheKey);
         if (!proto) {
-          const tpl = mk('template');
-          tpl.innerHTML = htmlStr;
+          const tpl = mk('template'); tpl.innerHTML = htmlStr;
           proto = tpl.content ? tpl.content.firstElementChild || tpl.content.firstChild : null;
-          if (proto && typeof proto.cloneNode === 'function') {
-            if (svgElementProtoCache.size > 64) svgElementProtoCache.clear();
-            svgElementProtoCache.set(cacheKey, proto);
-          }
+          if (proto?.cloneNode) { if (svgProto.size > 64) svgProto.clear(); svgProto.set(cacheKey, proto); }
         }
-        if (proto && typeof proto.cloneNode === 'function') return proto.cloneNode(true);
+        if (proto?.cloneNode) return proto.cloneNode(true);
       }
-      const tmp = mk('span');
-      tmp.innerHTML = htmlStr;
+      const tmp = mk('span'); tmp.innerHTML = htmlStr;
       return tmp.firstElementChild || tmp.firstChild || null;
     };
 
     const parseModelTriggerInfo = (btn) => {
-      const info = parseModelLabelInfo(readButtonLabelWithoutGlyph(btn));
-      if (info.isOrchestrator && ga(btn, 'data-ces-orch-b') === 'claude') {
-        info.brand = 'claude';
-        info.camp = 'claude';
-      }
+      const raw = readButtonLabelWithoutGlyph(btn);
+      const info = parseModelLabelInfo(raw);
+      info.mascotCamp = resolveMascotCamp(raw);
+      if (info.isOrchestrator && ga(btn, 'data-ces-orch-b') === 'claude') info.brand = info.camp = info.mascotCamp = 'claude';
       return info;
     };
 
@@ -289,24 +283,16 @@
         return info;
       }
 
-      let glyph = qs(modelBtn, '.ag-cs-model-glyph');
-      let created = false;
+      let glyph = qs(modelBtn, '.ag-cs-model-glyph'), created = false;
       if (!glyph) {
         glyph = mk('span', 'ag-cs-model-glyph');
-        sa(glyph, 'data-icon', '1');
-        sa(glyph, 'aria-hidden', 'true');
-        sa(glyph, 'data-ag-no-i18n');
-        sa(glyph, 'data-ag-owned', '1');
+        sa(glyph, 'data-icon', '1'); sa(glyph, 'aria-hidden', 'true'); sa(glyph, 'data-ag-no-i18n'); sa(glyph, 'data-ag-owned', '1');
         created = true;
       }
       if (modelBtn.firstChild !== glyph) modelBtn.insertBefore(glyph, modelBtn.firstChild);
-      const isMono = readRootAccentTone() === 'mono';
-      const monoStr = isMono ? '1' : '0';
-      const prevMono = ga(glyph, 'data-mono');
+      const isMono = readRootAccentTone() === 'mono', monoStr = isMono ? '1' : '0', prevMono = ga(glyph, 'data-mono');
       if (created || ga(glyph, 'data-brand') !== info.brand || ga(glyph, 'data-tier') !== info.tier || prevMono !== monoStr) {
-        sa(glyph, 'data-brand', info.brand);
-        sa(glyph, 'data-tier', info.tier);
-        sa(glyph, 'data-mono', monoStr);
+        sa(glyph, 'data-brand', info.brand); sa(glyph, 'data-tier', info.tier); sa(glyph, 'data-mono', monoStr);
         glyph.innerHTML = buildModelGlyphInnerSvg(info.brand, info.tier, isMono);
         if (!created && prevMono === monoStr && !motionReduced()) {
           glyph[K_CL].remove('is-pulsing');
@@ -342,71 +328,30 @@
       for (const row of qa(panel, '[role="menuitem"], [role="option"], button')) {
         if (cl(row, '.ces-ag-section, [data-testid="orchestrator-effort-bar"]') || cl(row[K_PE], '[role="menuitem"], [role="option"], button')) continue;
         const label = readButtonLabelWithoutGlyph(row);
-        if (!PANEL_MODEL_ROW_RE.test(label)) {
-          clearPanelRowGlyphs(row);
-          continue;
-        }
-        const info = parseModelLabelInfo(label);
-        const isSelected = isPanelRowSelected(row);
-
+        if (!PANEL_MODEL_ROW_RE.test(label)) { clearPanelRowGlyphs(row); continue; }
+        const info = parseModelLabelInfo(label), isSelected = isPanelRowSelected(row);
         let firstChildEl = null;
-        if (row.children) {
-          for (const ch of row.children) {
-            if (clHas(ch, 'ag-cs-model-glyph')) continue;
-            firstChildEl = ch;
-            break;
-          }
-        }
-        const targetParent =
-          firstChildEl &&
-          (qs(firstChildEl, '[data-testid="model-selector-effort-group"]') ||
-            /\bflex\b|\bitems-center\b/.test(String(firstChildEl.className || '')))
-            ? firstChildEl
-            : row;
-
-        let glyph = qs(row, '.ag-cs-panel-row-glyph');
-        let created = false;
+        if (row.children) for (const ch of row.children) if (!clHas(ch, 'ag-cs-model-glyph')) { firstChildEl = ch; break; }
+        const targetParent = firstChildEl && (qs(firstChildEl, '[data-testid="model-selector-effort-group"]') || /\bflex\b|\bitems-center\b/.test(String(firstChildEl.className || ''))) ? firstChildEl : row;
+        let glyph = qs(row, '.ag-cs-panel-row-glyph'), created = false;
         if (!glyph) {
           glyph = mk('span', 'ag-cs-model-glyph ag-cs-panel-row-glyph');
-          sa(glyph, 'data-ag-no-i18n');
-          sa(glyph, 'aria-hidden', 'true');
-          sa(glyph, 'data-ag-owned', '1');
+          sa(glyph, 'data-ag-no-i18n'); sa(glyph, 'aria-hidden', 'true'); sa(glyph, 'data-ag-owned', '1');
           created = true;
         }
-        if (glyph[K_PE] !== targetParent || targetParent.firstChild !== glyph) {
-          targetParent.insertBefore(glyph, targetParent.firstChild);
-        }
-
-        const selStr = isSelected ? 'true' : 'false';
-        const isMono = readRootAccentTone() === 'mono';
-        const monoStr = isMono ? '1' : '0';
-        if (
-          created ||
-          ga(glyph, 'data-brand') !== info.brand ||
-          ga(glyph, 'data-tier') !== info.tier ||
-          ga(glyph, 'data-selected') !== selStr ||
-          ga(glyph, 'data-mono') !== monoStr
-        ) {
-          sa(glyph, 'data-brand', info.brand);
-          sa(glyph, 'data-tier', info.tier);
-          sa(glyph, 'data-selected', selStr);
-          sa(glyph, 'data-mono', monoStr);
+        if (glyph[K_PE] !== targetParent || targetParent.firstChild !== glyph) targetParent.insertBefore(glyph, targetParent.firstChild);
+        const selStr = isSelected ? 'true' : 'false', isMono = readRootAccentTone() === 'mono', monoStr = isMono ? '1' : '0';
+        if (created || ga(glyph, 'data-brand') !== info.brand || ga(glyph, 'data-tier') !== info.tier || ga(glyph, 'data-selected') !== selStr || ga(glyph, 'data-mono') !== monoStr) {
+          sa(glyph, 'data-brand', info.brand); sa(glyph, 'data-tier', info.tier); sa(glyph, 'data-selected', selStr); sa(glyph, 'data-mono', monoStr);
           glyph.innerHTML = buildPanelRowGlyphSvg(info.brand, info.tier, isSelected, isMono);
-          if (isSelected) {
-            sp(glyph, 'opacity', '1');
-            sp(glyph, 'filter', info.brand === 'openai' || isMono ? 'none' : 'drop-shadow(0 0 3px var(--glyph-glow))');
-          } else {
-            sp(glyph, 'filter', 'none');
-            sp(glyph, 'opacity', '0.78');
-          }
+          sp(glyph, 'opacity', isSelected ? '1' : '0.78');
+          sp(glyph, 'filter', isSelected && info.brand !== 'openai' && !isMono ? 'drop-shadow(0 0 3px var(--glyph-glow))' : 'none');
         }
       }
     };
 
     const detachSliderWake = () => {
-      if (mWakeTrk && mWakeFn) {
-        try { mWakeTrk.removeEventListener('pointerdown', mWakeFn); } catch {}
-      }
+      if (mWakeTrk && mWakeFn) try { mWakeTrk.removeEventListener('pointerdown', mWakeFn); } catch {}
       mWakeTrk = mWakeFn = null;
     };
 
@@ -423,10 +368,7 @@
           trk[K_CL].remove('ag-cs-orch-track');
           qa(trk, ORCH_CV_SEL).forEach((c) => c.remove());
           const knob = qs(trk, '.ces-knob');
-          if (knob) {
-            knob.style.removeProperty('--knob-px');
-            knob.style.removeProperty('--knob-py');
-          }
+          if (knob) { knob.style.removeProperty('--knob-px'); knob.style.removeProperty('--knob-py'); }
         }
       });
     };
@@ -434,38 +376,28 @@
     const getCachedKnob = (trk) => {
       if (!trk || trk[K_IC] === false) return null;
       if (mKnob && mKnob[K_IC] !== false && (mKnob[K_PE] === trk || trk.contains?.(mKnob))) return mKnob;
-      mKnob = qs(trk, '.ces-knob');
-      return mKnob;
+      return (mKnob = qs(trk, '.ces-knob'));
     };
 
     const readTrackFillRatio = (trk) => {
       if (!trk) return 1;
       let w = trk === mTrk && mTrkWidth > 4 ? mTrkWidth : 0;
-      if (!(w > 4)) {
-        w = trk.clientWidth || rc(trk)?.width || 220;
-        if (trk === mTrk && w > 4) mTrkWidth = w;
-      }
-      const raw = trk.style && typeof trk.style.getPropertyValue === 'function' ? trk.style.getPropertyValue('--ces-fill').trim() : '';
+      if (!(w > 4)) { w = trk.clientWidth || rc(trk)?.width || 220; if (trk === mTrk && w > 4) mTrkWidth = w; }
+      const raw = trk.style?.getPropertyValue?.('--ces-fill')?.trim() || '';
       if (raw && w > 4) {
         const mCalc = raw.match(/calc\(\s*([0-9.]+)px\s*\+\s*\(100%\s*-\s*([0-9.]+)px\)\s*\*\s*([0-9.eE+-]+)\s*\)/);
         if (mCalc) {
-          const r = parseFloat(mCalc[1]), span = parseFloat(mCalc[2]), p = parseFloat(mCalc[3]);
-          if (Number.isFinite(r) && Number.isFinite(span) && Number.isFinite(p)) {
-            return Math.max(0, Math.min(1, (r + (w - span) * p) / w));
-          }
+          const r = pF(mCalc[1]), span = pF(mCalc[2]), p = pF(mCalc[3]);
+          if (isF(r) && isF(span) && isF(p)) return clamp01((r + (w - span) * p) / w);
         }
-        const px = parseFloat(raw);
-        if (Number.isFinite(px)) return Math.max(0, Math.min(1, px / w));
+        const px = pF(raw);
+        if (isF(px)) return clamp01(px / w);
       }
       const knob = trk === mTrk ? getCachedKnob(trk) : qs(trk, '.ces-knob');
-      if (knob && typeof knob.offsetLeft === 'number' && knob.offsetLeft > 0 && w > 4) {
-        return Math.max(0, Math.min(1, knob.offsetLeft / w));
-      }
-      if (typeof trk.getAttribute === 'function' && w > 4) {
-        const maxV = parseFloat(ga(trk, 'aria-valuemax')), nowV = parseFloat(ga(trk, 'aria-valuenow'));
-        if (Number.isFinite(maxV) && maxV > 0 && Number.isFinite(nowV)) {
-          return Math.max(0, Math.min(1, (14 + (w - 28) * (nowV / maxV)) / w));
-        }
+      if (knob && typeof knob.offsetLeft === 'number' && knob.offsetLeft > 0 && w > 4) return clamp01(knob.offsetLeft / w);
+      if (w > 4) {
+        const maxV = pF(ga(trk, 'aria-valuemax')), nowV = pF(ga(trk, 'aria-valuenow'));
+        if (isF(maxV) && maxV > 0 && isF(nowV)) return clamp01((14 + (w - 28) * (nowV / maxV)) / w);
       }
       return 1;
     };
@@ -476,20 +408,17 @@
       if (!knob) { knobPrismHot = false; mKnobRect = null; return; }
       const clr = () => { if (knobPrismHot) { sp(knob, '--knob-px', '-9999px'); sp(knob, '--knob-py', '-9999px'); knobPrismHot = false; } };
       if (motionReduced() || readRootAmbientFloat() <= 0.001 || !(clientX > -1000 && clientY > -1000)) { clr(); return; }
-      const fillSig = trk?.style?.getPropertyValue?.('--ces-fill') || '', now = performance.now();
+      const fillSig = trk?.style?.getPropertyValue?.('--ces-fill') || '', now = nowMs();
       let rect = mKnobRect;
       if (!rect || fillSig !== mKnobFillSig || now - mKnobRectAt > 120) {
         rect = rc(knob);
         mKnobRect = rect && rect.width >= 4 ? rect : null;
-        mKnobRectAt = now;
-        mKnobFillSig = fillSig;
+        mKnobRectAt = now; mKnobFillSig = fillSig;
       }
       if (!rect || rect.width < 4) return;
       const lx = clientX - rect.left, ly = clientY - rect.top;
       if (Math.hypot(lx - rect.width * 0.5, ly - rect.height * 0.5) <= 56) {
-        sp(knob, '--knob-px', `${lx.toFixed(1)}px`);
-        sp(knob, '--knob-py', `${ly.toFixed(1)}px`);
-        knobPrismHot = true;
+        sp(knob, '--knob-px', `${lx.toFixed(1)}px`); sp(knob, '--knob-py', `${ly.toFixed(1)}px`); knobPrismHot = true;
       } else clr();
     };
 
@@ -497,36 +426,25 @@
     const cancelStepRaf = () => { if (mRaf) { cAF(mRaf); mRaf = 0; } };
 
     const resetKnobCache = () => {
-      mKnob = mKnobRect = null;
-      mTrkWidth = mKnobRectAt = 0;
-      mKnobFillSig = '';
-      mStepFillRatio = null;
+      mKnob = mKnobRect = null; mTrkWidth = mKnobRectAt = 0; mKnobFillSig = ''; mStepFillRatio = null;
     };
 
     const stopCrystalOnPanel = (panel) => {
-      detachSliderWake();
-      cancelMountRaf();
-      cancelStepRaf();
+      clearBlurTimers(); detachSliderWake(); cancelMountRaf(); cancelStepRaf();
       try { mInst?.dispose?.(); } catch {}
       if (panel) {
-        clearSliderPrismOverlay(panel);
-        ra(panel, 'data-ag-cs-orch-active');
+        clearSliderPrismOverlay(panel); ra(panel, 'data-ag-cs-orch-active');
         qa(panel, EFF_ROW_SEL).forEach((row) => { ra(row, 'data-row-hidden'); ra(row, 'aria-hidden'); });
       }
       if (mBar?.[K_PE]) mBar.remove();
-      mPanel = mBar = mTrk = mCv = mInst = null;
-      mRaf = mMountRaf = mLastMs = mMountedAt = 0;
-      resetKnobCache();
-      mWasOrch = mHideLock = false;
+      mPanel = mBar = mTrk = mCv = mInst = null; mRaf = mMountRaf = mLastMs = mMountedAt = 0;
+      resetKnobCache(); mWasOrch = mHideLock = false;
     };
 
     const teardownCrystalMount = () => {
       const p = mPanel?.[K_IC] ? mPanel : null;
       if (p) clearPanelRowGlyphs(p);
-      stopCrystalOnPanel(p);
-      clearPanelRowGlyphs();
-      syncModelMenuAttrs(null);
-      mOv = null;
+      stopCrystalOnPanel(p); clearPanelRowGlyphs(); syncModelMenuAttrs(null); mOv = null;
     };
 
     const ORCH_LBL_RE = /\borchestrator\b|编排|调度器/i;
@@ -534,9 +452,7 @@
     const detectPanelIsOrchestrator = (panel, fallbackModelInfo) => {
       if (panel) {
         const cesSel = qs(panel, '[data-ces-model-selected="true"]');
-        if (cesSel) {
-          return ga(cesSel, 'data-testid') === 'model-selector-orchestrator' || Boolean(qs(cesSel, '[data-testid="model-selector-orchestrator"]')) || isOrchRowLbl(cesSel);
-        }
+        if (cesSel) return ga(cesSel, 'data-testid') === 'model-selector-orchestrator' || Boolean(qs(cesSel, '[data-testid="model-selector-orchestrator"]')) || isOrchRowLbl(cesSel);
       }
       if (fallbackModelInfo && typeof fallbackModelInfo.isOrchestrator === 'boolean') return fallbackModelInfo.isOrchestrator;
       if (panel) {
@@ -552,17 +468,17 @@
       if (isDestroyed() || !mInst || !mPanel?.[K_IC] || !mWasOrch) return;
       const minGap = getMinFrameGapMs();
       if (minGap > 0 && mLastMs > 0 && now - mLastMs < minGap) {
-        if (!motionReduced() && !docOf()?.hidden) mRaf = rAF(stepCrystalLoop);
+        if (!motionReduced() && !isHid()) mRaf = rAF(stepCrystalLoop);
         return;
       }
       const dt = mLastMs > 0 ? Math.min(0.05, Math.max(0.002, (now - mLastMs) / 1000)) : 0.016;
       mLastMs = now;
       // 先读布局（fillRatio 与缓存宽度/滑块引用），再写 CSS 变量，消除同帧写后读回流
       mStepFillRatio = mHideLock ? readTrackFillRatio(mTrk) : -1;
-      const ptrNow = getLastPointerPos ? getLastPointerPos() : null;
+      const ptrNow = getLastPointerPos?.() || null;
       if (ptrNow) syncKnobPrismPointer(ptrNow.x, ptrNow.y);
       try { mInst.step(dt); } catch {} finally { mStepFillRatio = null; }
-      if (!mInst.isIdle?.() && !docOf()?.hidden) mRaf = rAF(stepCrystalLoop);
+      if (!mInst.isIdle?.() && !isHid()) mRaf = rAF(stepCrystalLoop);
     };
 
     const syncModelSelectorPanel = (primaryModelInfo) => {
@@ -570,23 +486,13 @@
       syncModelMenuAttrs(panel);
       if (!isComposerRestyleEnabled() || !panel) {
         clearPanelRowGlyphs();
-        if (mPanel || mBar) {
-          teardownCrystalMount();
-          if (panel) syncModelMenuAttrs(panel);
-        }
+        if (mPanel || mBar) { teardownCrystalMount(); if (panel) syncModelMenuAttrs(panel); }
         return;
       }
-      if (mPanel && mPanel !== panel) {
-        teardownCrystalMount();
-        syncModelMenuAttrs(panel);
-      }
+      if (mPanel && mPanel !== panel) { teardownCrystalMount(); syncModelMenuAttrs(panel); }
 
       syncPanelRowGlyphs(panel);
-      if (isEffortSliderOff()) {
-        qa(panel, '[data-testid="orchestrator-effort-bar"]').forEach((b) => b.remove?.());
-        stopCrystalOnPanel(panel);
-        return;
-      }
+      if (isEffortSliderOff()) { qa(panel, '[data-testid="orchestrator-effort-bar"]').forEach((b) => b.remove?.()); stopCrystalOnPanel(panel); return; }
       const isOrch = detectPanelIsOrchestrator(panel, primaryModelInfo);
       const isOrchTunable = isOrch && ga(panel, 'data-ces-orch-tunable') === 'true';
       const cesSec = qs(panel, '.ces-ag-section');
@@ -600,104 +506,57 @@
       let bar = qs(panel, '[data-testid="orchestrator-effort-bar"]');
       if (!bar) {
         bar = markNoTr(mk('div', 'ces-ag-effort-row ag-cs-orch-row'));
-        sa(bar, 'data-testid', 'orchestrator-effort-bar');
-        sa(bar, 'data-ag-no-i18n');
-        sa(bar, 'data-ag-owned', '1');
-
+        sa(bar, 'data-testid', 'orchestrator-effort-bar'); sa(bar, 'data-ag-no-i18n'); sa(bar, 'data-ag-owned', '1');
         const head = markNoTr(mk('div', 'ces-ag-effort-head ag-cs-orch-head'));
         head.appendChild(markNoTr(mk('span', 'ces-ag-effort-title', isZh() ? '推理等级' : 'Reasoning Effort')));
         head.appendChild(markNoTr(mk('span', 'ces-ag-effort-value ag-cs-orch-value', 'Auto')));
+        const inline = markNoTr(mk('div', 'ces-inline')), track = mk('div', 'ag-cs-orch-track'), cv = mk('canvas', 'ag-cs-orch-canvas');
+        sa(track, 'role', 'status'); sa(track, 'aria-label', 'Orchestrator Auto');
+        sa(cv, 'data-orch-crystal-canvas', 'true'); sa(cv, 'aria-hidden', 'true');
+        track.appendChild(cv); inline.appendChild(track); bar.appendChild(head); bar.appendChild(inline); slot.appendChild(bar);
+      } else if (bar[K_PE] !== slot) slot.appendChild(bar);
 
-        const inline = markNoTr(mk('div', 'ces-inline'));
-        const track = mk('div', 'ag-cs-orch-track');
-        sa(track, 'role', 'status');
-        sa(track, 'aria-label', 'Orchestrator Auto');
-        const cv = mk('canvas', 'ag-cs-orch-canvas');
-        sa(cv, 'data-orch-crystal-canvas', 'true');
-        sa(cv, 'aria-hidden', 'true');
-        track.appendChild(cv);
-        inline.appendChild(track);
-
-        bar.appendChild(head);
-        bar.appendChild(inline);
-        slot.appendChild(bar);
-      } else if (bar[K_PE] !== slot) {
-        slot.appendChild(bar);
-      }
-
-      const sRow = qs(panel, EFF_ROW_SEL);
-      const sTrk = sRow && qs(sRow, '.ces-track');
+      const sRow = qs(panel, EFF_ROW_SEL), sTrk = sRow && qs(sRow, '.ces-track');
       const customStyle = isCustomEffortStyle();
       const canTuneOrch = !!(isOrch && isOrchTunable && sRow && sTrk);
-      const useSP = !!(canTuneOrch && !customStyle);
-      const useAuto = !!(isOrch && !canTuneOrch);
-      const runCrystal = useSP || useAuto;
-
-      let tTrk = qs(bar, '.ag-cs-orch-track');
-      let tCv = qs(bar, ORCH_CV_SEL);
+      const useSP = !!(canTuneOrch && !customStyle), useAuto = !!(isOrch && !canTuneOrch), runCrystal = useSP || useAuto;
+      let tTrk = qs(bar, '.ag-cs-orch-track'), tCv = qs(bar, ORCH_CV_SEL);
       if (useSP) {
-        setAttrIfChanged(sRow, 'data-ag-orch-p', '1');
-        sTrk[K_CL].add('ag-cs-orch-track');
+        setAttrIfChanged(sRow, 'data-ag-orch-p', '1'); sTrk[K_CL].add('ag-cs-orch-track');
         let c = qs(sTrk, ORCH_CV_SEL);
         if (!c) {
-          c = mk('canvas', 'ag-cs-orch-canvas');
-          sa(c, 'data-orch-crystal-canvas', 'true');
-          sa(c, 'aria-hidden', 'true');
-          sa(c, 'data-ag-owned', '1');
+          c = mk('canvas', 'ag-cs-orch-canvas'); sa(c, 'data-orch-crystal-canvas', 'true'); sa(c, 'aria-hidden', 'true'); sa(c, 'data-ag-owned', '1');
           sTrk.insertBefore(c, sTrk.firstChild);
         }
-        tTrk = sTrk;
-        tCv = c;
+        tTrk = sTrk; tCv = c;
         if (mWakeTrk !== sTrk) {
           detachSliderWake();
           const onWake = (ev) => {
             mKnobRect = null;
             if (ev && typeof ev.clientX === 'number') syncKnobPrismPointer(ev.clientX, ev.clientY);
-            if (!mRaf && mInst && !docOf()?.hidden) {
-              mLastMs = performance.now();
-              mRaf = rAF(stepCrystalLoop);
-            }
+            if (!mRaf && mInst && !isHid()) { mLastMs = nowMs(); mRaf = rAF(stepCrystalLoop); }
           };
           try { sTrk.addEventListener('pointerdown', onWake, { passive: true }); } catch {}
-          mWakeTrk = sTrk;
-          mWakeFn = onWake;
+          mWakeTrk = sTrk; mWakeFn = onWake;
         }
-      } else {
-        clearSliderPrismOverlay(panel);
-      }
+      } else clearSliderPrismOverlay(panel);
 
-      if (mInst && mCv && mCv !== tCv) {
-        cancelMountRaf();
-        cancelStepRaf();
-        try { mInst.dispose?.(); } catch {}
-        mInst = null;
-      }
-
+      if (mInst && mCv && mCv !== tCv) { cancelMountRaf(); cancelStepRaf(); try { mInst.dispose?.(); } catch {} mInst = null; }
       if (mTrk !== tTrk) resetKnobCache();
-      mPanel = panel;
-      mBar = bar;
-      mTrk = tTrk;
-      mCv = tCv;
-      mHideLock = useSP;
+      mPanel = panel; mBar = bar; mTrk = tTrk; mCv = tCv; mHideLock = useSP;
 
-      if (useAuto) setAttrIfChanged(panel, 'data-ag-cs-orch-active', '1');
-      else ra(panel, 'data-ag-cs-orch-active');
-
-      qa(panel, EFF_ROW_SEL).forEach((row) => {
-        setAttrIfChanged(row, 'data-row-hidden', String(useAuto));
-        setAttrIfChanged(row, 'aria-hidden', String(useAuto));
-      });
+      if (useAuto) setAttrIfChanged(panel, 'data-ag-cs-orch-active', '1'); else ra(panel, 'data-ag-cs-orch-active');
+      const uS = String(useAuto), bS = String(!useAuto);
+      qa(panel, EFF_ROW_SEL).forEach((row) => { setAttrIfChanged(row, 'data-row-hidden', uS); setAttrIfChanged(row, 'aria-hidden', uS); });
 
       const switchedIn = runCrystal && !mWasOrch;
       mWasOrch = runCrystal;
-      setAttrIfChanged(bar, 'data-row-hidden', String(!useAuto));
-      setAttrIfChanged(bar, 'aria-hidden', String(!useAuto));
+      setAttrIfChanged(bar, 'data-row-hidden', bS); setAttrIfChanged(bar, 'aria-hidden', bS);
 
       if (runCrystal) {
         const kickCrystal = () => {
           if (isDestroyed() || isEffortSliderOff() || !mWasOrch || mPanel !== panel || !panel[K_IC] || !mCv) return;
-          const reducedNow = motionReduced();
-          const ambientNow = readRootAmbientFloat();
+          const reducedNow = motionReduced(), ambientNow = readRootAmbientFloat();
           if (!mInst && crystalPrismCore?.mountCrystalPrismBar && canMountRealCanvas(mCv)) {
             try {
               mInst = crystalPrismCore.mountCrystalPrismBar(mCv, {
@@ -705,61 +564,33 @@
                 getState: () => {
                   const dark = isDarkTheme();
                   return {
-                    isDark: dark,
-                    prismStrength: 1,
-                    ambientIntensity: readRootAmbientFloat(),
-                    accentTone: resolveCrystalAccentMode(dark),
-                    reduceMotion: motionReduced(),
-                    hideLock: !!(mHideLock),
-                    fillRatio: mStepFillRatio !== null ? mStepFillRatio : mHideLock ? readTrackFillRatio(mTrk) : -1,
+                    isDark: dark, prismStrength: 1, ambientIntensity: readRootAmbientFloat(),
+                    accentTone: resolveCrystalAccentMode(dark), reduceMotion: motionReduced(),
+                    hideLock: !!mHideLock, fillRatio: mStepFillRatio !== null ? mStepFillRatio : mHideLock ? readTrackFillRatio(mTrk) : -1,
                   };
                 },
               });
-            } catch {
-              mInst = null;
-            }
+            } catch { mInst = null; }
           }
           if (!mInst) return;
           mInst.setReduceMotion?.(reducedNow);
           mStepFillRatio = mHideLock ? readTrackFillRatio(mTrk) : -1;
-          const ptr = getLastPointerPos ? getLastPointerPos() : null;
-          if (ptr && ptr.x > -1000) {
-            mInst.setPointerClient(ptr.x, ptr.y);
-            syncKnobPrismPointer(ptr.x, ptr.y);
-          } else {
-            syncKnobPrismPointer(-9999, -9999);
-          }
-          if (switchedIn || !mMountedAt) {
-            mMountedAt = performance.now();
-            if (!reducedNow && ambientNow > 0.001) mInst.wake?.();
-          }
+          const ptr = getLastPointerPos?.() || null;
+          if (ptr && ptr.x > -1000) { mInst.setPointerClient(ptr.x, ptr.y); syncKnobPrismPointer(ptr.x, ptr.y); }
+          else syncKnobPrismPointer(-9999, -9999);
+          if (switchedIn || !mMountedAt) { mMountedAt = nowMs(); if (!reducedNow && ambientNow > 0.001) mInst.wake?.(); }
           try { mInst.step(0.016); } catch {} finally { mStepFillRatio = null; }
-          if (mInst.isIdle?.() || docOf()?.hidden) {
-            cancelStepRaf();
-          } else if (!mRaf) {
-            mLastMs = performance.now();
-            mRaf = rAF(stepCrystalLoop);
-          }
+          if (mInst.isIdle?.() || isHid()) cancelStepRaf();
+          else if (!mRaf) { mLastMs = nowMs(); mRaf = rAF(stepCrystalLoop); }
         };
-        if (mInst) {
-          kickCrystal();
-        } else if (!mMountRaf) {
-          if (typeof requestAnimationFrame === 'function') {
-            mMountRaf = requestAnimationFrame(() => {
-              mMountRaf = 0;
-              kickCrystal();
-            });
-          } else {
-            kickCrystal();
-          }
+        if (mInst) kickCrystal();
+        else if (!mMountRaf) {
+          mMountRaf = rAF(() => { mMountRaf = 0; kickCrystal(); });
+          if (!mMountRaf) kickCrystal();
         }
       } else {
-        cancelMountRaf();
-        cancelStepRaf();
-        if (mInst) {
-          try { mInst.dispose?.(); } catch {}
-          mInst = null;
-        }
+        cancelMountRaf(); cancelStepRaf();
+        if (mInst) { try { mInst.dispose?.(); } catch {} mInst = null; }
       }
     };
 
@@ -768,6 +599,7 @@
       stripTranslatedEffortSuffix,
       normalizeModelEffortLabel,
       parseModelLabelInfo,
+      resolveMascotCamp,
       parseModelTriggerInfo,
       renderSparkSvg,
       buildBrandMarkSvg,
@@ -798,6 +630,7 @@
     stripTranslatedEffortSuffix,
     normalizeModelEffortLabel,
     parseModelLabelInfo,
+    resolveMascotCamp,
     createModelGlyphCrystalController,
   };
   if (typeof module === 'object' && module.exports) module.exports = api;

@@ -1,4 +1,4 @@
-// Obsidian Prism — Unified Thought Translator & Polisher Client Runtime (v1.0.7 Upgraded)
+// Obsidian Prism — Unified Thought Translator & Polisher Client Runtime (v1.0.8-beta.3 Upgraded)
 // Incorporates proven anti-jank & anti-retranslate safeguards + v1.0.1 workbench capabilities:
 // 1. Rendered-signature idempotence (`data-op-zh-sig` + `data-raw-zh`) -> 0 redundant DOM rebuilds on cache hit;
 // 2. Global `inflightBySig` flight pool across React panel remounts + pre-commit source-hash verification -> 0 duplicate requests & 0 misplacement;
@@ -31,7 +31,7 @@
   let currentMode = 'off';
   let triggerTiming = 'preload';
   let currentViewMode = 'immersive';
-  let currentLang = 'zh-CN';
+  let currentLang = '';
   let translateToolSummaries = false;
   let translateTitles = false;
   let hasExplicitToolSummaries = false;
@@ -100,11 +100,22 @@
         '|'
       ),
     'zh-TW': ZH_TW_PACK,
-    yue: ['原文', '收埋原文', ...ZH_TW_PACK.slice(2)],
     en: 'Raw|Hide Raw|Fallback|AI unavailable; machine fallback|Retranslate|Translation incomplete|↻ Retry|Translating…|AI polishing…|Streaming…|Settling…|Proxy or network unreachable|Rate-limited (cooling down)|API key or auth error|Translation timed out|Daemon service offline|Proxy error · Retry|Rate limit · Retry|Auth error · Retry|Timed out · Retry|Offline · Retry|Failed · Retry|Translated first {0}k / {1}k chars'.split(
       '|'
     ),
     ja: '原文|原文を隠す|機械翻訳代替|AI未設定・機械翻訳代替|再翻訳|翻訳未完了|↻ 再試行|翻訳中…|AI翻訳中…|出力中…|整理中…|プロキシまたは接続不可|レート制限クールダウン中|APIキーまたは認証エラー|翻訳タイムアウト|バックグラウンド未接続|プロキシ失敗 · 再試行|制限中 · 再試行|認証エラー · 再試行|タイムアウト · 再試行|オフライン · 再試行|失敗 · 再試行|先頭 {0}k 字を翻訳済（全 {1}k 字）'.split(
+      '|'
+    ),
+    ko: '원문|원문 숨기기|기계 번역 대체|AI 미준비로 기계 번역 사용|재번역|번역 미완료|↻ 재시도|번역 중…|AI 다듬는 중…|출력 중…|정리 중…|프록시 또는 네트워크 연결 불가|요청 제한 대기 중|API 키 또는 인증 오류|번역 시간 초과|백그라운드 서비스 오프라인|프록시 오류 · 재시도|요청 제한 · 재시도|인증 실패 · 재시도|시간 초과 · 재시도|오프라인 · 재시도|번역 실패 · 재시도|앞부분 {0}k / 전체 {1}k자 번역 완료'.split(
+      '|'
+    ),
+    es: 'Original|Ocultar original|Respaldo MT|IA no disponible; traducción automática|Retraducir|Traducción incompleta|↻ Reintentar|Traduciendo…|Puliendo con IA…|Transmitiendo…|Finalizando…|Proxy o red inaccesible|Límite de tasa (en espera)|Error de clave API o autenticación|Tiempo de espera agotado|Servicio en segundo plano desconectado|Error de proxy · Reintentar|Límite · Reintentar|Error auth · Reintentar|Tiempo agotado · Reintentar|Sin conexión · Reintentar|Error · Reintentar|Primeros {0}k / {1}k caracteres traducidos'.split(
+      '|'
+    ),
+    fr: 'Original|Masquer l’original|Secours MT|IA indisponible ; traduction auto|Retraduire|Traduction incomplète|↻ Réessayer|Traduction…|Affinage IA…|Diffusion…|Finalisation…|Proxy ou réseau inaccessible|Limite atteinte (refroidissement)|Erreur de clé API ou d’authentification|Délai dépassé|Service d’arrière-plan hors ligne|Erreur proxy · Réessayer|Limite · Réessayer|Erreur auth · Réessayer|Délai · Réessayer|Hors ligne · Réessayer|Échec · Réessayer|Premiers {0}k / {1}k caractères traduits'.split(
+      '|'
+    ),
+    de: 'Original|Original ausblenden|MT-Fallback|KI nicht verfügbar; maschineller Fallback|Neu übersetzen|Übersetzung unvollständig|↻ Erneut|Übersetze…|KI-Feinschliff…|Streaming…|Abschluss…|Proxy oder Netzwerk nicht erreichbar|Rate-Limit (Abkühlung)|API-Schlüssel- oder Auth-Fehler|Zeitüberschreitung|Hintergrunddienst offline|Proxy-Fehler · Erneut|Rate-Limit · Erneut|Auth-Fehler · Erneut|Zeitlimit · Erneut|Offline · Erneut|Fehlgeschlagen · Erneut|Erste {0}k / {1}k Zeichen übersetzt'.split(
       '|'
     ),
   };
@@ -337,33 +348,49 @@
   }
 
   function normalizeLangCode(raw) {
-    const s = String(raw || '').trim();
-    if (!s) return '';
-    if (/^(?:yue|zh[-_](?:yue|HK|MO))/i.test(s)) return 'yue';
-    if (/^zh[-_](?:TW|Hant)/i.test(s)) return 'zh-TW';
-    if (/^ja(?:\b|[-_])/i.test(s)) return 'ja';
-    if (/^en(?:\b|[-_])/i.test(s)) return 'en';
-    if (/^zh(?:\b|[-_])/i.test(s)) return 'zh-CN';
+    const s = String(raw || '').trim().toLowerCase().replace(/_/g, '-');
+    if (!s || s === 'auto') return '';
+    if (s === 'yue' || s.startsWith('yue-') || s === 'zh-yue' || s.includes('cantonese')) return 'zh-CN';
+    if (/^zh-(tw|hk|mo|hant)/.test(s) || s === 'tw' || s === 'hant') return 'zh-TW';
+    if (/^zh(?:\b|-)/.test(s)) return 'zh-CN';
+    if (/^(ja|jp)(?:\b|-)/.test(s) || s === 'japanese') return 'ja';
+    if (/^(ko|kr)(?:\b|-)/.test(s) || s === 'korean') return 'ko';
+    if (/^es(?:\b|-)/.test(s) || s === 'spanish') return 'es';
+    if (/^fr(?:\b|-)/.test(s) || s === 'french') return 'fr';
+    if (/^de(?:\b|-)/.test(s) || s === 'german') return 'de';
+    if (/^en(?:\b|-)/.test(s) || s === 'english') return 'en';
     return '';
   }
 
   function resolveActiveLang(explicitLang) {
     const fromArg = normalizeLangCode(explicitLang);
     if (fromArg) return fromArg;
+    const argIsAuto = typeof explicitLang === 'string' && explicitLang.trim().toLowerCase() === 'auto';
     try {
       const rootEl = docRoot();
       if (rootEl) {
         const csLang = normalizeLangCode(ga(rootEl, 'data-ag-cs-lang')) || normalizeLangCode(ga(rootEl, 'data-ag-prism-lang'));
         if (csLang) return csLang;
       }
-      const stateLang = normalizeLangCode(W.__agPrism?.getState?.()?.cfg?.language);
+      const rawStateLang = W.__agPrism?.getState?.()?.cfg?.language;
+      const stateLang = normalizeLangCode(rawStateLang);
       if (stateLang) return stateLang;
+      if (argIsAuto || (typeof rawStateLang === 'string' && rawStateLang.trim().toLowerCase() === 'auto')) {
+        const navObj = W && 'navigator' in W ? W.navigator : null;
+        return normalizeLangCode(navObj?.language || '') || 'en';
+      }
     } catch (_) {}
-    return currentLang || 'zh-CN';
+    if (currentLang) return currentLang;
+    try {
+      const navObj = W && 'navigator' in W ? W.navigator : null;
+      const navLang = normalizeLangCode(navObj?.language || '');
+      if (navLang) return navLang;
+    } catch (_) {}
+    return 'zh-CN';
   }
 
   function getClientPack(explicitLang) {
-    return CLIENT_I18N[resolveActiveLang(explicitLang)] || CLIENT_I18N['zh-CN'];
+    return CLIENT_I18N[resolveActiveLang(explicitLang)] || CLIENT_I18N.en;
   }
 
   function isDocHiddenOrSleep() {
@@ -631,6 +658,8 @@
       const c = countScripts(para);
       if (tl === 'ja') {
         if ((c.lw >= 6 && c.kana < c.lw * 1.5) || (c.cjk >= 12 && c.kana === 0)) return true;
+      } else if (tl === 'ko') {
+        if ((c.lw >= 6 && c.han < c.lw * 1.5) || (c.cjk >= 12 && c.han === 0) || c.kana >= 6) return true;
       } else if (tl === 'en') {
         if (c.cjk + c.kana + c.han >= 4) return true;
       } else if ((c.lw >= 6 && c.cjk < c.lw * 1.5) || c.kana >= 6 || c.han >= 6) {
@@ -643,7 +672,7 @@
   function isAlreadyTargetLang(norm, targetLang = currentLang) {
     if (!norm || norm.length < 4) return true;
     const sample = norm.length > MAX_SAFE_THOUGHT_CHARS ? norm.slice(0, MAX_SAFE_THOUGHT_CHARS) : norm;
-    const tl = normalizeLangCode(targetLang) || 'zh-CN';
+    const tl = normalizeLangCode(targetLang) || resolveActiveLang();
     const prose = sample
       .replace(/```[\s\S]*?```/g, ' ')
       .replace(/`[^`\n]+`/g, ' ')
@@ -668,11 +697,18 @@
       return c.kana >= 8;
     }
 
+    if (tl === 'ko') {
+      if (c.lw >= 8 || hasForeignProseParagraph(prose, 'ko')) return false;
+      return c.han >= 8;
+    }
+
+    if (tl === 'es' || tl === 'fr' || tl === 'de') return false;
+
     if (c.lw >= 8 || c.kana >= 6 || c.han >= 6 || hasForeignProseParagraph(prose, tl)) {
       return false;
     }
 
-    if (tl === 'zh-TW' || tl === 'yue') return false;
+    if (tl === 'zh-TW') return false;
 
     return c.lw < 6 && c.kana < 4 && c.han < 4 && c.cjk >= 6;
   }
@@ -726,7 +762,7 @@
     if (/__\s*OPID/i.test(norm)) return false;
     if (TITLE_TIME_RE.test(norm) || TITLE_NUM_SYM_RE.test(norm) || TITLE_PATH_OR_URL_RE.test(norm)) return false;
     if (!/\s/.test(norm) && TITLE_SLUG_RE.test(norm)) return false;
-    const tl = normalizeLangCode(targetLang) || 'zh-CN';
+    const tl = normalizeLangCode(targetLang) || resolveActiveLang();
     const { masked, tokens } = protectToolSummaryTokens(norm);
     const prose = masked.replace(/__OPID_\d+__/g, ' ').replace(/\s+/g, ' ').trim();
     if (!prose) return false;
@@ -736,8 +772,9 @@
     const han = (prose.match(/[\uac00-\ud7af]/g) || []).length;
     if (tl === 'en') return cjk + kana + han >= 2;
     if (tl === 'ja') return latinWords >= 2 || (latinWords === 1 && tokens.length > 0 && TOOL_VERB_RE.test(prose)) || (cjk >= 4 && kana === 0);
+    if (tl === 'ko') return latinWords >= 2 || (latinWords === 1 && tokens.length > 0 && TOOL_VERB_RE.test(prose)) || cjk >= 4 || kana >= 3;
     if (tl === 'zh-CN' && cjk >= 2 && latinWords < 2 && kana === 0 && han === 0) return false;
-    return latinWords >= 2 || (latinWords === 1 && tokens.length > 0 && TOOL_VERB_RE.test(prose)) || kana >= 3 || han >= 3;
+    return latinWords >= 2 || (latinWords === 1 && tokens.length > 0 && TOOL_VERB_RE.test(prose)) || kana >= 3 || han >= 3 || ((tl === 'es' || tl === 'fr' || tl === 'de') && cjk >= 2);
   }
 
   function protectToolSummaryTokens(text) {
@@ -761,7 +798,7 @@
     const norm = trm(raw);
     if (!norm || norm.length < 4 || norm.length > 280) return false;
     if (/__\s*OPID/i.test(norm)) return false;
-    const tl = normalizeLangCode(targetLang) || 'zh-CN';
+    const tl = normalizeLangCode(targetLang) || resolveActiveLang();
     const { masked, tokens } = protectToolSummaryTokens(norm);
     const prose = masked.replace(/__OPID_\d+__/g, ' ').replace(/\s+/g, ' ').trim();
     if (!prose) return false;
@@ -771,7 +808,8 @@
     const han = (prose.match(/[\uac00-\ud7af]/g) || []).length;
     if (tl === 'en') return cjk + kana + han >= 2;
     if (tl === 'ja') return latinWords >= 2 || (latinWords === 1 && tokens.length > 0 && TOOL_VERB_RE.test(prose)) || (cjk >= 4 && kana === 0);
-    return latinWords >= 2 || (latinWords === 1 && tokens.length > 0 && TOOL_VERB_RE.test(prose)) || kana >= 3 || han >= 3;
+    if (tl === 'ko') return latinWords >= 2 || (latinWords === 1 && tokens.length > 0 && TOOL_VERB_RE.test(prose)) || cjk >= 4 || kana >= 3;
+    return latinWords >= 2 || (latinWords === 1 && tokens.length > 0 && TOOL_VERB_RE.test(prose)) || kana >= 3 || han >= 3 || ((tl === 'es' || tl === 'fr' || tl === 'de') && cjk >= 2);
   }
 
   const getStore = () => W.localStorage || null;
@@ -2565,7 +2603,7 @@
   }
 
   function withLangSuffix(baseTag, lang = currentLang) {
-    const tl = normalizeLangCode(lang) || 'zh-CN';
+    const tl = normalizeLangCode(lang) || resolveActiveLang();
     return tl === 'zh-CN' ? baseTag : `${baseTag}_${tl}`;
   }
 
@@ -3619,9 +3657,14 @@
     if (titleScanTimer) return;
     titleScanTimer = setTimeout(() => {
       titleScanTimer = null;
-      if (translateTitles && currentMode !== 'off' && !isDocHiddenOrSleep()) {
-        scanConversationTitles();
+      if (!translateTitles || currentMode === 'off' || isDocHiddenOrSleep()) return;
+      /* 周期表 3D 面板打开期间让出主线程与布局带宽，避免侧边栏标题全量 getBoundingClientRect/checkVisibility 引发掉帧；关闭后自动补扫 */
+      const rEl = docRoot();
+      if (rEl && ga(rEl, 'data-ag-pp-open') === '1') {
+        scheduleTitleScan(600);
+        return;
       }
+      scanConversationTitles();
     }, delayMs);
     titleScanTimer?.unref?.();
   }

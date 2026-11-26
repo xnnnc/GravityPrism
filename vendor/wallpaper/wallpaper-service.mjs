@@ -1,4 +1,4 @@
-// Obsidian Prism — Channel 7 Local Static/Dynamic Wallpaper Service (v1.0.7 · Beta, Zero-Dependency Node ESM)
+// Obsidian Prism — Channel 7 Local Static/Dynamic Wallpaper Service (v1.0.8-beta.3 · Beta, Zero-Dependency Node ESM)
 // - Persists config atomically (0o600, symlink-safe) to ~/.gemini/config/obsidian-prism-wallpaper.json
 // - Enforces strict path security (realpathSync, no UNC/device paths, no sensitive dirs, extension + magic bytes)
 // - Lazily runs an isolated 127.0.0.1:0 read-only HTTP media server with 256-bit random token & HTTP 206 Range streaming

@@ -31,7 +31,7 @@ function escapeXml(str) {
 function generateInfoPlist(version = cdp.PLUGIN_VERSION) {
   const safeShortVersion = escapeXml(version);
   const numericMatch = String(version).match(/^\d+(?:\.\d+){0,2}/);
-  const safeBundleVersion = escapeXml(numericMatch ? numericMatch[0] : '1.0.7.4');
+  const safeBundleVersion = escapeXml(numericMatch ? numericMatch[0] : '1.0.8.3');
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">

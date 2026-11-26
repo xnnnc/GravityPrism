@@ -700,6 +700,7 @@ test('#6 updateChannel sends { version, channel } immediately without 40ms race 
     targetFps: '180',
     homeLayout: 'studio',
     homeRipple: true,
+    convRipple: 'off',
     logoInk: 'accent',
     language: 'zh-CN',
     hostLocalization: 'auto',
@@ -792,13 +793,44 @@ test('#6 updateChannel sends { version, channel } immediately without 40ms race 
     assert.equal(rowOf('sidebarCompact').style.opacity, '');
     assert.equal(rowOf('sidebarCompact').hasAttribute('data-ag-cs-dimmed'), false);
 
-    // homeLayout=off -> homeRipple dims
+    // homeLayout=off -> homeRipple dims, while convRipple stays active (not dimmed)
     btnOf('homeLayout', 'off').click();
     assert.equal(rowOf('homeRipple').style.opacity, '0.55');
     assert.equal(rowOf('homeRipple').getAttribute('data-ag-cs-dimmed'), '1');
+    assert.equal(rowOf('convRipple').style.opacity, '');
+    assert.equal(rowOf('convRipple').hasAttribute('data-ag-cs-dimmed'), false);
     btnOf('homeLayout', 'studio').click();
     assert.equal(rowOf('homeRipple').style.opacity, '');
     assert.equal(rowOf('homeRipple').hasAttribute('data-ag-cs-dimmed'), false);
+
+    // motionLevel=off -> both homeRipple and convRipple dim together; restoring motionLevel restores both
+    btnOf('motionLevel', 'off').click();
+    assert.equal(rowOf('homeRipple').style.opacity, '0.55');
+    assert.equal(rowOf('homeRipple').getAttribute('data-ag-cs-dimmed'), '1');
+    assert.equal(rowOf('convRipple').style.opacity, '0.55');
+    assert.equal(rowOf('convRipple').getAttribute('data-ag-cs-dimmed'), '1');
+    btnOf('motionLevel', 'ultra').click();
+    assert.equal(rowOf('homeRipple').style.opacity, '');
+    assert.equal(rowOf('homeRipple').hasAttribute('data-ag-cs-dimmed'), false);
+    assert.equal(rowOf('convRipple').style.opacity, '');
+    assert.equal(rowOf('convRipple').hasAttribute('data-ag-cs-dimmed'), false);
+
+    // convRipple 4-tier segmented control sits adjacent right after homeRipple and updates state.convRipple cleanly
+    const hrRow = rowOf('homeRipple');
+    const crRow = rowOf('convRipple');
+    const sibs = hrRow.parentElement.children;
+    assert.equal(sibs.indexOf(crRow), sibs.indexOf(hrRow) + 1);
+    const crBtns = crRow.querySelectorAll('button[data-ag-cs-key="convRipple"]');
+    assert.deepEqual(
+      crBtns.map((b) => b.getAttribute('data-ag-cs-val')),
+      ['"off"', '"subtle"', '"medium"', '"full"']
+    );
+    assert.equal(crBtns[0].parentElement.hasAttribute('data-ui-kind'), false, '4-tier convRipple must render as segmented group, not switch');
+    for (const tier of ['subtle', 'medium', 'full', 'off']) {
+      btnOf('convRipple', tier).click();
+      assert.equal(state.convRipple, tier);
+      assert.equal(btnOf('convRipple', tier).getAttribute('aria-pressed'), 'true');
+    }
 
     // omniModule=off -> linkTarget dims
     btnOf('omniModule', 'off').click();
@@ -814,7 +846,7 @@ test('#6 updateChannel sends { version, channel } immediately without 40ms race 
   }
 });
 
-test('CSS hygiene, dual-split :not([data-split-overlaid]), dead brand SVG CSS removal, 5-locale setTargetFpsDesc & Channel 1 < 685,000 B', () => {
+test('CSS hygiene, dual-split :not([data-split-overlaid]), dead brand SVG CSS removal, 8-locale setTargetFpsDesc & Channel 1 < 550,000 B', () => {
   const css = fs.readFileSync(path.join(ROOT, 'style.css'), 'utf8');
   assert.equal(/:has\(/.test(css), false, 'style.css must have 0 :has() selectors');
   assert.equal(/[^\x00-\x7F]/.test(css), false, 'style.css must have 0 non-ASCII characters');
@@ -832,21 +864,28 @@ test('CSS hygiene, dual-split :not([data-split-overlaid]), dead brand SVG CSS re
     'accentTone=mono must apply grayscale(1) to settings brand SVG'
   );
 
-  // 2-1A i18n-locales.js 5-locale setTargetFpsDesc check
+  // 2-1A i18n-locales.js 8-locale setTargetFpsDesc check + yue->zh-CN migration
+  const i18nCore = require(path.join(ROOT, 'i18n-core.js'));
   const locales = require(path.join(ROOT, 'i18n-locales.js'));
-  for (const lang of ['zh-CN', 'zh-TW', 'yue', 'en', 'ja']) {
+  for (const lang of ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de']) {
     const desc = locales.getUiStrings(lang).setTargetFpsDesc;
     assert.ok(typeof desc === 'string' && desc.length >= 20, `${lang} setTargetFpsDesc must be non-empty`);
   }
   assert.ok(locales.getUiStrings('zh-CN').setTargetFpsDesc.includes('水晶条/药水瓶'));
   assert.ok(locales.getUiStrings('zh-TW').setTargetFpsDesc.includes('水晶條/藥水瓶'));
-  assert.ok(locales.getUiStrings('yue').setTargetFpsDesc.includes('水晶條/藥水瓶'));
+  assert.equal(i18nCore.normalizeLanguage('yue'), 'zh-CN');
+  assert.equal(locales.getRuntimeUiSlice('yue').lang, 'zh-CN');
+  assert.ok(locales.getUiStrings(i18nCore.normalizeLanguage('yue')).setTargetFpsDesc.includes('水晶条/药水瓶'));
   assert.ok(/crystal bar.*vial/i.test(locales.getUiStrings('en').setTargetFpsDesc));
   assert.ok(locales.getUiStrings('ja').setTargetFpsDesc.includes('クリスタル/バイアル'));
+  assert.ok(locales.getUiStrings('ko').setTargetFpsDesc.includes('바이알'));
+  assert.ok(locales.getUiStrings('es').setTargetFpsDesc.includes('barra de cristal'));
+  assert.ok(locales.getUiStrings('fr').setTargetFpsDesc.includes('barre cristal'));
+  assert.ok(locales.getUiStrings('de').setTargetFpsDesc.includes('Phiole'));
 
-  // Channel 1 budget check (< 685,000 B soft ceiling, <= 704,000 B CI hard ceiling)
+  // Channel 1 budget check (< 550,000 B after Ch9/Ch10 split)
   const cdp = require(path.join(ROOT, 'cdp.js'));
   const expr = cdp.buildInjectExpression(cdp.DEFAULT_CONFIG);
   const bytes = Buffer.byteLength(expr, 'utf8');
-  assert.ok(bytes < 685000, `Channel 1 bundle must stay < 685,000 B, got ${bytes} B`);
+  assert.ok(bytes < 580000, `Channel 1 bundle must stay < 580,000 B, got ${bytes} B`);
 });

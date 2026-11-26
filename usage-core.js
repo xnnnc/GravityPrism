@@ -18,110 +18,115 @@
     return Number.isFinite(n) ? n : 0;
   }
 
+  const L8 = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de'];
   function resolveLang(langOrZh) {
     if (langOrZh === true) return 'zh-CN';
-    if (langOrZh === false || langOrZh === null) return 'en';
-    if (langOrZh === 'zh-TW' || langOrZh === 'yue' || langOrZh === 'en' || langOrZh === 'ja') return langOrZh;
-    return 'zh-CN';
+    if (!langOrZh) return 'en';
+    const lo = String(langOrZh).trim().toLowerCase();
+    if (!lo) return 'en';
+    if (/^yue(?:$|[-_])/.test(lo)) return 'zh-CN';
+    if (/^zh(?:$|[-_])/.test(lo)) return /tw|hk|mo|hant/.test(lo) ? 'zh-TW' : 'zh-CN';
+    const m = lo.match(/^(en|ja|ko|es|fr|de)(?:$|[-_])/);
+    return m ? m[1] : 'en';
   }
 
-  function pickByLang(map, langOrZh, fallback = '') {
-    const l = resolveLang(langOrZh);
-    if (!map) return fallback;
-    if (map[l] !== undefined) return map[l];
-    if (l === 'yue' && map['zh-TW'] !== undefined) return map['zh-TW'];
-    return map['zh-CN'] !== undefined ? map['zh-CN'] : (map.en !== undefined ? map.en : fallback);
+  function pick8(arr, langOrZh) {
+    const i = L8.indexOf(resolveLang(langOrZh));
+    return arr[i >= 0 ? i : 2] ?? arr[2];
   }
 
+  const mkLbls = (a) => Object.fromEntries(L8.map((k, i) => [k, a[i]]));
   const HOME_RANGES = [
-    { id: 'all', days: 0, labelZh: '全部', labelEn: 'All', labels: { 'zh-CN': '全部', 'zh-TW': '全部', yue: '全部', en: 'All', ja: '全期間' } },
-    { id: '30d', days: 30, labelZh: '30 天', labelEn: '30d', labels: { 'zh-CN': '30 天', 'zh-TW': '30 天', yue: '30 日', en: '30d', ja: '30日間' } },
-    { id: '7d', days: 7, labelZh: '7 天', labelEn: '7d', labels: { 'zh-CN': '7 天', 'zh-TW': '7 天', yue: '7 日', en: '7d', ja: '7日間' } },
-  ];
+    ['all', 0, ['全部', '全部', 'All', '全期間', '전체', 'Todo', 'Tout', 'Alle']],
+    ['30d', 30, ['30 天', '30 天', '30d', '30日間', '30일', '30d', '30j', '30T']],
+    ['7d', 7, ['7 天', '7 天', '7d', '7日間', '7일', '7d', '7j', '7T']],
+  ].map(([id, days, a]) => ({ id, days, labelZh: a[0], labelEn: a[2], labels: mkLbls(a) }));
 
-  // Book yardsticks matched by token count (measured via o200k_base in dsh-claude-style).
-  const HOME_BOOKS = [
-    { key: 'tao', tokens: 7607, zh: '《道德经》', zhTW: '《道德經》', ja: '『老子（道徳経）』', en: 'Tao Te Ching' },
-    { key: 'yellow', tokens: 7778, zh: '《黄色壁纸》', zhTW: '《黃色壁紙》', ja: '『黄色い壁紙』', en: 'The Yellow Wallpaper' },
-    { key: 'meta', tokens: 27557, zh: '《变形记》', zhTW: '《變形記》', ja: '『変身』', en: 'Metamorphosis' },
-    { key: 'jekyll', tokens: 34713, zh: '《化身博士》', zhTW: '《化身博士》', ja: '『ジーキル博士とハイド氏』', en: 'The Strange Case of Dr Jekyll and Mr Hyde' },
-    { key: 'alice', tokens: 37248, zh: '《爱丽丝漫游奇境》', zhTW: '《愛麗絲夢遊仙境》', ja: '『不思議の国のアリス』', en: "Alice's Adventures in Wonderland" },
-    { key: 'animal', tokens: 39000, zh: '《动物农场》', zhTW: '《動物農莊》', ja: '『動物農場』', en: 'Animal Farm' },
-    { key: 'carol', tokens: 40306, zh: '《圣诞颂歌》', zhTW: '《小氣財神》', yue: '《聖誕頌歌》', ja: '『クリスマス・キャロル』', en: 'A Christmas Carol' },
-    { key: 'wild', tokens: 42383, zh: '《野性的呼唤》', zhTW: '《野性的呼喚》', ja: '『野生の呼び声』', en: 'The Call of the Wild' },
-    { key: 'time', tokens: 42817, zh: '《时间机器》', zhTW: '《時間機器》', ja: '『タイム・マシン』', en: 'The Time Machine' },
-    { key: 'oz', tokens: 51004, zh: '《绿野仙踪》', zhTW: '《綠野仙蹤》', ja: '『オズの魔法使い』', en: 'The Wonderful Wizard of Oz' },
-    { key: 'darkness', tokens: 52163, zh: '《黑暗之心》', zhTW: '《黑暗之心》', ja: '『闇の奥』', en: 'Heart of Darkness' },
-    { key: 'faust', tokens: 53930, zh: '《浮士德》', zhTW: '《浮士德》', ja: '『ファウスト』', en: 'Faust' },
-    { key: 'screw', tokens: 57484, zh: '《螺丝在拧紧》', zhTW: '《碧廬冤孽》', ja: '『ねじの回転』', en: 'The Turn of the Screw' },
-    { key: 'aesop', tokens: 60707, zh: '《伊索寓言》', zhTW: '《伊索寓言》', ja: '『イソップ寓話』', en: "Aesop's Fables" },
-    { key: 'peter', tokens: 63821, zh: '《彼得·潘》', zhTW: '《小飛俠彼得潘》', ja: '『ピーター・パン』', en: 'Peter Pan' },
-    { key: 'gatsby', tokens: 65763, zh: '《了不起的盖茨比》', zhTW: '《大亨小傳》', ja: '『グレート・ギャツビー』', en: 'The Great Gatsby' },
-    { key: 'prince', tokens: 66670, zh: '《君主论》', zhTW: '《君王論》', ja: '『君主論』', en: 'The Prince' },
-    { key: 'invisible', tokens: 68163, zh: '《隐形人》', zhTW: '《隱形人》', ja: '『透明人間』', en: 'The Invisible Man' },
-    { key: 'andersen', tokens: 73931, zh: '《安徒生童话》', zhTW: '《安徒生童話》', ja: '『アンデルセン童話集』', en: "Andersen's Fairy Tales" },
-    { key: 'worlds', tokens: 80168, zh: '《世界大战》', zhTW: '《世界大戰》', ja: '『宇宙戦争』', en: 'The War of the Worlds' },
-    { key: 'beyond', tokens: 89836, zh: '《善恶的彼岸》', zhTW: '《善惡的彼岸》', ja: '『善悪の彼岸』', en: 'Beyond Good and Evil' },
-    { key: 'whitefang', tokens: 96418, zh: '《白牙》', zhTW: '《白牙》', ja: '『白い牙』', en: 'White Fang' },
-    { key: 'meditations', tokens: 96973, zh: '《沉思录》', zhTW: '《沉思錄》', ja: '『自省録』', en: 'Meditations' },
-    { key: 'frankenstein', tokens: 97886, zh: '《弗兰肯斯坦》', zhTW: '《科學怪人》', ja: '『フランケンシュタイン』', en: 'Frankenstein' },
-    { key: 'stone', tokens: 100000, zh: '《哈利·波特与魔法石》', zhTW: '《哈利波特：神秘的魔法石》', ja: '『ハリー・ポッターと賢者の石』', en: "Harry Potter and the Philosopher's Stone" },
-    { key: 'dorian', tokens: 106339, zh: '《道林·格雷的画像》', zhTW: '《格雷的畫像》', ja: '『ドリアン・グレイの肖像』', en: 'The Picture of Dorian Gray' },
-    { key: 'tolive', tokens: 115000, zh: '《活着》', zhTW: '《活著》', ja: '『生きる』', en: 'To Live' },
-    { key: 'hobbit', tokens: 123000, zh: '《霍比特人》', zhTW: '《哈比人歷險記》', yue: '《哈比人》', ja: '『ホビットの冒険』', en: 'The Hobbit' },
-    { key: 'grimm', tokens: 132467, zh: '《格林童话》', zhTW: '《格林童話》', ja: '『グリム童話集』', en: "Grimms' Fairy Tales" },
-    { key: '1984', tokens: 136278, zh: '《一九八四》', zhTW: '《一九八四》', ja: '『1984年』', en: 'Nineteen Eighty-Four' },
-    { key: 'sherlock', tokens: 138725, zh: '《福尔摩斯冒险史》', zhTW: '《福爾摩斯冒險史》', ja: '『シャーロック・ホームズの冒険』', en: 'The Adventures of Sherlock Holmes' },
-    { key: 'gulliver', tokens: 138958, zh: '《格列佛游记》', zhTW: '《格列佛遊記》', ja: '『ガリヴァー旅行記』', en: "Gulliver's Travels" },
-    { key: 'walden', tokens: 152659, zh: '《瓦尔登湖》', zhTW: '《湖濱散記》', ja: '『ウォールデン 森の生活』', en: 'Walden' },
-    { key: 'crusoe', tokens: 153596, zh: '《鲁滨逊漂流记》', zhTW: '《魯賓遜漂流記》', ja: '『ロビンソン・クルーソー』', en: 'Robinson Crusoe' },
-    { key: 'huck', tokens: 154263, zh: '《哈克贝利·费恩历险记》', zhTW: '《頑童歷險記》', ja: '『ハックルベリー・フィンの冒険』', en: 'Adventures of Huckleberry Finn' },
-    { key: 'divine', tokens: 157765, zh: '《神曲》', zhTW: '《神曲》', ja: '『神曲』', en: 'The Divine Comedy' },
-    { key: 'bovary', tokens: 159575, zh: '《包法利夫人》', zhTW: '《包法利夫人》', ja: '『ボヴァリー夫人』', en: 'Madame Bovary' },
-    { key: 'zarathustra', tokens: 161488, zh: '《查拉图斯特拉如是说》', zhTW: '《查拉圖斯特拉如是說》', ja: '『ツァラトゥストラはこう語った』', en: 'Thus Spoke Zarathustra' },
-    { key: 'pride', tokens: 171701, zh: '《傲慢与偏见》', zhTW: '《傲慢與偏見》', ja: '『高慢と偏見』', en: 'Pride and Prejudice' },
-    { key: 'odyssey', tokens: 173150, zh: '《奥德赛》', zhTW: '《奧德賽》', ja: '『オデュッセイア』', en: 'The Odyssey' },
-    { key: 'twocities', tokens: 187333, zh: '《双城记》', zhTW: '《雙城記》', ja: '『二都物語』', en: 'A Tale of Two Cities' },
-    { key: 'threebody', tokens: 202000, zh: '《三体》', zhTW: '《三體》', ja: '『三体』', en: 'The Three-Body Problem' },
-    { key: 'dracula', tokens: 213648, zh: '《德古拉》', zhTW: '《德古拉》', ja: '『ドラキュラ』', en: 'Dracula' },
-    { key: 'expectations', tokens: 252176, zh: '《远大前程》', zhTW: '《孤星血淚》', ja: '『大いなる遺産』', en: 'Great Expectations' },
-    { key: 'janeeyre', tokens: 256179, zh: '《简·爱》', zhTW: '《簡·愛》', ja: '『ジェイン・エア』', en: 'Jane Eyre' },
-    { key: 'republic', tokens: 279539, zh: '《理想国》', zhTW: '《理想國》', ja: '『国家』', en: 'The Republic' },
-    { key: 'crime', tokens: 285009, zh: '《罪与罚》', zhTW: '《罪與罰》', ja: '『罪と罰』', en: 'Crime and Punishment' },
-    { key: 'leviathan', tokens: 304696, zh: '《利维坦》', zhTW: '《利維坦》', ja: '『リヴァイアサン』', en: 'Leviathan' },
-    { key: 'moby', tokens: 306522, zh: '《白鲸》', zhTW: '《白鯨記》', ja: '『白鯨』', en: 'Moby-Dick' },
-    { key: 'darkforest', tokens: 307000, zh: '《三体Ⅱ·黑暗森林》', zhTW: '《三體Ⅱ·黑暗森林》', ja: '『三体II 黒暗森林』', en: 'The Dark Forest' },
-    { key: 'deathsend', tokens: 336000, zh: '《三体Ⅲ·死神永生》', zhTW: '《三體Ⅲ·死神永生》', ja: '『三体III 死神永生』', en: "Death's End" },
-    { key: 'anna', tokens: 481659, zh: '《安娜·卡列尼娜》', zhTW: '《安娜·卡列尼娜》', ja: '『アンナ・カレーニナ』', en: 'Anna Karenina' },
-    { key: 'karamazov', tokens: 487590, zh: '《卡拉马佐夫兄弟》', zhTW: '《卡拉馬佐夫兄弟》', ja: '『カラマーゾフの兄弟』', en: 'The Brothers Karamazov' },
-    { key: 'quixote', tokens: 574243, zh: '《堂吉诃德》', zhTW: '《唐吉訶德》', ja: '『ドン・キホーテ』', en: 'Don Quixote' },
-    { key: 'lotr', tokens: 625000, zh: '《魔戒》', zhTW: '《魔戒》', ja: '『指輪物語』', en: 'The Lord of the Rings' },
-    { key: 'kingdoms', tokens: 638009, zh: '《三国演义》', zhTW: '《三國演義》', ja: '『三国志演義』', en: 'Romance of the Three Kingdoms' },
-    { key: 'montecristo', tokens: 651128, zh: '《基督山伯爵》', zhTW: '《基督山恩仇記》', ja: '『モンテ・クリスト伯』', en: 'The Count of Monte Cristo' },
-    { key: 'warpeace', tokens: 769001, zh: '《战争与和平》', zhTW: '《戰爭與和平》', ja: '『戦争と平和』', en: 'War and Peace' },
-    { key: 'journeywest', tokens: 783200, zh: '《西游记》', zhTW: '《西遊記》', ja: '『西遊記』', en: 'Journey to the West' },
-    { key: 'miserables', tokens: 801791, zh: '《悲惨世界》', zhTW: '《悲慘世界》', yue: '《孤星淚》', ja: '『レ・ミゼラブル』', en: 'Les Misérables' },
-    { key: 'redchamber', tokens: 903956, zh: '《红楼梦》', zhTW: '《紅樓夢》', ja: '『紅楼夢』', en: 'Dream of the Red Chamber' },
-    { key: 'watermargin', tokens: 958242, zh: '《水浒传》', zhTW: '《水滸傳》', ja: '『水滸伝』', en: 'Water Margin' },
-    { key: 'ordinary', tokens: 998000, zh: '《平凡的世界》', zhTW: '《平凡的世界》', ja: '『平凡な世界』', en: 'Ordinary World' },
-    { key: 'harrypotter', tokens: 1409000, zh: '《哈利·波特》全集', zhTW: '《哈利波特》全集', ja: '『ハリー・ポッター』全巻', en: 'the whole Harry Potter series' },
-    { key: 'losttime', tokens: 1647000, zh: '《追忆似水年华》', zhTW: '《追憶似水年華》', ja: '『失われた時を求めて』', en: 'In Search of Lost Time' },
-  ];
+  const wrapTitle = (s, l, r) => (s[0] === l ? s : l + s + r);
+  const HOME_BOOKS = `tao|7607|道德经|道德經|老子（道徳経）|Tao Te Ching
+yellow|7778|黄色壁纸|黃色壁紙|黄色い壁紙|The Yellow Wallpaper
+meta|27557|变形记|變形記|変身|Metamorphosis
+jekyll|34713|化身博士||ジーキル博士とハイド氏|The Strange Case of Dr Jekyll and Mr Hyde
+alice|37248|爱丽丝漫游奇境|愛麗絲夢遊仙境|不思議の国のアリス|Alice's Adventures in Wonderland
+animal|39000|动物农场|動物農莊|動物農場|Animal Farm
+carol|40306|圣诞颂歌|小氣財神|クリスマス・キャロル|A Christmas Carol
+wild|42383|野性的呼唤|野性的呼喚|野生の呼び声|The Call of the Wild
+time|42817|时间机器|時間機器|タイム・マシン|The Time Machine
+oz|51004|绿野仙踪|綠野仙蹤|オズの魔法使い|The Wonderful Wizard of Oz
+darkness|52163|黑暗之心||闇の奥|Heart of Darkness
+faust|53930|浮士德||ファウスト|Faust
+screw|57484|螺丝在拧紧|碧廬冤孽|ねじの回転|The Turn of the Screw
+aesop|60707|伊索寓言||イソップ寓話|Aesop's Fables
+peter|63821|彼得·潘|小飛俠彼得潘|ピーター・パン|Peter Pan
+gatsby|65763|了不起的盖茨比|大亨小傳|グレート・ギャツビー|The Great Gatsby
+prince|66670|君主论|君王論|君主論|The Prince
+invisible|68163|隐形人|隱形人|透明人間|The Invisible Man
+andersen|73931|安徒生童话|安徒生童話|アンデルセン童話集|Andersen's Fairy Tales
+worlds|80168|世界大战|世界大戰|宇宙戦争|The War of the Worlds
+beyond|89836|善恶的彼岸|善惡的彼岸|善悪の彼岸|Beyond Good and Evil
+whitefang|96418|白牙||白い牙|White Fang
+meditations|96973|沉思录|沉思錄|自省録|Meditations
+frankenstein|97886|弗兰肯斯坦|科學怪人|フランケンシュタイン|Frankenstein
+stone|100000|哈利·波特与魔法石|哈利波特：神秘的魔法石|ハリー・ポッターと賢者の石|Harry Potter and the Philosopher's Stone
+dorian|106339|道林·格雷的画像|格雷的畫像|ドリアン・グレイの肖像|The Picture of Dorian Gray
+tolive|115000|活着|活著|生きる|To Live
+hobbit|123000|霍比特人|哈比人歷險記|ホビットの冒険|The Hobbit
+grimm|132467|格林童话|格林童話|グリム童話集|Grimms' Fairy Tales
+1984|136278|一九八四||1984年|Nineteen Eighty-Four
+sherlock|138725|福尔摩斯冒险史|福爾摩斯冒險史|シャーロック・ホームズの冒険|The Adventures of Sherlock Holmes
+gulliver|138958|格列佛游记|格列佛遊記|ガリヴァー旅行記|Gulliver's Travels
+walden|152659|瓦尔登湖|湖濱散記|ウォールデン 森の生活|Walden
+crusoe|153596|鲁滨逊漂流记|魯賓遜漂流記|ロビンソン・クルーソー|Robinson Crusoe
+huck|154263|哈克贝利·费恩历险记|頑童歷險記|ハックルベリー・フィンの冒険|Adventures of Huckleberry Finn
+divine|157765|神曲||神曲|The Divine Comedy
+bovary|159575|包法利夫人||ボヴァリー夫人|Madame Bovary
+zarathustra|161488|查拉图斯特拉如是说|查拉圖斯特拉如是說|ツァラトゥストラはこう語った|Thus Spoke Zarathustra
+pride|171701|傲慢与偏见|傲慢與偏見|高慢と偏見|Pride and Prejudice
+odyssey|173150|奥德赛|奧德賽|オデュッセイア|The Odyssey
+twocities|187333|双城记|雙城記|二都物語|A Tale of Two Cities
+threebody|202000|三体|三體|三体|The Three-Body Problem
+dracula|213648|德古拉||ドラキュラ|Dracula
+expectations|252176|远大前程|孤星血淚|大いなる遺産|Great Expectations
+janeeyre|256179|简·爱|簡·愛|ジェイン・エア|Jane Eyre
+republic|279539|理想国|理想國|国家|The Republic
+crime|285009|罪与罚|罪與罰|罪と罰|Crime and Punishment
+leviathan|304696|利维坦|利維坦|リヴァイアサン|Leviathan
+moby|306522|白鲸|白鯨記|白鯨|Moby-Dick
+darkforest|307000|三体Ⅱ·黑暗森林|三體Ⅱ·黑暗森林|三体II 黒暗森林|The Dark Forest
+deathsend|336000|三体Ⅲ·死神永生|三體Ⅲ·死神永生|三体III 死神永生|Death's End
+anna|481659|安娜·卡列尼娜||アンナ・カレーニナ|Anna Karenina
+karamazov|487590|卡拉马佐夫兄弟|卡拉馬佐夫兄弟|カラマーゾフの兄弟|The Brothers Karamazov
+quixote|574243|堂吉诃德|唐吉訶德|ドン・キホーテ|Don Quixote
+lotr|625000|魔戒||指輪物語|The Lord of the Rings
+kingdoms|638009|三国演义|三國演義|三国志演義|Romance of the Three Kingdoms
+montecristo|651128|基督山伯爵|基督山恩仇記|モンテ・クリスト伯|The Count of Monte Cristo
+warpeace|769001|战争与和平|戰爭與和平|戦争と平和|War and Peace
+journeywest|783200|西游记|西遊記|西遊記|Journey to the West
+miserables|801791|悲惨世界|悲慘世界|レ・ミゼラブル|Les Misérables
+redchamber|903956|红楼梦|紅樓夢|紅楼夢|Dream of the Red Chamber
+watermargin|958242|水浒传|水滸傳|水滸伝|Water Margin
+ordinary|998000|平凡的世界||平凡な世界|Ordinary World
+harrypotter|1409000|《哈利·波特》全集|《哈利波特》全集|『ハリー・ポッター』全巻|the entire Harry Potter series
+losttime|1647000|追忆似水年华|追憶似水年華|失われた時を求めて|In Search of Lost Time`.split('\n').map((row) => {
+    const [key, tk, z0, t0, j0, en] = row.split('|');
+    const zh = wrapTitle(z0, '《', '》');
+    return { key, tokens: +tk, zh, zhTW: t0 ? wrapTitle(t0, '《', '》') : zh, ja: wrapTitle(j0, '『', '』'), en };
+  });
 
   function homeBookTitle(book, langOrZh) {
     if (!book) return '';
     const l = resolveLang(langOrZh);
-    if (l === 'en') return book.en;
-    if (l === 'ja') return book.ja || book.en;
-    if (l === 'yue') return book.yue || book.zhTW || book.zh;
+    if (l === 'zh-CN') return book.zh;
     if (l === 'zh-TW') return book.zhTW || book.zh;
-    return book.zh;
+    if (l === 'ja') return book.ja || book.en;
+    return book.en;
   }
 
   function homeRangeLabel(rangeOrId, langOrZh) {
     const r = typeof rangeOrId === 'string' ? (HOME_RANGES.find((x) => x.id === rangeOrId) || HOME_RANGES[0]) : rangeOrId;
     if (!r) return '';
-    return pickByLang(r.labels, langOrZh, r.labelZh);
+    const l = resolveLang(langOrZh);
+    return (r.labels && (r.labels[l] ?? r.labels.en)) || r.labelEn || '';
   }
 
   function pad2(v) {
@@ -158,18 +163,19 @@
 
   function formatHomeHour(hour, langOrZh) {
     const h = ((Math.floor(toNum(hour)) % 24) + 24) % 24;
-    const h12 = h % 12 === 0 ? 12 : h % 12;
+    const h12 = h % 12 || 12;
+    const pm = h >= 12 ? 1 : 0;
     const l = resolveLang(langOrZh);
-    if (l === 'zh-CN') return (h < 12 ? '上午 ' : '下午 ') + h12 + ' 点';
-    if (l === 'zh-TW') return (h < 12 ? '上午 ' : '下午 ') + h12 + ' 點';
-    if (l === 'yue') return (h < 12 ? '上晝 ' : '下晝 ') + h12 + ' 點';
-    if (l === 'ja') return (h < 12 ? '午前 ' : '午後 ') + h12 + ' 時';
-    return h12 + (h < 12 ? ' AM' : ' PM');
+    if (l === 'fr') return h + 'h';
+    if (l === 'de') return h + ' Uhr';
+    if (l === 'es') return h + ':00';
+    if (l === 'en') return h12 + (pm ? ' PM' : ' AM');
+    const [a, b, s] = pick8(['上午 |下午 | 点', '上午 |下午 | 點', '', '午前 |午後 | 時', '오전 |오후 |시'], l).split('|');
+    return (pm ? b : a) + h12 + s;
   }
 
   function homeShortDateFormat(langOrZh) {
-    const map = { 'zh-CN': 'zh-CN', 'zh-TW': 'zh-TW', yue: 'zh-HK', en: 'en-US', ja: 'ja-JP' };
-    return new Intl.DateTimeFormat(map[resolveLang(langOrZh)] || 'en-US', { month: 'short', day: 'numeric' });
+    return new Intl.DateTimeFormat(pick8('zh-CN,zh-TW,en-US,ja-JP,ko-KR,es-ES,fr-FR,de-DE'.split(','), langOrZh), { month: 'short', day: 'numeric' });
   }
 
   function homeShortDate(format, day) {
@@ -192,67 +198,49 @@
   }
 
   function cleanModelName(val) {
-    const direct = val?.modelDisplayName || val?.responseModel || val?.modelName;
-    if (direct && String(direct).trim()) return String(direct).trim();
-    const m = val?.model;
-    if (typeof m === 'string' && m.trim()) {
-      return /^\d+$/.test(m.trim()) ? 'Model #' + m.trim() : m.trim();
-    }
-    if (m) return 'Model #' + m;
-    return 'unknown';
+    const d = String(val?.modelDisplayName || val?.responseModel || val?.modelName || '').trim();
+    if (d) return d;
+    const m = val?.model, ms = typeof m === 'string' ? m.trim() : '';
+    return ms ? (/^\d+$/.test(ms) ? 'Model #' + ms : ms) : m ? 'Model #' + m : 'unknown';
   }
 
-  function isSubagentSummary(summary) {
+  function eqId(a, b) { return !!(a && b && String(a).trim().toLowerCase() === String(b).trim().toLowerCase()); }
+
+  const pickS = (...a) => String(a.find(Boolean) || '').trim();
+  function isSubagentSummary(summary, selfId) {
     if (!summary || typeof summary !== 'object') return false;
-    if (summary.subagent === true) return true;
-    const meta = summary.trajectoryMetadata || {};
-    return Boolean(meta.parentConversationId || summary.parentConversationId) || toNum(meta.nestingDepth) > 0;
+    const s = pickS(selfId, summary.cascadeId, summary.id), m = summary.trajectoryMetadata || {};
+    const p = pickS(m.parentConversationId, summary.parentConversationId, summary.parentId);
+    const r = pickS(m.rootConversationId, summary.rootConversationId, summary.rootId);
+    return !!((p && !eqId(p, s)) || (s && r && !eqId(r, s)) || toNum(m.nestingDepth) > 0 || (summary.subagent === true && !eqId(p, s) && !eqId(r, s)));
   }
 
   function normalizeWorkspaceLabel(rawUriOrPath) {
-    const s = String(rawUriOrPath || '').trim();
+    let s = String(rawUriOrPath || '').trim();
     if (!s) return '';
-    try {
-      const decoded = decodeURIComponent(s.replace(/^file:\/\//i, '')).replace(/[\\/]+$/, '');
-      const segs = decoded.split(/[\\/]/).filter(Boolean);
-      return segs.length ? segs[segs.length - 1] : '';
-    } catch {
-      const segs = s.replace(/[\\/]+$/, '').split(/[\\/]/).filter(Boolean);
-      return segs.length ? segs[segs.length - 1] : '';
-    }
+    try { s = decodeURIComponent(s.replace(/^file:\/\//i, '')); } catch {}
+    return s.replace(/[\\/]+$/, '').split(/[\\/]/).filter(Boolean).pop() || '';
   }
 
   function extractWorkspaceId(summaryObj, trajObj) {
-    if (summaryObj && typeof summaryObj.workspace === 'string' && summaryObj.workspace.trim()) {
-      return normalizeWorkspaceLabel(summaryObj.workspace);
-    }
-    const wsList =
-      summaryObj?.workspaces ||
-      summaryObj?.trajectoryMetadata?.workspaces ||
-      trajObj?.metadata?.workspaces ||
-      [];
-    const first = Array.isArray(wsList) && wsList.length ? wsList[0] : null;
-    const candidate =
-      first?.workspaceFolderAbsoluteUri ||
-      first?.gitRootAbsoluteUri ||
-      first?.uri ||
-      first?.path ||
-      summaryObj?.workspaceUri ||
-      summaryObj?.workspacePath ||
-      summaryObj?.trajectoryMetadata?.workspaceUri ||
-      '';
-    return normalizeWorkspaceLabel(candidate);
+    if (typeof summaryObj?.workspace === 'string' && summaryObj.workspace.trim()) return normalizeWorkspaceLabel(summaryObj.workspace);
+    const tm = summaryObj?.trajectoryMetadata;
+    const ws = summaryObj?.workspaces || tm?.workspaces || trajObj?.metadata?.workspaces;
+    const f = Array.isArray(ws) ? ws[0] : null;
+    return normalizeWorkspaceLabel(f?.workspaceFolderAbsoluteUri || f?.gitRootAbsoluteUri || f?.uri || f?.path || summaryObj?.workspaceUri || summaryObj?.workspacePath || tm?.workspaceUri || '');
   }
 
-  function extractParentConversationId(summaryObj, trajObj) {
-    const pid =
-      summaryObj?.trajectoryMetadata?.parentConversationId ||
-      summaryObj?.parentConversationId ||
-      summaryObj?.rootConversationId ||
-      trajObj?.metadata?.parentConversationId ||
-      '';
-    return String(pid || '').trim();
+  function extractParentConversationId(summaryObj, trajObj, selfId) {
+    const s = pickS(selfId, summaryObj?.cascadeId, summaryObj?.id, trajObj?.cascadeId), tm = summaryObj?.trajectoryMetadata;
+    const p = pickS(tm?.parentConversationId, summaryObj?.parentConversationId, summaryObj?.parentId, trajObj?.metadata?.parentConversationId);
+    if (p) return eqId(p, s) ? '' : p;
+    const r = pickS(tm?.rootConversationId, summaryObj?.rootConversationId, summaryObj?.rootId);
+    return r && s && !eqId(r, s) ? r : '';
   }
+
+  const M_KEYS = ['input', 'output', 'cacheRead', 'cacheWrite', 'total', 'calls'];
+  const mkMod = () => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0, calls: 0 });
+  const mkDay = () => ({ calls: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0, hours: new Array(24).fill(0), models: {} });
 
   // Extract a compact, JSON-serializable per-conversation usage record for caching.
   function analyzeTrajectoryForUsage(trajObj, summaryObj, cascadeId) {
@@ -277,33 +265,24 @@
       if (!val) continue;
       const u = val.usage || val.retryInfos?.[val.retryInfos.length - 1]?.usage || gmList[i]?.usage;
       if (!u) continue;
-      const input = toNum(u.inputTokens);
-      const cacheRead = toNum(u.cacheReadTokens);
-      const cacheWrite = toNum(u.cacheWriteTokens);
-      const output = toNum(u.outputTokens);
+      const [input, cacheRead, cacheWrite, output] = [u.inputTokens, u.cacheReadTokens, u.cacheWriteTokens, u.outputTokens].map(toNum);
       const total = input + cacheRead + cacheWrite + output;
-      if (total <= 0 && input === 0 && output === 0) continue;
+      if (total <= 0 && !input && !output) continue;
 
       calls += 1;
       const sIndices = Array.isArray(gmList[i].stepIndices) ? gmList[i].stepIndices : [];
       let ts = 0;
-      for (let k = 0; k < sIndices.length; k++) {
-        const hit = stepTime.get(numOr(sIndices[k]));
-        if (hit) {
-          ts = hit;
-          break;
-        }
+      for (const idx of sIndices) {
+        const hit = stepTime.get(numOr(idx));
+        if (hit) { ts = hit; break; }
       }
       if (!ts) {
-        const chatCreatedMs = tsToMs(val?.chatStartMetadata?.createdAt);
-        if (chatCreatedMs > 0) {
-          ts = chatCreatedMs;
-        } else if (steps.length === 0 && createdMs > 0 && lastModMs > createdMs && sIndices.length > 0) {
-          const ratio = Math.min(1, Math.max(0, toNum(sIndices[0]) / totalStepSpan));
-          ts = Math.round(createdMs + ratio * (lastModMs - createdMs));
-        } else {
-          ts = fallbackMs;
-        }
+        const chatMs = tsToMs(val?.chatStartMetadata?.createdAt);
+        ts = chatMs > 0
+          ? chatMs
+          : !steps.length && createdMs > 0 && lastModMs > createdMs && sIndices.length > 0
+          ? Math.round(createdMs + Math.min(1, Math.max(0, toNum(sIndices[0]) / totalStepSpan)) * (lastModMs - createdMs))
+          : fallbackMs;
       }
       if (!ts) continue;
 
@@ -312,39 +291,10 @@
       const hour = d.getHours();
       const modelId = cleanModelName(val);
 
-      let day = days[dayKey];
-      if (!day) {
-        day = {
-          calls: 0,
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          total: 0,
-          hours: new Array(24).fill(0),
-          models: {},
-        };
-        days[dayKey] = day;
-      }
-      day.calls += 1;
-      day.input += input;
-      day.output += output;
-      day.cacheRead += cacheRead;
-      day.cacheWrite += cacheWrite;
-      day.total += total;
+      const day = days[dayKey] || (days[dayKey] = mkDay());
+      const mod = day.models[modelId] || (day.models[modelId] = mkMod());
+      for (const o of [day, mod]) { o.calls += 1; o.input += input; o.output += output; o.cacheRead += cacheRead; o.cacheWrite += cacheWrite; o.total += total; }
       day.hours[hour] = (day.hours[hour] || 0) + 1;
-
-      let mod = day.models[modelId];
-      if (!mod) {
-        mod = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0, calls: 0 };
-        day.models[modelId] = mod;
-      }
-      mod.input += input;
-      mod.output += output;
-      mod.cacheRead += cacheRead;
-      mod.cacheWrite += cacheWrite;
-      mod.total += total;
-      mod.calls += 1;
     }
 
     const lastModifiedSec =
@@ -352,14 +302,14 @@
       toNum(summaryObj?.lastModifiedTime?.seconds) ||
       (lastModMs > 0 ? Math.floor(lastModMs / 1000) : 0);
     const workspace = extractWorkspaceId(summaryObj, t);
-    const parentId = extractParentConversationId(summaryObj, t);
+    const parentId = extractParentConversationId(summaryObj, t, cascadeId);
 
     return {
       cascadeId: String(cascadeId || t.cascadeId || ''),
       stepCount: Math.max(toNum(summaryObj?.stepCount), toNum(trajObj?.numTotalSteps), steps.length),
       lastModifiedSec,
       gmCount: toNum(trajObj?.numTotalGeneratorMetadata ?? gmList.length),
-      subagent: isSubagentSummary(summaryObj),
+      subagent: isSubagentSummary(summaryObj, cascadeId),
       workspace,
       parentId,
       calls,
@@ -370,75 +320,35 @@
   function mergeUsageRecordDelta(baseRec, deltaRec, nextMeta = {}) {
     if (!baseRec || !baseRec.days) return deltaRec;
     const days = {};
-    for (const [dk, d] of Object.entries(baseRec.days)) {
-      if (!d) continue;
-      const models = {};
-      for (const [mk, mv] of Object.entries(d.models || {})) {
-        if (mv) models[mk] = { input: toNum(mv.input), output: toNum(mv.output), cacheRead: toNum(mv.cacheRead), cacheWrite: toNum(mv.cacheWrite), total: toNum(mv.total), calls: toNum(mv.calls) };
-      }
-      const hours = new Array(24).fill(0);
-      if (Array.isArray(d.hours)) for (let h = 0; h < 24; h++) hours[h] = toNum(d.hours[h]);
-      days[dk] = {
-        calls: toNum(d.calls),
-        input: toNum(d.input),
-        output: toNum(d.output),
-        cacheRead: toNum(d.cacheRead),
-        cacheWrite: toNum(d.cacheWrite),
-        total: toNum(d.total),
-        hours,
-        models,
-      };
-    }
-    if (deltaRec && deltaRec.days) {
-      for (const [dk, dd] of Object.entries(deltaRec.days)) {
+    for (const src of [baseRec.days, deltaRec?.days]) {
+      if (!src) continue;
+      for (const [dk, dd] of Object.entries(src)) {
         if (!dd) continue;
-        let dst = days[dk];
-        if (!dst) {
-          dst = {
-            calls: 0,
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            total: 0,
-            hours: new Array(24).fill(0),
-            models: {},
-          };
-          days[dk] = dst;
-        }
-        dst.calls += toNum(dd.calls);
-        dst.input += toNum(dd.input);
-        dst.output += toNum(dd.output);
-        dst.cacheRead += toNum(dd.cacheRead);
-        dst.cacheWrite += toNum(dd.cacheWrite);
-        dst.total += toNum(dd.total);
+        const dst = days[dk] || (days[dk] = mkDay());
+        for (const k of M_KEYS) dst[k] += toNum(dd[k]);
         if (Array.isArray(dd.hours)) {
           for (let h = 0; h < 24; h++) dst.hours[h] = (dst.hours[h] || 0) + toNum(dd.hours[h]);
         }
         for (const [mk, mv] of Object.entries(dd.models || {})) {
           if (!mv) continue;
-          let dm = dst.models[mk];
-          if (!dm) {
-            dm = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0, calls: 0 };
-            dst.models[mk] = dm;
-          }
-          dm.input += toNum(mv.input);
-          dm.output += toNum(mv.output);
-          dm.cacheRead += toNum(mv.cacheRead);
-          dm.cacheWrite += toNum(mv.cacheWrite);
-          dm.total += toNum(mv.total);
-          dm.calls += toNum(mv.calls);
+          const dm = dst.models[mk] || (dst.models[mk] = mkMod());
+          for (const k of M_KEYS) dm[k] += toNum(mv[k]);
         }
       }
     }
+    const cid = String(nextMeta.cascadeId ?? deltaRec?.cascadeId ?? baseRec.cascadeId ?? '');
+    const p = String(nextMeta.parentId ?? deltaRec?.parentId ?? baseRec.parentId ?? '').trim();
+    const r = String(nextMeta.rootId ?? deltaRec?.rootId ?? baseRec.rootId ?? '').trim();
+    const sp = eqId(p, cid) || (!p && eqId(r, cid));
+    const bp = eqId(baseRec.parentId, cid) || (!baseRec.parentId && eqId(baseRec.rootId || baseRec.rootConversationId, cid));
     return {
-      cascadeId: String(nextMeta.cascadeId ?? deltaRec?.cascadeId ?? baseRec.cascadeId ?? ''),
+      cascadeId: cid,
       stepCount: toNum(nextMeta.stepCount ?? deltaRec?.stepCount ?? baseRec.stepCount ?? 0),
       lastModifiedSec: toNum(nextMeta.lastModifiedSec ?? deltaRec?.lastModifiedSec ?? baseRec.lastModifiedSec ?? 0),
       gmCount: toNum(nextMeta.gmCount ?? deltaRec?.gmCount ?? baseRec.gmCount ?? 0),
-      subagent: Boolean(nextMeta.subagent ?? deltaRec?.subagent ?? baseRec.subagent),
+      subagent: sp ? false : Boolean(nextMeta.subagent ?? deltaRec?.subagent ?? (bp ? false : baseRec.subagent)),
       workspace: String(nextMeta.workspace ?? deltaRec?.workspace ?? baseRec.workspace ?? ''),
-      parentId: String(nextMeta.parentId ?? deltaRec?.parentId ?? baseRec.parentId ?? ''),
+      parentId: sp ? '' : p,
       calls: toNum(baseRec.calls) + toNum(deltaRec?.calls),
       days,
     };
@@ -458,9 +368,8 @@
       if (tokens > peak) peak = tokens;
       cells.push({ date: key, tokens, level: 0 });
     }
-    for (let c = 0; c < cells.length; c++) {
-      if (cells[c].tokens <= 0 || peak <= 0) continue;
-      cells[c].level = Math.max(1, Math.min(HOME_HEAT_STEPS, Math.ceil((cells[c].tokens / peak) * HOME_HEAT_STEPS)));
+    for (const cell of cells) {
+      if (cell.tokens > 0 && peak > 0) cell.level = Math.max(1, Math.min(HOME_HEAT_STEPS, Math.ceil((cell.tokens / peak) * HOME_HEAT_STEPS)));
     }
     return { cells, peak };
   }
@@ -470,25 +379,17 @@
     const rangeObj = HOME_RANGES.find((r) => r.id === rangeId) || HOME_RANGES[0];
     const start = homeRangeStart(rangeObj.days, nowDate);
     const inRange = (dateStr) => start === null || dateStr >= start;
-    const workspaceFilter =
-      options && typeof options.workspace === 'string' && options.workspace && options.workspace !== 'all'
-        ? options.workspace
-        : '';
+    const workspaceFilter = typeof options?.workspace === 'string' && options.workspace && options.workspace !== 'all' ? options.workspace : '';
+    const incArch = options?.includeArchived !== false;
 
     const byId = new Map();
-    for (let i = 0; i < list.length; i++) {
-      const r = list[i];
-      if (r && r.cascadeId) byId.set(r.cascadeId, r);
-    }
-    const resolveRecWorkspace = (rec) => {
-      if (!rec) return '';
-      if (rec.workspace) return String(rec.workspace);
-      let cur = rec;
-      for (let hop = 0; hop < 4 && cur && cur.parentId; hop++) {
-        const p = byId.get(cur.parentId);
-        if (!p) break;
-        if (p.workspace) return String(p.workspace);
-        cur = p;
+    for (const r of list) if (r?.cascadeId) byId.set(r.cascadeId, r);
+    const walkRec = (rec, fn) => {
+      for (let c = rec, h = 0; c && h < 5; h++) {
+        const v = fn(c);
+        if (v) return v;
+        if (!c.parentId || eqId(c.parentId, c.cascadeId)) break;
+        c = byId.get(c.parentId);
       }
       return '';
     };
@@ -499,7 +400,10 @@
     let totalCalls = 0;
     let totalInput = 0;
     let totalCacheRead = 0;
+    let hasArch = false;
     const sessionSet = new Set();
+    const actSet = new Set();
+    const archSet = new Set();
     const subagentSessionSet = new Set();
     const activeDaySet = new Set();
     const hourCounts = new Array(24).fill(0);
@@ -511,97 +415,61 @@
     for (let i = 0; i < list.length; i++) {
       const rec = list[i];
       if (!rec || !rec.days) continue;
-      const wsId = resolveRecWorkspace(rec);
+      const rid = rec.cascadeId || String(i);
+      const isSub = !!(rec.subagent && !eqId(rec.parentId, rec.cascadeId) && (rec.parentId || !eqId(rec.rootId || rec.rootConversationId, rec.cascadeId)));
+      const isArch = Boolean(walkRec(rec, (c) => c.archived));
+      if (!isSub && isArch) hasArch = true;
+      const wsId = String(walkRec(rec, (c) => c.workspace) || '');
       const dayKeys = Object.keys(rec.days);
+      const matchWs = !workspaceFilter || wsId === workspaceFilter;
 
-      // Accumulate workspace index across all records in range regardless of active workspaceFilter
-      if (wsId) {
-        let wsEntry = workspaceMap[wsId];
-        if (!wsEntry) {
-          wsEntry = { id: wsId, tokens: 0, sessionsSet: new Set() };
-          workspaceMap[wsId] = wsEntry;
-        }
-        for (let d = 0; d < dayKeys.length; d++) {
-          const dk = dayKeys[d];
-          if (!inRange(dk)) continue;
-          const day = rec.days[dk];
-          if (!day) continue;
-          const dt = toNum(day.total);
-          wsEntry.tokens += dt;
-          if (!rec.subagent && (dt > 0 || toNum(day.calls) > 0)) {
-            wsEntry.sessionsSet.add(rec.cascadeId || String(i));
-          }
-        }
-      }
+      if (!isSub && isArch && matchWs && dayKeys.some((dk) => inRange(dk) && (toNum(rec.days[dk]?.total) > 0 || toNum(rec.days[dk]?.calls) > 0))) archSet.add(rid);
+      if (!incArch && isArch) continue;
 
-      if (workspaceFilter && wsId !== workspaceFilter) continue;
-
+      const wsEntry = wsId ? workspaceMap[wsId] || (workspaceMap[wsId] = { id: wsId, tokens: 0, sessionsSet: new Set() }) : null;
       let countedSessionInRange = false;
-      for (let d = 0; d < dayKeys.length; d++) {
-        const dk = dayKeys[d];
+      for (const dk of dayKeys) {
         const day = rec.days[dk];
         if (!day) continue;
         const dTotal = toNum(day.total);
-        allDayTotals[dk] = (allDayTotals[dk] || 0) + dTotal;
-
-        if (day.models) {
-          if (!allDayModels[dk]) allDayModels[dk] = {};
-          for (const [mId, mData] of Object.entries(day.models)) {
-            allDayModels[dk][mId] = (allDayModels[dk][mId] || 0) + toNum(mData.total);
-          }
-        }
-
-        if (!inRange(dk)) continue;
         const dCalls = toNum(day.calls);
+        const okRange = inRange(dk);
+        if (wsEntry && okRange) {
+          wsEntry.tokens += dTotal;
+          if (!isSub && (dTotal > 0 || dCalls > 0)) wsEntry.sessionsSet.add(rid);
+        }
+        if (!matchWs) continue;
+        allDayTotals[dk] = (allDayTotals[dk] || 0) + dTotal;
+        if (day.models) {
+          const dm = allDayModels[dk] || (allDayModels[dk] = {});
+          for (const [mId, mData] of Object.entries(day.models)) dm[mId] = (dm[mId] || 0) + toNum(mData.total);
+        }
+        if (!okRange) continue;
         if (dTotal > 0 || dCalls > 0) {
           activeDaySet.add(dk);
-          if (rec.subagent) {
-            subagentSessionSet.add(rec.cascadeId || String(i));
-          } else if (!countedSessionInRange) {
-            sessionSet.add(rec.cascadeId || String(i));
+          if (isSub) subagentSessionSet.add(rid);
+          else if (!countedSessionInRange) {
+            sessionSet.add(rid);
+            if (!isArch) actSet.add(rid);
             countedSessionInRange = true;
           }
         }
         totalTokens += dTotal;
-        if (rec.subagent) subagentTokens += dTotal;
+        if (isSub) subagentTokens += dTotal;
         else mainTokens += dTotal;
         totalCalls += dCalls;
         const dCacheRead = toNum(day.cacheRead);
-        const dInp = toNum(day.input) + dCacheRead + toNum(day.cacheWrite);
-        totalInput += dInp;
+        totalInput += toNum(day.input) + dCacheRead + toNum(day.cacheWrite);
         totalCacheRead += dCacheRead;
-
-        if (Array.isArray(day.hours)) {
-          for (let h = 0; h < 24; h++) {
-            hourCounts[h] += toNum(day.hours[h]);
-          }
-        }
+        if (Array.isArray(day.hours)) for (let h = 0; h < 24; h++) hourCounts[h] += toNum(day.hours[h]);
         if (day.models) {
           for (const [mId, mData] of Object.entries(day.models)) {
-            let entry = modelTotals[mId];
-            if (!entry) {
-              entry = {
-                id: mId,
-                input: 0,
-                output: 0,
-                cacheRead: 0,
-                cacheWrite: 0,
-                tokens: 0,
-                subagentTokens: 0,
-                calls: 0,
-                sessionsSet: new Set(),
-              };
-              modelTotals[mId] = entry;
-            }
+            const entry = modelTotals[mId] || (modelTotals[mId] = { id: mId, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, tokens: 0, subagentTokens: 0, calls: 0, sessionsSet: new Set() });
             const mTok = toNum(mData.total);
-            entry.input += toNum(mData.input);
-            entry.output += toNum(mData.output);
-            entry.cacheRead += toNum(mData.cacheRead);
-            entry.cacheWrite += toNum(mData.cacheWrite);
+            for (const k of ['input', 'output', 'cacheRead', 'cacheWrite', 'calls']) entry[k] += toNum(mData[k]);
             entry.tokens += mTok;
-            if (rec.subagent) entry.subagentTokens += mTok;
-            entry.calls += toNum(mData.calls);
-            if (!rec.subagent) entry.sessionsSet.add(rec.cascadeId || String(i));
+            if (isSub) entry.subagentTokens += mTok;
+            if (!isSub) entry.sessionsSet.add(rid);
           }
         }
       }
@@ -616,20 +484,9 @@
     const peakHour = hourSum > 0 ? formatHomeHour(bestHour, zh) : null;
 
     const models = Object.values(modelTotals)
-      .map((m) => {
+      .map(({ sessionsSet, ...m }) => {
         const mInp = m.input + m.cacheRead + m.cacheWrite;
-        return {
-          id: m.id,
-          input: m.input,
-          output: m.output,
-          cacheRead: m.cacheRead,
-          cacheWrite: m.cacheWrite,
-          tokens: m.tokens,
-          subagentTokens: m.subagentTokens,
-          cacheHitRate: mInp > 0 ? m.cacheRead / mInp : null,
-          calls: m.calls,
-          sessions: m.sessionsSet.size,
-        };
+        return { ...m, cacheHitRate: mInp > 0 ? m.cacheRead / mInp : null, sessions: sessionsSet.size };
       })
       .sort((a, b) => b.tokens - a.tokens || b.calls - a.calls || a.id.localeCompare(b.id));
 
@@ -652,11 +509,16 @@
         const l = resolveLang(zh);
         const title = homeBookTitle(book, l);
         const cntStr = formatHomeCount(count);
-        if (l === 'zh-CN') funBook = `你的 Token 用量相当于 ${cntStr} 本${title}。`;
-        else if (l === 'zh-TW') funBook = `您的 Token 用量相當於 ${cntStr} 本${title}。`;
-        else if (l === 'yue') funBook = `你用咗嘅 Token 相當於 ${cntStr} 本${title}。`;
-        else if (l === 'ja') funBook = `消費トークン数は${title} ${cntStr} 冊分に相当します。`;
-        else funBook = `You've used ~${cntStr}× the tokens in ${title}.`;
+        funBook = pick8([
+          `你的 Token 用量相当于 ${cntStr} 本${title}。`,
+          `您的 Token 用量相當於 ${cntStr} 本${title}。`,
+          `You've used ~${cntStr}× the tokens in ${title}.`,
+          `消費トークン数は${title} ${cntStr} 冊分に相当します。`,
+          `사용한 토큰은 ${title} 약 ${cntStr}권 분량입니다.`,
+          `Has usado ~${cntStr}× los tokens de ${title}.`,
+          `Vous avez utilisé ~${cntStr}× les tokens de ${title}.`,
+          `Verbraucht: ~${cntStr}× die Token von ${title}.`,
+        ], l);
       }
     }
 
@@ -670,6 +532,9 @@
 
     return {
       sessions: sessionSet.size,
+      activeSessions: actSet.size,
+      archivedSessions: archSet.size,
+      hasArchived: hasArch,
       subagentSessions: subagentSessionSet.size,
       calls: totalCalls,
       tokens: totalTokens,
@@ -701,35 +566,23 @@
     return 'other';
   }
 
+  const Q_KIND_LBL = { 'gemini-argon': 'Gemini (Argon)', claude: 'Claude / GPT', gemini: 'Gemini' };
+  const Q_POOL_FB = '模型配额|模型配額|Quota Pool|クォータ|할당량 풀|Cuota|Quota|Kontingent'.split('|');
   function quotaGroupLabel(group, langOrZh) {
-    const kind = quotaGroupKind(group);
-    if (kind === 'gemini-argon') return 'Gemini (Argon)';
-    if (kind === 'claude') return 'Claude / GPT';
-    if (kind === 'gemini') return 'Gemini';
-    const raw = String(group?.name || group?.id || '').trim();
-    if (raw) return raw;
-    return pickByLang({ 'zh-CN': '模型配额', 'zh-TW': '模型配額', yue: '模型配額', en: 'Quota Pool', ja: 'クォータ' }, langOrZh);
+    return Q_KIND_LBL[quotaGroupKind(group)] || String(group?.name || group?.id || '').trim() || pick8(Q_POOL_FB, langOrZh);
   }
 
   function quotaRemaining(bucket) {
     if (!bucket || typeof bucket !== 'object' || bucket.available === false || bucket.disabled === true) return null;
     if (bucket.expired === true) return 1;
     const r = numOr(bucket.remaining ?? bucket.remainingFraction);
-    if (typeof r === 'number' && Number.isFinite(r)) return Math.max(0, Math.min(1, r));
-    if (typeof r === 'string' && r.trim() !== '' && Number.isFinite(Number(r))) {
-      return Math.max(0, Math.min(1, Number(r)));
-    }
-    return null;
+    const n = typeof r === 'number' ? r : typeof r === 'string' && r.trim() ? Number(r) : NaN;
+    return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : null;
   }
 
   function quotaWindows(group) {
     if (!group || typeof group !== 'object') return [];
-    const w5 = group.windows?.['5h'] || group.fiveHour || null;
-    const ww = group.windows?.weekly || group.weekly || null;
-    const out = [];
-    if (w5 && quotaRemaining(w5) !== null) out.push(['5h', w5]);
-    if (ww && quotaRemaining(ww) !== null) out.push(['weekly', ww]);
-    return out;
+    return [['5h', group.windows?.['5h'] || group.fiveHour], ['weekly', group.windows?.weekly || group.weekly]].filter(([, b]) => b && quotaRemaining(b) !== null);
   }
 
   function chooseQuotaGroup(groups, models, selectedId) {
@@ -739,41 +592,34 @@
       const hit = list.find((g) => g.id === selectedId || g.name === selectedId);
       if (hit) return hit;
     }
+    const byK = (k) => list.find((g) => quotaGroupKind(g) === k);
     const modelStr = (Array.isArray(models) ? models.join(' ') : String(models || '')).toLowerCase();
-    if (/argon/.test(modelStr)) {
-      const argon = list.find((g) => quotaGroupKind(g) === 'gemini-argon');
-      if (argon) return argon;
-      const gem = list.find((g) => quotaGroupKind(g) === 'gemini');
-      if (gem) return gem;
-    } else if (/claude|anthropic|sonnet|opus|haiku|gpt|openai|o1|o3|o4/.test(modelStr)) {
-      const cld = list.find((g) => quotaGroupKind(g) === 'claude');
-      if (cld) return cld;
-    } else if (/gemini|carbon|hydrogen|pro|flash/.test(modelStr)) {
-      const gem = list.find((g) => quotaGroupKind(g) === 'gemini');
-      if (gem) return gem;
-      const argon = list.find((g) => quotaGroupKind(g) === 'gemini-argon');
-      if (argon) return argon;
-    }
-    return list.find((g) => quotaWindows(g).length > 0) || list[0];
+    const pick = /argon/.test(modelStr)
+      ? byK('gemini-argon') || byK('gemini')
+      : /claude|anthropic|sonnet|opus|haiku|gpt|openai|o1|o3|o4/.test(modelStr)
+      ? byK('claude')
+      : /gemini|carbon|hydrogen|pro|flash/.test(modelStr)
+      ? byK('gemini') || byK('gemini-argon')
+      : null;
+    return pick || list.find((g) => quotaWindows(g).length > 0) || list[0];
+  }
+
+  const REFRESHING_L = '即将刷新|即將重設|Refreshing|間もなく更新|곧 초기화|Actualizando|Actualisation|Aktualisiert'.split('|');
+
+  const ETA_U = ['天|小时|分|分钟|', '天|小時|分|分鐘|', 'd|h|m|m| ', '日|時間|分|分|', '일|시간|분|분| ', 'd|h|m|m| ', 'j|h|m|m| ', 'T|Std|m|m| '];
+  function fmtEtaSec(totalSec, l) {
+    const d = Math.floor(totalSec / 86400);
+    const h = Math.floor((totalSec % 86400) / 3600);
+    const m = Math.floor((totalSec % 3600) / 60);
+    const u = pick8(ETA_U, l).split('|');
+    return d > 0 ? `${d}${u[0]}${u[4]}${h}${u[1]}` : h > 0 ? `${h}${u[1]}${u[4]}${m}${u[2]}` : `${Math.max(1, m)}${u[3]}`;
   }
 
   function shortEta(ms, langOrZh) {
     const l = resolveLang(langOrZh);
     const v = numOr(ms);
-    if (!(v > 0) || !Number.isFinite(v)) {
-      return pickByLang({ 'zh-CN': '即将刷新', 'zh-TW': '即將重設', yue: '就嚟重設', en: 'Refreshing', ja: '間もなく更新' }, l);
-    }
-    const totalSec = Math.max(1, Math.round(v / 1000));
-    const d = Math.floor(totalSec / 86400);
-    const h = Math.floor((totalSec % 86400) / 3600);
-    const m = Math.floor((totalSec % 3600) / 60);
-    if (l === 'zh-CN') return d > 0 ? `${d}天${h}小时` : h > 0 ? `${h}小时${m}分` : `${Math.max(1, m)}分钟`;
-    if (l === 'zh-TW') return d > 0 ? `${d}天${h}小時` : h > 0 ? `${h}小時${m}分` : `${Math.max(1, m)}分鐘`;
-    if (l === 'yue') return d > 0 ? `${d}日${h}個鐘` : h > 0 ? `${h}個鐘${m}分` : `${Math.max(1, m)}分鐘`;
-    if (l === 'ja') return d > 0 ? `${d}日${h}時間` : h > 0 ? `${h}時間${m}分` : `${Math.max(1, m)}分`;
-    if (d > 0) return `${d}d ${h}h`;
-    if (h > 0) return `${h}h ${m}m`;
-    return `${Math.max(1, m)}m`;
+    if (!(v > 0) || !Number.isFinite(v)) return pick8(REFRESHING_L, l);
+    return fmtEtaSec(Math.max(1, Math.round(v / 1000)), l);
   }
 
   function quotaForecast(bucket, windowKey, nowMs = Date.now()) {
@@ -783,20 +629,12 @@
     const spanMs = windowKey === 'weekly' ? 7 * 86400 * 1000 : 5 * 3600 * 1000;
     const r0 = numOr(bucket?.resetAt ?? bucket?.resetTime);
     const resetMs = typeof r0 === 'number' ? (r0 > 1e11 ? r0 : r0 * 1000) : (tsToMs(r0) || NaN);
+    const mkFc = (endRemaining, forecastDrop, willExhaust, exhaustInMs, paceRatio, status, resetAtMs, resetInMs) => ({
+      window: windowKey, remaining: rem, endRemaining, forecastDrop, willExhaust, exhaustInMs, paceRatio, status, resetAtMs, resetInMs,
+    });
 
     if (!Number.isFinite(resetMs) || resetMs <= now) {
-      return {
-        window: windowKey,
-        remaining: rem,
-        endRemaining: rem,
-        forecastDrop: 0,
-        willExhaust: false,
-        exhaustInMs: null,
-        paceRatio: 0,
-        status: rem < 1 ? 'ok' : 'idle',
-        resetAtMs: Number.isFinite(resetMs) ? resetMs : null,
-        resetInMs: 0,
-      };
+      return mkFc(rem, 0, false, null, 0, rem < 1 ? 'ok' : 'idle', Number.isFinite(resetMs) ? resetMs : null, 0);
     }
 
     const leftMs = Math.max(0, Math.min(spanMs, resetMs - now));
@@ -805,104 +643,57 @@
     const minSmoothMs = windowKey === 'weekly' ? 2 * 3600 * 1000 : 15 * 60 * 1000;
 
     if (used < 0.005 || elapsedMs < 3 * 60 * 1000) {
-      return {
-        window: windowKey,
-        remaining: rem,
-        endRemaining: rem,
-        forecastDrop: 0,
-        willExhaust: rem <= 0.005,
-        exhaustInMs: rem <= 0.005 ? 0 : null,
-        paceRatio: 0,
-        status: rem <= 0.005 ? 'exhaust' : 'idle',
-        resetAtMs: resetMs,
-        resetInMs: leftMs,
-      };
+      return mkFc(rem, 0, rem <= 0.005, rem <= 0.005 ? 0 : null, 0, rem <= 0.005 ? 'exhaust' : 'idle', resetMs, leftMs);
     }
 
     const burnPerMs = used / Math.max(elapsedMs, minSmoothMs);
-    const projectedExtra = burnPerMs * leftMs;
-    const endRemaining = Math.max(0, Math.min(rem, rem - projectedExtra));
-    const forecastDrop = Math.max(0, rem - endRemaining);
+    const endRemaining = Math.max(0, Math.min(rem, rem - burnPerMs * leftMs));
     const idealUsed = spanMs > 0 ? elapsedMs / spanMs : 0;
     const paceRatio = idealUsed > 0.02 ? used / idealUsed : used / 0.02;
     const timeToZeroMs = burnPerMs > 0 ? rem / burnPerMs : Infinity;
     const willExhaust = rem <= 0.01 || (timeToZeroMs < leftMs * 0.95 && used >= 0.06);
+    const status = willExhaust ? 'exhaust' : paceRatio > 1.18 && used >= 0.05 ? 'tight' : used < 0.01 ? 'idle' : 'ok';
 
-    let status = 'ok';
-    if (willExhaust) status = 'exhaust';
-    else if (paceRatio > 1.18 && used >= 0.05) status = 'tight';
-    else if (used < 0.01) status = 'idle';
-
-    return {
-      window: windowKey,
-      remaining: rem,
+    return mkFc(
       endRemaining,
-      forecastDrop,
+      Math.max(0, rem - endRemaining),
       willExhaust,
-      exhaustInMs: Number.isFinite(timeToZeroMs) && willExhaust ? Math.max(0, Math.round(timeToZeroMs)) : null,
-      paceRatio: Number(paceRatio.toFixed(2)),
+      Number.isFinite(timeToZeroMs) && willExhaust ? Math.max(0, Math.round(timeToZeroMs)) : null,
+      Number(paceRatio.toFixed(2)),
       status,
-      resetAtMs: resetMs,
-      resetInMs: leftMs,
-    };
+      resetMs,
+      leftMs
+    );
   }
 
+  const Q_LBL = {
+    exhaust: '提前耗尽|提前耗盡|Depleting early|早期枯渇予測|조기 소진 예상|Se agota pronto|Épuisement rapide|Bald erschöpft'.split('|'),
+    tight: '配速偏紧|配速偏緊|Burning fast|消費やや速め|소모 빠름|Consumo rápido|Conso rapide|Hoher Verbrauch'.split('|'),
+    ok: '配额充裕|配額充裕|On track|ペース良好|정상 페이스|En rango|Dans les temps|Im Plan'.split('|'),
+    idle: '待命充裕|待命充裕|Standby|待機中|대기 중|En espera|En veille|Bereit'.split('|'),
+  };
   function groupQuotaPace(group, langOrZh, nowMs = Date.now()) {
     const l = resolveLang(langOrZh);
-    const wins = quotaWindows(group);
-    const forecasts = wins.map(([wk, b]) => quotaForecast(b, wk, nowMs)).filter(Boolean);
+    const forecasts = quotaWindows(group).map(([wk, b]) => quotaForecast(b, wk, nowMs)).filter(Boolean);
     const rank = { exhaust: 3, tight: 2, ok: 1, idle: 0 };
     let primary = null;
     for (const f of forecasts) {
       if (!primary || (rank[f.status] ?? 0) > (rank[primary.status] ?? 0)) primary = f;
     }
     const status = primary ? primary.status : 'idle';
-    const label = pickByLang(
-      status === 'exhaust'
-        ? { 'zh-CN': '提前耗尽', 'zh-TW': '提前耗盡', yue: '提早用晒', en: 'Depleting early', ja: '早期枯渇予測' }
-        : status === 'tight'
-        ? { 'zh-CN': '配速偏紧', 'zh-TW': '配速偏緊', yue: '進度偏緊', en: 'Burning fast', ja: '消費やや速め' }
-        : status === 'ok'
-        ? { 'zh-CN': '配额充裕', 'zh-TW': '配額充裕', yue: '配額充裕', en: 'On track', ja: 'ペース良好' }
-        : { 'zh-CN': '待命充裕', 'zh-TW': '待命充裕', yue: '待命充裕', en: 'Standby', ja: '待機中' },
-      l
-    );
+    const label = pick8(Q_LBL[status] || Q_LBL.idle, l);
     let detail = '';
     if (primary) {
       if (primary.willExhaust && primary.exhaustInMs !== null) {
         const eta = shortEta(primary.exhaustInMs, l);
-        detail = pickByLang(
-          {
-            'zh-CN': `预计 ${eta}后耗尽`,
-            'zh-TW': `預計 ${eta}後耗盡`,
-            yue: `預計 ${eta}後用晒`,
-            en: `Est. empty in ${eta}`,
-            ja: `約${eta}で枯渇予測`,
-          },
-          l
-        );
+        detail = pick8([`预计 ${eta}后耗尽`, `預計 ${eta}後耗盡`, `Est. empty in ${eta}`, `約${eta}で枯渇予測`, `약 ${eta} 후 소진`, `Se agota en ~${eta}`, `Vide dans ~${eta}`, `Leer in ~${eta}`], l);
       } else if (primary.resetInMs > 0) {
         const eta = shortEta(primary.resetInMs, l);
         const endPct = Math.round(primary.endRemaining * 100);
-        detail = pickByLang(
-          {
-            'zh-CN': `${eta}后重置 · 预计结余 ${endPct}%`,
-            'zh-TW': `${eta}後重設 · 預計結餘 ${endPct}%`,
-            yue: `${eta}後重設 · 預計剩 ${endPct}%`,
-            en: `Resets in ${eta} · Est. ${endPct}% left`,
-            ja: `${eta}後に更新 · 予測残 ${endPct}%`,
-          },
-          l
-        );
+        detail = pick8([`${eta}后重置 · 预计结余 ${endPct}%`, `${eta}後重設 · 預計結餘 ${endPct}%`, `Resets in ${eta} · Est. ${endPct}% left`, `${eta}後に更新 · 予測残 ${endPct}%`, `${eta} 후 초기화 · 예상 잔여 ${endPct}%`, `Reinicio en ${eta} · Est. ${endPct}%`, `Reset dans ${eta} · Est. ${endPct}%`, `Reset in ${eta} · Ca. ${endPct}%`], l);
       }
     }
-    return {
-      status,
-      label,
-      detail,
-      primary,
-      forecasts,
-    };
+    return { status, label, detail, primary, forecasts };
   }
 
   function axisMax(peak) {
@@ -915,70 +706,52 @@
   }
 
   function homeChartTicks(widths, axisWidth, gap = 8, columnGap = 2) {
-    const count = widths.length;
-    if (count === 0 || !(axisWidth > 0)) return [];
-    const column = (axisWidth - columnGap * (count - 1)) / count;
-    if (!(column > 0)) return [];
-    let widest = 0;
-    for (let i = 0; i < count; i++) {
-      if (widths[i] > widest) widest = widths[i];
-    }
-    const edgeShift = Math.max(0, widest / 2 - column / 2);
+    const n = widths.length;
+    if (!n || !(axisWidth > 0)) return [];
+    const col = (axisWidth - columnGap * (n - 1)) / n;
+    if (!(col > 0)) return [];
+    const widest = Math.max(0, ...widths);
+    const need = widest + gap + Math.max(0, (widest - col) / 2);
     let step = 1;
-    while (step < count && step * (column + columnGap) < widest + gap + edgeShift) step += 1;
+    while (step < n && step * (col + columnGap) < need) step += 1;
     const boxes = [];
-    for (let i = count - 1; i >= 0; i -= step) {
-      const width = widths[i];
-      const centre = i * (column + columnGap) + column / 2;
-      const left = Math.min(Math.max(centre - width / 2, 0), Math.max(axisWidth - width, 0));
-      boxes.unshift({ index: i, left });
+    for (let i = n - 1; i >= 0; i -= step) {
+      const w = widths[i];
+      boxes.unshift({ index: i, left: Math.min(Math.max(i * (col + columnGap) + (col - w) / 2, 0), Math.max(axisWidth - w, 0)) });
     }
     const kept = [];
     for (let i = boxes.length - 1; i >= 0; i--) {
-      const box = boxes[i];
-      const next = kept[0];
-      if (next === undefined || box.left + widths[box.index] + gap <= next.left) kept.unshift(box);
+      if (!kept[0] || boxes[i].left + widths[boxes[i].index] + gap <= kept[0].left) kept.unshift(boxes[i]);
     }
     return kept;
   }
 
   function createHomeModelColours() {
     const assigned = new Map();
-    function preferred(id) {
-      let hash = 2166136261;
-      for (let i = 0; i < id.length; i++) hash = Math.imul(hash ^ id.charCodeAt(i), 16777619);
-      return (hash >>> 0) % HOME_MODEL_COLOUR_COUNT;
-    }
     return function assign(ids) {
-      const unique = Array.from(new Set(ids)).sort();
       const out = {};
-      for (let i = 0; i < unique.length; i++) {
-        const id = unique[i];
-        if (assigned.has(id)) {
-          out[id] = assigned.get(id);
-          continue;
-        }
+      for (const id of Array.from(new Set(ids)).sort()) {
+        if (assigned.has(id)) { out[id] = assigned.get(id); continue; }
         const used = new Set(assigned.values());
-        let colour = preferred(id);
-        while (used.size < HOME_MODEL_COLOUR_COUNT && used.has(colour)) {
-          colour = (colour + 1) % HOME_MODEL_COLOUR_COUNT;
-        }
-        assigned.set(id, colour);
-        out[id] = colour;
+        let h = 2166136261;
+        for (let i = 0; i < id.length; i++) h = Math.imul(h ^ id.charCodeAt(i), 16777619);
+        let c = (h >>> 0) % HOME_MODEL_COLOUR_COUNT;
+        while (used.size < HOME_MODEL_COLOUR_COUNT && used.has(c)) c = (c + 1) % HOME_MODEL_COLOUR_COUNT;
+        assigned.set(id, c);
+        out[id] = c;
       }
       return out;
     };
   }
 
   function durSec(d) {
-    if (!d) return 0;
-    return typeof d === 'object' ? toNum(d.seconds) + toNum(d.nanos) / 1e9 : toNum(d);
+    return !d ? 0 : typeof d === 'object' ? toNum(d.seconds) + toNum(d.nanos) / 1e9 : toNum(d);
   }
 
   function tsSec(ts) {
     if (!ts) return 0;
     if (typeof ts === 'string') { const ms = Date.parse(ts); return Number.isFinite(ms) ? ms / 1000 : toNum(ts); }
-    return typeof ts === 'object' ? toNum(ts.seconds) + toNum(ts.nanos) / 1e9 : toNum(ts);
+    return durSec(ts);
   }
 
   function fmtK(n) {
@@ -1009,19 +782,7 @@
     const now = typeof n0 === 'number' ? n0 : Date.now() / 1000;
     const sec = (tsSeconds && typeof tsSeconds === 'object' ? tsSec(tsSeconds) : toNum(tsSeconds)) - now;
     const l = resolveLang(langOrZh);
-    if (sec <= 0) {
-      return pickByLang({ 'zh-CN': '即将刷新', 'zh-TW': '即將重設', yue: '就嚟重設', en: 'Refreshing', ja: '間もなく更新' }, l);
-    }
-    const d = Math.floor(sec / 86400);
-    const h = Math.floor((sec % 86400) / 3600);
-    const m = Math.floor((sec % 3600) / 60);
-    if (l === 'zh-CN') return d > 0 ? `${d}天${h}小时` : h > 0 ? `${h}小时${m}分` : `${Math.max(1, m)}分钟`;
-    if (l === 'zh-TW') return d > 0 ? `${d}天${h}小時` : h > 0 ? `${h}小時${m}分` : `${Math.max(1, m)}分鐘`;
-    if (l === 'yue') return d > 0 ? `${d}日${h}個鐘` : h > 0 ? `${h}個鐘${m}分` : `${Math.max(1, m)}分鐘`;
-    if (l === 'ja') return d > 0 ? `${d}日${h}時間` : h > 0 ? `${h}時間${m}分` : `${Math.max(1, m)}分`;
-    if (d > 0) return `${d}d ${h}h`;
-    if (h > 0) return `${h}h ${m}m`;
-    return `${Math.max(1, m)}m`;
+    return sec <= 0 ? pick8(REFRESHING_L, l) : fmtEtaSec(sec, l);
   }
 
   return {

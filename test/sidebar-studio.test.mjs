@@ -3862,3 +3862,243 @@ test('live-host-adapter enforces isScopeIsolated shared-path linkage, UNC/drive-
   assert.equal(afterSync.lastKnownById['chat-to-del'], undefined);
   assert.equal(afterSync.items.some((x) => x.cascadeId === 'code-keep'), true);
 });
+
+test('Issue #78 + PR #77: sidebar-client matches data-ag-cs-theme=light, body.theme-light, alabaster lightPreset & offloads heavy GPU blur', async () => {
+  const clientSrc = fs.readFileSync(CLIENT_FILE, 'utf8');
+
+  // 1) PR #77 GPU blur offload invariants
+  assert.equal(clientSrc.includes('feGaussianBlur'), false, 'sidebar-client.js must not ship 11-filter feGaussianBlur SVG');
+  assert.ok(clientSrc.includes('id="agy-brand-g0"') && clientSrc.includes('id="agy-brand-g2"'), 'brand SVG must use lightweight radialGradient fills');
+  assert.equal(clientSrc.includes('blur(96px)'), false, 'aura orbs must not use blur(96px)');
+  assert.ok(clientSrc.includes('filter:blur(24px)'), 'aura orbs must cap blur at 24px');
+  assert.ok(clientSrc.includes('backdrop-filter:blur(12px) saturate(125%)'), 'vessel backdrop-filter must be downgraded to blur(12px) saturate(125%)');
+
+  // 2) Extract CLIENT_CSS array rules and verify zero dark-fallback leaks on host light DOM (body.theme-light + html[data-ag-cs-theme="light"])
+  const cssBlockMatch = clientSrc.match(/const CLIENT_CSS = \[\s*([\s\S]*?)\s*\]\.join\(''\);/);
+  assert.ok(cssBlockMatch, 'CLIENT_CSS must exist in sidebar-client.js');
+  const rules = vm.runInNewContext(`[${cssBlockMatch[1]}]`);
+  const cssText = rules.join('\n');
+
+  assert.equal(/:has\s*\(/.test(cssText), false, 'CLIENT_CSS must contain 0 :has() selectors');
+  assert.equal(/[^\x00-\x7F]/.test(cssText.replace(/\/\*[\s\S]*?\*\//g, '').replace(/content:"[^"]*"/g, '')), false, 'CLIENT_CSS selectors/props must remain pure ASCII');
+
+  const baseLightRule = rules.find((r) => r.includes('--ag-sb-canvas:#ffffff'));
+  assert.ok(baseLightRule, 'light base token rule must exist');
+  for (const sel of ['html.light', 'html[data-theme="light"]', 'html[data-ag-cs-theme="light"]', 'body:is(.theme-light,.light-theme,.light)']) {
+    assert.ok(baseLightRule.includes(sel), `light base tokens must match ${sel}`);
+  }
+  assert.ok(baseLightRule.includes('--ag-sb-focus-shadow:'), 'light base tokens must override focus shadow');
+
+  const warmLightRule = rules.find((r) => r.includes('--ag-sb-canvas:#faf8f5'));
+  assert.ok(warmLightRule, 'warm/alabaster light token rule must exist');
+  assert.ok(warmLightRule.includes('[data-ag-cs-theme="light"]'), 'warm/alabaster rule must match data-ag-cs-theme="light"');
+  assert.ok(warmLightRule.includes('[data-ag-cs-palette="obsidian"][data-ag-cs-light-preset="alabaster"]'), 'warm/alabaster rule must cover obsidian + alabaster lightPreset');
+  assert.ok(warmLightRule.includes('body:is(.theme-light,.light-theme,.light)'), 'warm/alabaster rule must also cover body.theme-light');
+
+  const lightOnlyFragments = [
+    '.ag-prism-chat-aura[data-kind="knowledge"] .ag-prism-orb-a',
+    '.ag-prism-chat-aura[data-kind="knowledge"] .ag-prism-orb-b',
+    '.ag-prism-chat-aura[data-kind="spark"] .ag-prism-orb-a',
+    '.ag-prism-chat-aura[data-kind="spark"] .ag-prism-orb-b',
+    '.ag-prism-menu-btn[data-danger="1"]',
+    '.ag-prism-menu-btn[data-danger="1"]:hover',
+    '.ag-prism-modal-btn[data-variant="danger"]',
+    '.ag-prism-sb-check[data-checked="1"]',
+    '.ag-prism-switch[data-checked="1"]::after',
+  ];
+  for (const frag of lightOnlyFragments) {
+    const line = rules.find((r) => r.includes(frag) && (r.includes('html.light') || r.includes('[data-ag-cs-theme="light"]')));
+    assert.ok(line, `light override rule for ${frag} must exist`);
+    assert.ok(line.includes('html[data-ag-cs-theme="light"]'), `${frag} light rule must match html[data-ag-cs-theme="light"]`);
+    assert.ok(line.includes('body:is(.theme-light,.light-theme,.light)'), `${frag} light rule must match body.theme-light`);
+  }
+
+  const focusRule = rules.find((r) => r.includes('.surface-composer-card:focus-within'));
+  assert.ok(focusRule && focusRule.includes('var(--ag-sb-focus-shadow)'), 'focus-within must use theme-aware --ag-sb-focus-shadow');
+
+  // 3) Live runtime check: host sets body.theme-light + html[data-ag-cs-theme="light"] (NO html.light / data-theme)
+  const makeMiniNode = (tagName = 'DIV') => {
+    const attrs = new Map();
+    const styleProps = new Map();
+    const classes = new Set();
+    const node = {
+      nodeType: 1,
+      tagName: tagName.toUpperCase(),
+      nodeName: tagName.toUpperCase(),
+      id: '',
+      textContent: '',
+      children: [],
+      parentElement: null,
+      get firstChild() { return this.children[0] || null; },
+      get firstElementChild() { return this.children[0] || null; },
+      get className() { return [...classes].join(' '); },
+      set className(v) {
+        classes.clear();
+        for (const c of String(v || '').split(/\s+/).filter(Boolean)) classes.add(c);
+      },
+      classList: {
+        add: (...xs) => xs.forEach((x) => classes.add(x)),
+        remove: (...xs) => xs.forEach((x) => classes.delete(x)),
+        contains: (x) => classes.has(x),
+      },
+      style: {
+        setProperty: (k, v) => styleProps.set(k, String(v)),
+        removeProperty: (k) => styleProps.delete(k),
+        getPropertyValue: (k) => styleProps.get(k) || '',
+      },
+      setAttribute: (k, v) => {
+        attrs.set(String(k), String(v));
+        if (k === 'id') node.id = String(v);
+      },
+      getAttribute: (k) => (attrs.has(String(k)) ? attrs.get(String(k)) : null),
+      hasAttribute: (k) => attrs.has(String(k)),
+      removeAttribute: (k) => attrs.delete(String(k)),
+      appendChild: (ch) => {
+        if (ch.parentElement) ch.parentElement.removeChild(ch);
+        ch.parentElement = node;
+        node.children.push(ch);
+        return ch;
+      },
+      insertBefore: (ch, ref) => {
+        if (ch.parentElement) ch.parentElement.removeChild(ch);
+        ch.parentElement = node;
+        const idx = node.children.indexOf(ref);
+        if (idx >= 0) node.children.splice(idx, 0, ch);
+        else node.children.push(ch);
+        return ch;
+      },
+      removeChild: (ch) => {
+        const idx = node.children.indexOf(ch);
+        if (idx >= 0) node.children.splice(idx, 1);
+        ch.parentElement = null;
+        return ch;
+      },
+      remove: () => { if (node.parentElement) node.parentElement.removeChild(node); },
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      querySelector: () => null,
+      querySelectorAll: () => [],
+      closest: () => null,
+      getBoundingClientRect: () => ({ left: 0, top: 0, width: 256, bottom: 720, right: 256, height: 720 }),
+    };
+    return node;
+  };
+
+  const pulseEl = makeMiniNode('DIV');
+  pulseEl.id = 'ag-prism-pulse-bar';
+  const htmlEl = makeMiniNode('HTML');
+  htmlEl.setAttribute('data-ag-cs-style', '1');
+  htmlEl.setAttribute('data-ag-cs-theme', 'light');
+  htmlEl.classList.add('overlay-scrollbars');
+  const bodyEl = makeMiniNode('BODY');
+  bodyEl.classList.add('theme-standalone', 'theme-light');
+  const headEl = makeMiniNode('HEAD');
+  const rootEl = makeMiniNode('DIV');
+  rootEl.id = 'root';
+  const layoutEl = makeMiniNode('DIV');
+  const nativeSb = makeMiniNode('ASIDE');
+  nativeSb.setAttribute('data-testid', 'conversation-list-sidebar');
+  const mainEl = makeMiniNode('MAIN');
+  layoutEl.appendChild(nativeSb);
+  layoutEl.appendChild(mainEl);
+  rootEl.appendChild(layoutEl);
+  bodyEl.appendChild(rootEl);
+  bodyEl.appendChild(pulseEl);
+
+  const fakeStore = {
+    getState: () => ({
+      trajectorySummaries: { summaries: { 'chat-demo-light': { summary: 'Light Test', lastModifiedTime: Date.now() } } },
+      models: { visibleModelConfigs: [] },
+    }),
+    subscribe: () => () => {},
+  };
+  const fakeRouter = {
+    state: { location: { pathname: '/c/chat-demo-light' } },
+    navigate: () => {},
+    subscribe: () => () => {},
+  };
+  rootEl.__reactFiber$test = {
+    tag: 10,
+    memoizedProps: { value: { store: fakeStore } },
+    child: {
+      tag: 10,
+      memoizedProps: { value: fakeRouter },
+    },
+  };
+
+  const doc = {
+    hidden: false,
+    documentElement: htmlEl,
+    body: bodyEl,
+    head: headEl,
+    activeElement: null,
+    createElement: (tag) => makeMiniNode(tag),
+    createElementNS: (_ns, tag) => makeMiniNode(tag),
+    importNode: (n) => n,
+    getElementById: (id) => (id === 'ag-prism-pulse-bar' ? pulseEl : id === 'root' ? rootEl : null),
+    querySelector: (sel) => {
+      if (sel === '[data-testid="conversation-list-sidebar"]') return nativeSb;
+      if (sel === 'main') return mainEl;
+      return null;
+    },
+    querySelectorAll: () => [],
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  };
+
+  const snap = {
+    schemaVersion: 2,
+    storeId: 'store-light-test',
+    rev: 1,
+    activeMode: 'chat',
+    currentView: '/c/chat-demo-light',
+    chatDraft: { kind: 'knowledge', folderId: null, sparkProjectId: null },
+    chatPolicy: {},
+    knowledgeFolders: [],
+    sparkProjects: [],
+    assignments: { 'chat-demo-light': { kind: 'knowledge' } },
+    chatSidebar: {
+      knowledge: { rootItems: [{ cascadeId: 'chat-demo-light', title: 'Light Test', updatedAt: Date.now() }], folders: [] },
+      spark: { projects: [] },
+      archived: [],
+    },
+    navRev: 1,
+    draftRev: 1,
+  };
+
+  const sandbox = {
+    window: null,
+    globalThis: null,
+    document: doc,
+    navigator: { language: 'zh-CN' },
+    location: { href: 'https://127.0.0.1:8686/c/chat-demo-light', pathname: '/c/chat-demo-light' },
+    MutationObserver: class { observe() {} disconnect() {} },
+    setTimeout,
+    clearTimeout,
+    requestAnimationFrame: (fn) => setTimeout(fn, 0),
+    cancelAnimationFrame: (t) => clearTimeout(t),
+    getComputedStyle: () => ({ position: 'static' }),
+    __agPrismSidebarBridge: {
+      isOnline: () => true,
+      call: async () => ({ ok: true, snapshot: snap }),
+    },
+    __agPrism: { getState: () => ({ cfg: { sidebarStudio: 'on' } }) },
+  };
+  sandbox.window = sandbox;
+  sandbox.globalThis = sandbox;
+  vm.runInNewContext(clientSrc, sandbox);
+  await new Promise((r) => setTimeout(r, 120));
+
+  assert.equal(sandbox.__agPrismSidebar.getState().engaged, true, 'sidebar studio must engage in mock host');
+  assert.equal(pulseEl.getAttribute('data-ag-chat-minimal'), '1');
+  assert.equal(pulseEl.style.getPropertyValue('--ag-chat-pulse-bg'), '#ffffff', 'Chat pulse pill must switch to light bg on data-ag-cs-theme="light"');
+  assert.equal(pulseEl.style.getPropertyValue('--ag-chat-pulse-fg'), '#1f1f1f');
+
+  // Even when data-ag-cs-theme is absent and only body.theme-light is set, syncChatPulseMinimalStyle must detect light mode
+  htmlEl.removeAttribute('data-ag-cs-theme');
+  pulseEl.style.setProperty('--ag-chat-pulse-bg', '#000000');
+  sandbox.__agPrismSidebar.sync({ sidebarStudio: 'on' });
+  assert.equal(pulseEl.style.getPropertyValue('--ag-chat-pulse-bg'), '#ffffff', 'body.theme-light fallback must keep Chat pulse pill in light mode');
+
+  sandbox.__agPrismSidebar.destroy();
+});

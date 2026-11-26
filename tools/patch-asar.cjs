@@ -8,7 +8,7 @@
  *    100% 保留 宿主界面本地化补丁与 __AG_CODEX_EFFORT_SLIDER_START__ 滑块，
  *    同步重算 .antigravity_chinese_meta.json SHA-1 指纹。
  * 2. 运行期 ASAR 内存偏移绝对保护：检测到宿主客户端运行中时，严禁原地覆盖 app.asar（避免 Ctrl+Shift+R 偏移错位），
- *    改为写入 staged 归档并通过 PowerShell Start-Process -WindowStyle Hidden 脱离终端 Job Object 派生独立守护进程，
+ *    改为写入 staged 归档并通过纯 Node detached + windowsHide 派生独立后台守护进程，
  *    待宿主退出后原子落盘替换 app.asar 并同步汉化指纹！
  * 3. --install / --restore / --status：支持新版 /* __AG_PRISM_START__ * / 独立标记写入与无损还原。
  */
@@ -158,18 +158,9 @@ function isAntigravityProcessRunningForAsar(resolvedAsar) {
       if (!String(out || "").toLowerCase().includes('"antigravity.exe"')) {
         return false;
       }
-      if (defaultAsar) {
-        return true;
-      }
-      const escapedExe = exePath.replace(/'/g, "''");
-      const psCmd = `@(Get-Process -Name Antigravity -ErrorAction SilentlyContinue | Where-Object { $_.Path -and ($_.Path -ieq '${escapedExe}') }).Count`;
-      const encodedCmd = Buffer.from(psCmd, "utf16le").toString("base64");
-      const psOut = execFileSync(
-        "powershell.exe",
-        ["-NoProfile", "-NonInteractive", "-EncodedCommand", encodedCmd],
-        { encoding: "utf8", windowsHide: true, timeout: 3000, stdio: ["ignore", "pipe", "ignore"] }
-      );
-      return parseInt(String(psOut || "0").trim(), 10) > 0;
+      // 检测到 Antigravity.exe 正在运行且目标可执行文件存在（或默认系统 ASAR）时 fail-closed 返回 true，
+      // 统一走安全延迟替换通道，零 PowerShell / 零 WMI 进程路径查询
+      return true;
     } catch {
       return false;
     }
@@ -644,50 +635,26 @@ function extractInjectExprFromAsarIfPresent(asarPath) {
 }
 
 /**
- * 在 Windows 下通过 WMI Win32_Process.Create + Win32_ProcessStartup(ShowWindow=0)
- * 由系统服务直接以 SW_HIDE 派生完全脱离当前终端 Job Object 的后台无窗进程（0 黑框 + 终端关闭不连坐）；
- * 受限沙盒或非 Windows 环境自动回退 detached child_process.spawn。
+ * 使用 Node 原生 detached + windowsHide 派生独立后台无窗子进程（0 黑框、零 PowerShell、零 WMI）。
  */
 function spawnBreakawayNodeProcess(nodeArgs, opts = {}) {
   const exe = process.execPath;
   const cwd = opts.cwd || ROOT_DIR;
 
-  if (process.platform === "win32" && !opts.disablePowerShellBreakaway) {
-    try {
-      const quoteCmdArg = (s) => {
-        const str = String(s);
-        if (!/[\s"]/u.test(str)) return str;
-        return `"${str.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/g, "$1$1")}"`;
-      };
-      const cmdLine = [quoteCmdArg(exe), ...nodeArgs.map(quoteCmdArg)].join(" ");
-      const escPs = (s) => String(s).replace(/'/g, "''");
-      const psScript = [
-        `$psi = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ ShowWindow = [uint16]0 };`,
-        `$r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = '${escPs(cmdLine)}'; CurrentDirectory = '${escPs(cwd)}'; ProcessStartupInformation = $psi };`,
-        `if ($r -and $r.ReturnValue -eq 0 -and $r.ProcessId) { Write-Output $r.ProcessId }`,
-      ].join(" ");
-      const encodedScript = Buffer.from(psScript, "utf16le").toString("base64");
-      const out = execFileSync(
-        "powershell.exe",
-        ["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-EncodedCommand", encodedScript],
-        { encoding: "utf8", windowsHide: true, timeout: 6000, stdio: ["ignore", "pipe", "ignore"] }
-      );
-      const pid = parseInt(String(out || "").trim().split(/\s+/).pop(), 10);
-      if (Number.isInteger(pid) && pid > 0) {
-        return { spawned: true, pid, method: "wmi-win32-process-hidden" };
-      }
-    } catch {
-      // Fall through to detached spawn
-    }
-  }
-
   try {
-    const child = spawn(exe, nodeArgs, {
+    const spawnOpts = {
       cwd,
       detached: true,
       stdio: "ignore",
       windowsHide: true,
-    });
+    };
+    if (opts.env && typeof opts.env === "object") {
+      spawnOpts.env = opts.env;
+    }
+    const child = spawn(exe, nodeArgs, spawnOpts);
+    if (child && typeof child.on === "function") {
+      child.on("error", () => {});
+    }
     if (child && Number.isInteger(child.pid) && child.pid > 0) {
       child.unref();
       return { spawned: true, pid: child.pid, method: "node-detached-windowshide" };

@@ -8,15 +8,17 @@ const { execFile, execFileSync, spawn } = require('child_process');
 
 const STYLE_ID = 'ag-prism-css';
 const LEGACY_STYLE_ID = 'ag-claude-style-css';
-const PLUGIN_VERSION = '1.1.0';
+const PLUGIN_VERSION = '1.2.0';
 const SETTING_BINDING = '__agPrismSetting';
 const LEGACY_SETTING_BINDING = '__agClaudeStyleSetting';
 const OMNI_BINDING = '__agPrismOmniCall';
 const SIDEBAR_BINDING = '__agPrismSidebarCall';
 const INLINE_DIFF_BINDING = '__agPrismInlineDiffCall';
 const WALLPAPER_BINDING = '__agPrismWallpaperCall';
+const SUGGESTER_BINDING = '__agPrismSuggestCall';
 const IS_MAC = process.platform === 'darwin';
 const IS_WIN = process.platform === 'win32';
+const IS_LINUX = process.platform === 'linux';
 
 const APP_DATA = IS_MAC
   ? path.join(os.homedir(), 'Library', 'Application Support')
@@ -29,21 +31,24 @@ const PID_FILE = path.join(__dirname, '.watch.pid');
 const CONFIG_FILE = path.join(__dirname, 'config.json');
 
 const DEFAULT_CONFIG = {
-  language: 'zh-CN',
-  lang: 'zh-CN',
+  language: 'en',
+  lang: 'en',
   palette: 'obsidian',
   lightPreset: 'crystal',
+  darkAuraStyle: 'prism',
   motionLevel: 'ultra',
   targetFps: '180',
   telemetryModule: 'auto',
   effortSliderModule: 'auto',
   effortSliderStyle: 'classic',
   effortMemory: 'on',
+  periodicModelPicker: 'on',
   thoughtTranslate: 'off',
   thoughtTrigger: 'preload',
   homeLayout: 'studio',
   homeMode: 'studio',
   homeRipple: true,
+  convRipple: 'off',
   ripple: 'on',
   composerRestyle: true,
   composer: 'on',
@@ -63,38 +68,43 @@ const DEFAULT_CONFIG = {
   codeFont: 'default',
   codeLigatures: false,
   ambientIntensity: '100',
+  darkAura: 'balanced',
   thoughtView: 'immersive',
   omniModule: 'on',
   linkTarget: 'builtin',
   sidebarStudio: 'off',
-  hostLocalization: 'auto',
+  hostLocalization: 'off',
   autoUpdate: 'off',
   updateChannel: 'stable',
+  autoArchiveOnExit: false,
   pollIntervalMs: 2500,
 };
 
 const VALIDATORS = {
-  language: ['auto', 'zh-CN', 'zh-TW', 'yue', 'en', 'ja'],
-  lang: ['auto', 'zh-CN', 'zh-TW', 'yue', 'en', 'ja'],
+  language: ['auto', 'zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de'],
+  lang: ['auto', 'zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de'],
   palette: ['host', 'obsidian', 'warm', 'claude'],
   lightPreset: ['crystal', 'alabaster'],
+  darkAuraStyle: ['prism', 'neon'],
   motionLevel: ['off', 'subtle', 'standard', 'ultra'],
   targetFps: ['60', '120', '180', 'native'],
   telemetryModule: ['auto', 'on', 'off'],
   effortSliderModule: ['auto', 'on', 'off'],
   effortSliderStyle: ['classic', 'prism', 'ferrofluid', 'orbital', 'oscilloscope', 'plasma', 'supernova', 'swarm'],
   effortMemory: ['on', 'off'],
+  periodicModelPicker: ['on', 'off'],
   thoughtTranslate: ['off', 'machine', 'ai'],
   thoughtTrigger: ['preload', 'expand'],
   homeLayout: ['studio', 'classic', 'off'],
   homeMode: ['studio', 'classic', 'off'],
   homeRipple: 'boolean',
+  convRipple: ['off', 'subtle', 'medium', 'full'],
   ripple: ['on', 'off'],
   composerRestyle: 'boolean',
   composer: ['on', 'off'],
   placeholderStyle: ['studio', 'host'],
   promptStyle: ['studio', 'host'],
-  mascot: ['crab', 'minis', 'dual', 'off'],
+  mascot: ['crab', 'minis', 'quad', 'quad-minis', 'dual', 'off'],
   logoInk: ['accent', 'foreground'],
   sidebarRestyle: 'boolean',
   sidebar: ['on', 'off'],
@@ -108,6 +118,7 @@ const VALIDATORS = {
   codeFont: ['default', 'jetbrains', 'cascadia', 'sfmono'],
   codeLigatures: 'boolean',
   ambientIntensity: ['0', '35', '70', '100'],
+  darkAura: ['subtle', 'balanced', 'vivid'],
   thoughtView: ['immersive', 'bilingual'],
   omniModule: ['on', 'off'],
   linkTarget: ['builtin', 'external'],
@@ -115,7 +126,43 @@ const VALIDATORS = {
   hostLocalization: ['auto', 'on', 'off'],
   autoUpdate: ['on', 'off'],
   updateChannel: ['stable', 'beta'],
+  autoArchiveOnExit: 'boolean',
 };
+
+function normalizeMascotConfigValue(raw) {
+  if (typeof raw !== 'string') return null;
+  if (raw === 'dual') return 'crab';
+  if (raw === 'off' || raw === 'crab' || raw === 'minis' || raw === 'quad' || raw === 'quad-minis') return raw;
+  if (!raw.startsWith('r:') || raw.length <= 2) return null;
+  const m = /^r:(?:([ckdw][0-4](?:,[ckdw][0-4])*)?(\+m)?)$/.exec(raw);
+  if (!m) return null;
+  const counts = { c: 0, k: 0, d: 0, w: 0 };
+  const seen = new Set();
+  let rawTotal = 0;
+  let total = 0;
+  if (m[1]) {
+    for (const tok of m[1].split(',')) {
+      const sp = tok[0];
+      const cnt = Number(tok.slice(1));
+      if (seen.has(sp) || !Number.isInteger(cnt) || cnt < 0 || cnt > 4) return null;
+      seen.add(sp);
+      rawTotal += cnt;
+      const clamped = cnt > 0 ? 1 : 0;
+      counts[sp] = clamped;
+      total += clamped;
+    }
+  }
+  if (rawTotal > 6 || total > 4) return null;
+  const minis = Boolean(m[2]);
+  if (total === 0 && !minis) return 'off';
+  if (counts.c === 1 && counts.k === 1 && counts.d === 0 && counts.w === 0) return minis ? 'minis' : 'crab';
+  if (counts.c === 1 && counts.k === 1 && counts.d === 1 && counts.w === 1) return minis ? 'quad-minis' : 'quad';
+  const parts = [];
+  for (const sp of ['c', 'k', 'd', 'w']) {
+    if (counts[sp] > 0) parts.push(sp + counts[sp]);
+  }
+  return 'r:' + parts.join(',') + (minis ? '+m' : '');
+}
 
 function validateConfigEntry(key, value) {
   if (key === 'pollIntervalMs') {
@@ -123,6 +170,9 @@ function validateConfigEntry(key, value) {
   }
   if (key === 'autoPromptCdpRelaunch') {
     return typeof value === 'boolean';
+  }
+  if (key === 'mascot') {
+    return normalizeMascotConfigValue(value) !== null;
   }
   if (!Object.prototype.hasOwnProperty.call(VALIDATORS, key)) return false;
   const rule = VALIDATORS[key];
@@ -144,6 +194,13 @@ function reconcileConfigAliases(raw) {
   } else if (has('lang')) {
     out.language = out.lang;
   }
+  if (typeof out.language === 'string') {
+    const lowLang = out.language.trim().toLowerCase().replace(/_/g, '-');
+    if (lowLang === 'yue' || lowLang.startsWith('yue-') || lowLang === 'zh-yue' || lowLang.includes('cantonese')) {
+      out.language = 'zh-CN';
+      out.lang = 'zh-CN';
+    }
+  }
 
   if (has('homeLayout')) {
     out.homeMode = out.homeLayout;
@@ -159,6 +216,20 @@ function reconcileConfigAliases(raw) {
     const on = out.ripple !== 'off' && out.ripple !== false;
     out.homeRipple = on;
     out.ripple = on ? 'on' : 'off';
+  }
+
+  if (has('convRipple')) {
+    const rawCr = out.convRipple;
+    if (rawCr === true) {
+      out.convRipple = 'medium';
+    } else if (rawCr === false) {
+      out.convRipple = 'off';
+    } else if (typeof rawCr === 'string') {
+      const lowCr = rawCr.trim().toLowerCase();
+      if (lowCr === 'true' || lowCr === 'on') out.convRipple = 'medium';
+      else if (lowCr === 'false' || lowCr === 'off') out.convRipple = 'off';
+      else if (lowCr === 'subtle' || lowCr === 'medium' || lowCr === 'full') out.convRipple = lowCr;
+    }
   }
 
   if (has('composerRestyle')) {
@@ -199,7 +270,10 @@ function reconcileConfigAliases(raw) {
   if (has('codeLigatures') && typeof out.codeLigatures === 'string') {
     out.codeLigatures = out.codeLigatures === 'on' || out.codeLigatures === 'true';
   }
-  for (const k of ['telemetryModule', 'effortSliderModule', 'effortMemory', 'omniModule', 'sidebarStudio', 'autoUpdate', 'sidebarNavFold']) {
+  if (has('autoArchiveOnExit') && typeof out.autoArchiveOnExit === 'string') {
+    out.autoArchiveOnExit = out.autoArchiveOnExit === 'on' || out.autoArchiveOnExit === 'true';
+  }
+  for (const k of ['telemetryModule', 'effortSliderModule', 'effortMemory', 'periodicModelPicker', 'omniModule', 'sidebarStudio', 'autoUpdate', 'sidebarNavFold']) {
     if (has(k) && typeof out[k] === 'boolean') {
       out[k] = out[k] ? 'on' : 'off';
     }
@@ -207,8 +281,9 @@ function reconcileConfigAliases(raw) {
   if (has('palette') && out.palette === 'claude') {
     out.palette = 'warm';
   }
-  if (has('mascot') && out.mascot === 'dual') {
-    out.mascot = 'crab';
+  if (has('mascot') && typeof out.mascot === 'string') {
+    const normMascot = normalizeMascotConfigValue(out.mascot);
+    if (normMascot !== null) out.mascot = normMascot;
   }
   return out;
 }
@@ -391,7 +466,61 @@ function matchesExpectedDaemonSignature(imageName, commandLine = '', opts = null
   return false;
 }
 
-// 单次系统探针同时获取进程映像名、启动时间与命令行，消除启动抢锁时连续拉起两次 powershell.exe
+// 解析 Windows `tasklist /FO CSV /NH`（含可选 `/V`）标准 RFC-4180 CSV 输出
+function parseWindowsTasklistCsv(csvText) {
+  const rows = [];
+  const lines = String(csvText || '').split(/\r?\n/);
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line || !line.startsWith('"')) continue;
+    const cols = [];
+    let i = 0;
+    while (i < line.length) {
+      if (line[i] === '"') {
+        i += 1;
+        let val = '';
+        while (i < line.length) {
+          if (line[i] === '"') {
+            if (i + 1 < line.length && line[i + 1] === '"') {
+              val += '"';
+              i += 2;
+              continue;
+            }
+            i += 1;
+            break;
+          }
+          val += line[i];
+          i += 1;
+        }
+        cols.push(val);
+        while (i < line.length && line[i] !== ',') i += 1;
+        if (i < line.length && line[i] === ',') i += 1;
+      } else {
+        const comma = line.indexOf(',', i);
+        if (comma < 0) {
+          cols.push(line.slice(i).trim());
+          break;
+        }
+        cols.push(line.slice(i, comma).trim());
+        i = comma + 1;
+      }
+    }
+    if (cols.length < 2) continue;
+    const pid = parseInt(String(cols[1] || '').trim(), 10);
+    if (!Number.isInteger(pid) || pid <= 0) continue;
+    rows.push({
+      imageName: String(cols[0] || '').trim(),
+      pid,
+      sessionName: cols[2] || '',
+      memUsage: cols[4] || '',
+      status: cols[5] || '',
+      windowTitle: cols.length >= 9 ? String(cols[8] || '').trim() : '',
+    });
+  }
+  return rows;
+}
+
+// 单次原生系统探针获取进程映像名、启动时间与命令行（Windows 使用原生 tasklist CSV，零 PowerShell / 零 WMI）
 function inspectProcessSync(pid, opts = null) {
   const n = Number(pid);
   if (!Number.isInteger(n) || n <= 0) return null;
@@ -400,46 +529,46 @@ function inspectProcessSync(pid, opts = null) {
   } catch (err) {
     if (!err || err.code !== 'EPERM') return null;
   }
-  const execFn = opts && typeof opts.execFileSyncFn === 'function' ? opts.execFileSyncFn : execFileSync;
+  const hasCustomExec = Boolean(opts && typeof opts.execFileSyncFn === 'function');
+  const execFn = hasCustomExec ? opts.execFileSyncFn : execFileSync;
   const platform = (opts && opts.platform) || process.platform;
   try {
     if (platform === 'win32') {
-      const psScript =
-        `$p = Get-Process -Id ${n} -ErrorAction SilentlyContinue; ` +
-        `if (-not $p) { exit 0 }; ` +
-        `$nm = [string]$p.ProcessName; ` +
-        `$st = 0; try { $st = [long]([DateTimeOffset]$p.StartTime).ToUnixTimeMilliseconds() } catch {}; ` +
-        `$cl = ''; try { $cl = [string](Get-CimInstance Win32_Process -Filter 'ProcessId = ${n}' -ErrorAction SilentlyContinue).CommandLine } catch {}; ` +
-        `Write-Output ($nm + '|' + $st + '|' + $cl)`;
+      if (n === process.pid && !hasCustomExec) {
+        const startMs = Math.max(1, Math.round(Date.now() - process.uptime() * 1000));
+        return {
+          pid: n,
+          imageName: path.basename(process.execPath) || 'node.exe',
+          startTime: startMs,
+          processStartMs: startMs,
+          commandLine: Array.isArray(process.argv) ? process.argv.join(' ') : '',
+        };
+      }
       const out = execFn(
-        'powershell.exe',
-        ['-NoProfile', '-NonInteractive', '-Command', psScript],
+        'tasklist',
+        ['/FI', `PID eq ${n}`, '/FO', 'CSV', '/NH'],
         {
           encoding: 'utf8',
           windowsHide: true,
-          timeout: 8000,
+          timeout: 5000,
           stdio: ['ignore', 'pipe', 'ignore'],
         }
       );
-      const trimmed = String(out || '').trim();
-      if (!trimmed) return null;
-      const p1 = trimmed.indexOf('|');
-      const p2 = p1 >= 0 ? trimmed.indexOf('|', p1 + 1) : -1;
-      const imageName = p1 >= 0 ? trimmed.slice(0, p1).trim() : trimmed;
-      const processStartMs = p1 >= 0 && p2 > p1 ? Number(trimmed.slice(p1 + 1, p2)) || 0 : 0;
-      const commandLine = p2 >= 0 ? trimmed.slice(p2 + 1).trim() : '';
-      if (!imageName) return null;
+      const rows = parseWindowsTasklistCsv(out);
+      const matched = rows.find((r) => r.pid === n);
+      if (!matched || !matched.imageName) return null;
       return {
         pid: n,
-        imageName,
-        startTime: processStartMs,
-        processStartMs,
-        commandLine,
+        imageName: matched.imageName,
+        startTime: 0,
+        processStartMs: 0,
+        commandLine: '',
       };
     }
     if (platform === 'linux') {
       let imageName = '';
       let commandLine = '';
+      let processStartMs = 0;
       try {
         imageName = fs.readFileSync(`/proc/${n}/comm`, 'utf8').trim();
       } catch {}
@@ -449,20 +578,43 @@ function inspectProcessSync(pid, opts = null) {
           commandLine = rawCmd.toString('utf8').replace(/\0+/g, ' ').trim();
         }
       } catch {}
+      try {
+        const statText = fs.readFileSync(`/proc/${n}/stat`, 'utf8');
+        const rparen = statText.lastIndexOf(')');
+        if (rparen > 0) {
+          const fields = statText.slice(rparen + 2).trim().split(/\s+/);
+          const startTicks = Number(fields[19]);
+          if (Number.isFinite(startTicks) && startTicks > 0) {
+            const procStat = fs.readFileSync('/proc/stat', 'utf8');
+            const btimeMatch = /^btime\s+(\d+)$/m.exec(procStat);
+            if (btimeMatch) {
+              const bootSec = Number(btimeMatch[1]);
+              if (Number.isFinite(bootSec) && bootSec > 0) {
+                processStartMs = Math.round(bootSec * 1000 + (startTicks / 100) * 1000);
+              }
+            }
+          }
+        }
+      } catch {}
+      if (!processStartMs && n === process.pid && !hasCustomExec) {
+        processStartMs = Math.max(1, Math.round(Date.now() - process.uptime() * 1000));
+      }
       if (!imageName && !commandLine) return null;
       return {
         pid: n,
         imageName: imageName || commandLine.split(/\s+/)[0] || '',
-        startTime: 0,
-        processStartMs: 0,
+        startTime: processStartMs,
+        processStartMs,
         commandLine,
       };
     }
-    // macOS / 其他 POSIX：使用 ps 单次读取 args 与 comm
+    // macOS / 其他 POSIX：使用 ps 单次读取 args、comm 与 lstart（UTC）
+    const posixEnv = { ...process.env, LC_ALL: 'C', TZ: 'UTC' };
     const commOut = execFn('ps', ['-p', String(n), '-o', 'comm='], {
       encoding: 'utf8',
       timeout: 2500,
       stdio: ['ignore', 'pipe', 'ignore'],
+      env: posixEnv,
     });
     const imageName = String(commOut || '').trim();
     if (!imageName) return null;
@@ -472,14 +624,35 @@ function inspectProcessSync(pid, opts = null) {
         encoding: 'utf8',
         timeout: 2500,
         stdio: ['ignore', 'pipe', 'ignore'],
+        env: posixEnv,
       });
       commandLine = String(argsOut || '').trim();
     } catch {}
+    let processStartMs = 0;
+    try {
+      const lstartOut = execFn('ps', ['-p', String(n), '-o', 'lstart='], {
+        encoding: 'utf8',
+        timeout: 2500,
+        stdio: ['ignore', 'pipe', 'ignore'],
+        env: posixEnv,
+      });
+      const rawStart = String(lstartOut || '').trim().replace(/\s+/g, ' ');
+      if (rawStart) {
+        const hasTz = /(?:[+-]\d{2}:?\d{2}|UTC|GMT|Z)$/i.test(rawStart);
+        const parsedMs = Date.parse(hasTz ? rawStart : `${rawStart} UTC`);
+        if (Number.isFinite(parsedMs) && parsedMs > 0) {
+          processStartMs = Math.round(parsedMs);
+        }
+      }
+    } catch {}
+    if (processStartMs <= 0 && n === process.pid && !hasCustomExec) {
+      processStartMs = Math.max(1, Math.round(Date.now() - process.uptime() * 1000));
+    }
     return {
       pid: n,
       imageName,
-      startTime: 0,
-      processStartMs: 0,
+      startTime: processStartMs,
+      processStartMs,
       commandLine,
     };
   } catch {
@@ -621,18 +794,57 @@ function isAntigravityShortcutTarget(targetPath) {
   return base === 'antigravity.exe';
 }
 
-// 精准识别真正的 Antigravity 主进程（过滤 --type= 渲染/GPU 子进程、sidecar_sdk 守护进程与第三方 antigravity-tools）
+// 严格识别 Linux 下的 Antigravity 主可执行目标（原生二进制、.AppImage，排除 crashpad/language_server/tools/obsidian-prism）
+function isAntigravityLinuxTarget(targetPath) {
+  const cleaned = String(targetPath || '').trim().replace(/^["']+|["']+$/g, '');
+  if (!cleaned) return false;
+  const lowPath = cleaned.replace(/\\/g, '/').toLowerCase();
+  if (
+    lowPath.includes('antigravity-tools') ||
+    lowPath.includes('antigravity_tools') ||
+    lowPath.includes('uninstall') ||
+    lowPath.includes('obsidian-prism') ||
+    lowPath.includes('chrome_crashpad_handler') ||
+    lowPath.includes('language_server')
+  ) {
+    return false;
+  }
+  const parts = lowPath.split('/');
+  const base = (parts[parts.length - 1] || '').trim();
+  if (!base) return false;
+  if (base === 'antigravity') return true;
+  if (/^antigravity(?:[-_.][a-z0-9._+-]+)?\.appimage$/i.test(base)) return true;
+  return false;
+}
+
+// 精准识别真正的 Antigravity 主进程（过滤 --type= 渲染/GPU 子进程、crashpad、language_server、sidecar_sdk 守护进程与第三方 antigravity-tools）
 function isMainAntigravityProcessSignature(imageName, commandLine = '') {
-  const rawImg = String(imageName || '').trim().replace(/^"+|"+$/g, '');
-  const imgParts = rawImg.split(/[\\/]/);
-  const baseImg = (imgParts[imgParts.length - 1] || '').trim().toLowerCase();
-  if (baseImg !== 'antigravity' && baseImg !== 'antigravity.exe') {
+  const rawImg = String(imageName || '').trim().replace(/^["']+|["']+$/g, '');
+  const normImg = rawImg.replace(/\\/g, '/').toLowerCase();
+  if (
+    normImg.includes('antigravity-tools') ||
+    normImg.includes('antigravity_tools') ||
+    normImg.includes('uninstall') ||
+    normImg.includes('chrome_crashpad_handler') ||
+    normImg.includes('language_server')
+  ) {
+    return false;
+  }
+  const imgParts = normImg.split('/');
+  const baseImg = (imgParts[imgParts.length - 1] || '').trim();
+  const isValidBase =
+    baseImg === 'antigravity' ||
+    baseImg === 'antigravity.exe' ||
+    /^antigravity(?:[-_.][a-z0-9._+-]+)?\.appimage$/i.test(baseImg);
+  if (!isValidBase) {
     return false;
   }
   const normCmd = String(commandLine || '').replace(/\\/g, '/').toLowerCase();
   if (!normCmd) return true;
   if (normCmd.includes('--type=')) return false;
   if (
+    normCmd.includes('chrome_crashpad_handler') ||
+    normCmd.includes('language_server') ||
     normCmd.includes('sidecar_sdk') ||
     normCmd.includes('register_loader.js') ||
     normCmd.includes('sidecars/daemon/main.mjs') ||
@@ -640,6 +852,7 @@ function isMainAntigravityProcessSignature(imageName, commandLine = '') {
     normCmd.includes('/watch.js') ||
     normCmd.includes('--run-guard') ||
     normCmd.includes('antigravity-tools') ||
+    normCmd.includes('antigravity_tools') ||
     normCmd.includes('uninstall antigravity')
   ) {
     return false;
@@ -647,87 +860,593 @@ function isMainAntigravityProcessSignature(imageName, commandLine = '') {
   return true;
 }
 
-const WIN_SHORTCUT_LIST_PS = [
-  '$ErrorActionPreference = "SilentlyContinue"',
-  '$ProgressPreference = "SilentlyContinue"',
-  '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8',
-  '$dirs = @()',
-  'if ($env:AG_PRISM_LNK_DIRS) {',
-  '  try { $rawDirs = ConvertFrom-Json -InputObject $env:AG_PRISM_LNK_DIRS; $dirs = if ($rawDirs -is [System.Array]) { $rawDirs } elseif ($null -ne $rawDirs) { @($rawDirs) } else { @() } } catch {}',
-  '} else {',
-  '  $dirs += [Environment]::GetFolderPath("Desktop")',
-  '  if ($env:USERPROFILE) { $dirs += (Join-Path $env:USERPROFILE "Desktop") }',
-  '  $dirs += [Environment]::GetFolderPath("Programs")',
-  '  if ($env:APPDATA) { $dirs += (Join-Path $env:APPDATA "Microsoft\\Internet Explorer\\Quick Launch\\User Pinned\\TaskBar") }',
-  '  $dirs += [Environment]::GetFolderPath("CommonDesktopDirectory")',
-  '  $dirs += [Environment]::GetFolderPath("CommonPrograms")',
-  '}',
-  '$extra = @()',
-  'if ($env:AG_PRISM_LNK_EXTRA) {',
-  '  try { $rawExtra = ConvertFrom-Json -InputObject $env:AG_PRISM_LNK_EXTRA; $extra = if ($rawExtra -is [System.Array]) { $rawExtra } elseif ($null -ne $rawExtra) { @($rawExtra) } else { @() } } catch {}',
-  '}',
-  '$seen = New-Object "System.Collections.Generic.HashSet[string]" ([System.StringComparer]::OrdinalIgnoreCase)',
-  '$files = New-Object "System.Collections.Generic.List[string]"',
-  'foreach ($f in $extra) {',
-  '  if ($f -and (Test-Path -LiteralPath $f -PathType Leaf) -and $f.EndsWith(".lnk", [System.StringComparison]::OrdinalIgnoreCase)) {',
-  '    $full = [System.IO.Path]::GetFullPath($f)',
-  '    if ($seen.Add($full)) { [void]$files.Add($full) }',
-  '  }',
-  '}',
-  'foreach ($d in $dirs) {',
-  '  if (-not $d -or -not (Test-Path -LiteralPath $d -PathType Container)) { continue }',
-  '  foreach ($item in @(Get-ChildItem -LiteralPath $d -Filter "*.lnk" -File -ErrorAction SilentlyContinue)) {',
-  '    if ($seen.Add($item.FullName)) { [void]$files.Add($item.FullName) }',
-  '  }',
-  '  foreach ($sub in @(Get-ChildItem -LiteralPath $d -Directory -ErrorAction SilentlyContinue)) {',
-  '    foreach ($item2 in @(Get-ChildItem -LiteralPath $sub.FullName -Filter "*.lnk" -File -ErrorAction SilentlyContinue)) {',
-  '      if ($seen.Add($item2.FullName)) { [void]$files.Add($item2.FullName) }',
-  '    }',
-  '  }',
-  '}',
-  'if ($files.Count -eq 0) { Write-Output "[]"; exit 0 }',
-  '$ws = New-Object -ComObject WScript.Shell',
-  '$items = New-Object "System.Collections.Generic.List[object]"',
-  'foreach ($lnk in $files) {',
-  '  try {',
-  '    $sc = $ws.CreateShortcut($lnk)',
-  '    $tp = [string]$sc.TargetPath',
-  '    if (-not $tp) { continue }',
-  '    [void]$items.Add([pscustomobject]@{ lnkPath = $lnk; targetPath = $tp; arguments = [string]$sc.Arguments })',
-  '  } catch {}',
-  '}',
-  'if ($items.Count -eq 0) { Write-Output "[]" } elseif ($items.Count -eq 1) { Write-Output ("[" + ($items[0] | ConvertTo-Json -Compress) + "]") } else { $items | ConvertTo-Json -Compress }',
-].join('\n');
+// 纯 Node MS-SHLLINK (.lnk) 二进制解析与无损参数更新器（零子进程、零 PowerShell、零外部 COM）
+const LNK_HEADER_SIZE = 0x4c;
+const LNK_MAX_FILE_BYTES = 1024 * 1024;
+const LNK_SCAN_MAX_DEPTH = 3;
+const LNK_SCAN_MAX_FILES = 2000;
+const LNK_CLSID = Buffer.from([
+  0x01, 0x14, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46,
+]);
+const LNK_FLAG_HAS_IDLIST = 0x00000001;
+const LNK_FLAG_HAS_LINK_INFO = 0x00000002;
+const LNK_FLAG_HAS_NAME = 0x00000004;
+const LNK_FLAG_HAS_RELATIVE_PATH = 0x00000008;
+const LNK_FLAG_HAS_WORKING_DIR = 0x00000010;
+const LNK_FLAG_HAS_ARGUMENTS = 0x00000020;
+const LNK_FLAG_HAS_ICON_LOCATION = 0x00000040;
+const LNK_FLAG_IS_UNICODE = 0x00000080;
 
-const WIN_SHORTCUT_APPLY_PS = [
-  '$ErrorActionPreference = "Stop"',
-  '$ProgressPreference = "SilentlyContinue"',
-  '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8',
-  '$updates = @()',
-  'if ($env:AG_PRISM_LNK_UPDATES) {',
-  '  $rawUpd = ConvertFrom-Json -InputObject $env:AG_PRISM_LNK_UPDATES',
-  '  $updates = if ($rawUpd -is [System.Array]) { $rawUpd } elseif ($null -ne $rawUpd) { @($rawUpd) } else { @() }',
-  '}',
-  '$ws = New-Object -ComObject WScript.Shell',
-  '$applied = New-Object "System.Collections.Generic.List[string]"',
-  '$skipped = New-Object "System.Collections.Generic.List[string]"',
-  'foreach ($u in $updates) {',
-  '  $p = [string]$u.lnkPath',
-  '  if (-not $p) { continue }',
-  '  try {',
-  '    $sc = $ws.CreateShortcut($p)',
-  '    $sc.Arguments = [string]$u.arguments',
-  '    $sc.Save()',
-  '    [void]$applied.Add($p)',
-  '  } catch {',
-  '    [void]$skipped.Add($p)',
-  '  }',
-  '}',
-  '([pscustomobject]@{ applied = $applied.ToArray(); skipped = $skipped.ToArray() }) | ConvertTo-Json -Compress',
-].join('\n');
+function normalizeFsComparePath(p) {
+  const resolved = path.resolve(String(p || ''));
+  return IS_WIN ? resolved.toLowerCase() : resolved;
+}
 
-const WIN_SHORTCUT_LIST_B64 = Buffer.from(WIN_SHORTCUT_LIST_PS, 'utf16le').toString('base64');
-const WIN_SHORTCUT_APPLY_B64 = Buffer.from(WIN_SHORTCUT_APPLY_PS, 'utf16le').toString('base64');
+function assertSafeRegularFileSync(filePath, maxBytes = LNK_MAX_FILE_BYTES, opts = null) {
+  const resolved = path.resolve(String(filePath || ''));
+  if (!resolved) throw new Error('Empty file path');
+  const parentDir = path.dirname(resolved);
+  const parentStat = fs.lstatSync(parentDir);
+  if (parentStat.isSymbolicLink() || !parentStat.isDirectory()) {
+    throw new Error(`Refusing symbolic link or non-directory parent: ${parentDir}`);
+  }
+  const st = fs.lstatSync(resolved);
+  if (st.isSymbolicLink() || !st.isFile()) {
+    throw new Error(`Refusing symbolic link or non-regular file: ${resolved}`);
+  }
+  if (!opts || opts.checkRealpath !== false) {
+    try {
+      const real = fs.realpathSync(resolved);
+      const realParent = fs.realpathSync(parentDir);
+      const expected = path.join(realParent, path.basename(resolved));
+      if (normalizeFsComparePath(real) !== normalizeFsComparePath(expected)) {
+        throw new Error(`Refusing reparse point or redirected file: ${resolved}`);
+      }
+    } catch (err) {
+      if (err && /Refusing /.test(String(err.message || ''))) throw err;
+    }
+  }
+  if (Number.isFinite(maxBytes) && maxBytes > 0 && st.size > maxBytes) {
+    throw new Error(`Refusing oversized file (${st.size} > ${maxBytes} bytes): ${resolved}`);
+  }
+  return { resolved, stat: st };
+}
+
+function readNullTerminatedAnsi(buf, start, limit) {
+  if (start < 0 || start >= limit || limit > buf.length) return '';
+  let end = start;
+  while (end < limit && buf[end] !== 0) end += 1;
+  return buf.subarray(start, end).toString('latin1');
+}
+
+function readNullTerminatedUtf16LE(buf, start, limit) {
+  if (start < 0 || start + 1 >= limit || limit > buf.length) return '';
+  let end = start;
+  while (end + 1 < limit && buf.readUInt16LE(end) !== 0) end += 2;
+  return buf.subarray(start, end).toString('utf16le');
+}
+
+function joinWinPathParts(base, suffix) {
+  const b = String(base || '');
+  const s = String(suffix || '');
+  if (!b) return s;
+  if (!s) return b;
+  if (b.endsWith('\\') || b.endsWith('/') || s.startsWith('\\') || s.startsWith('/')) {
+    return b + s;
+  }
+  return `${b}\\${s}`;
+}
+
+function expandWindowsEnvVars(rawPath, env = process.env) {
+  const s = String(rawPath || '');
+  if (!s.includes('%') || !env || typeof env !== 'object') return s;
+  const envMap = new Map();
+  for (const [k, v] of Object.entries(env)) {
+    if (typeof v === 'string') envMap.set(k.toLowerCase(), v);
+  }
+  return s.replace(/%([A-Za-z0-9_()-]+)%/g, (match, name) => {
+    const val = envMap.get(String(name).toLowerCase());
+    return typeof val === 'string' && val.length > 0 ? val : match;
+  });
+}
+
+function extractTargetFromLinkInfo(liBuf) {
+  if (!Buffer.isBuffer(liBuf) || liBuf.length < 0x1c) return '';
+  const liSize = liBuf.readUInt32LE(0);
+  const liHeaderSize = liBuf.readUInt32LE(4);
+  const liFlags = liBuf.readUInt32LE(8);
+  if (liSize < 0x1c || liHeaderSize < 0x1c || liSize > liBuf.length) return '';
+
+  const hasUniOffsets = liHeaderSize >= 0x24 && liBuf.length >= 0x24;
+  const commonSuffixOff = liBuf.readUInt32LE(24);
+  let commonSuffix = '';
+  if (hasUniOffsets) {
+    const commonSuffixUniOff = liBuf.readUInt32LE(32);
+    if (commonSuffixUniOff >= liHeaderSize && commonSuffixUniOff < liSize) {
+      commonSuffix = readNullTerminatedUtf16LE(liBuf, commonSuffixUniOff, liSize);
+    }
+  }
+  if (!commonSuffix && commonSuffixOff >= liHeaderSize && commonSuffixOff < liSize) {
+    commonSuffix = readNullTerminatedAnsi(liBuf, commonSuffixOff, liSize);
+  }
+
+  if (liFlags & 0x01) {
+    let localBase = '';
+    if (hasUniOffsets) {
+      const localBaseUniOff = liBuf.readUInt32LE(28);
+      if (localBaseUniOff >= liHeaderSize && localBaseUniOff < liSize) {
+        localBase = readNullTerminatedUtf16LE(liBuf, localBaseUniOff, liSize);
+      }
+    }
+    if (!localBase) {
+      const localBaseOff = liBuf.readUInt32LE(16);
+      if (localBaseOff >= liHeaderSize && localBaseOff < liSize) {
+        localBase = readNullTerminatedAnsi(liBuf, localBaseOff, liSize);
+      }
+    }
+    if (localBase) return joinWinPathParts(localBase, commonSuffix);
+  }
+
+  if (liFlags & 0x02) {
+    const cnrlOff = liBuf.readUInt32LE(20);
+    if (cnrlOff >= liHeaderSize && cnrlOff + 20 <= liSize) {
+      const cnrlSize = liBuf.readUInt32LE(cnrlOff);
+      const cnrlEnd = Math.min(liSize, cnrlOff + cnrlSize);
+      if (cnrlSize >= 20 && cnrlEnd <= liSize) {
+        const netNameOff = liBuf.readUInt32LE(cnrlOff + 8);
+        let netName = '';
+        if (netNameOff > 0x14 && cnrlOff + 24 <= cnrlEnd) {
+          const netNameUniOff = liBuf.readUInt32LE(cnrlOff + 20);
+          if (netNameUniOff > 0 && cnrlOff + netNameUniOff < cnrlEnd) {
+            netName = readNullTerminatedUtf16LE(liBuf, cnrlOff + netNameUniOff, cnrlEnd);
+          }
+        }
+        if (!netName && netNameOff >= 20 && cnrlOff + netNameOff < cnrlEnd) {
+          netName = readNullTerminatedAnsi(liBuf, cnrlOff + netNameOff, cnrlEnd);
+        }
+        if (netName) return joinWinPathParts(netName, commonSuffix);
+      }
+    }
+  }
+  return '';
+}
+
+function extractTargetFromExtraData(extraBuf) {
+  if (!Buffer.isBuffer(extraBuf) || extraBuf.length < 4) return '';
+  let off = 0;
+  while (off + 4 <= extraBuf.length) {
+    const blockSize = extraBuf.readUInt32LE(off);
+    if (blockSize < 4) break;
+    if (off + blockSize > extraBuf.length) break;
+    if (blockSize >= 8) {
+      const sig = extraBuf.readUInt32LE(off + 4);
+      // EnvironmentVariableDataBlock (MS-SHLLINK 2.5.4)
+      if (sig === 0xa0000001 && blockSize >= 0x0314) {
+        const uni = readNullTerminatedUtf16LE(extraBuf, off + 268, off + 268 + 520);
+        if (uni) return expandWindowsEnvVars(uni);
+        const ansi = readNullTerminatedAnsi(extraBuf, off + 8, off + 8 + 260);
+        if (ansi) return expandWindowsEnvVars(ansi);
+      }
+    }
+    off += blockSize;
+  }
+  return '';
+}
+
+function extractTargetFromIdList(idListBuf) {
+  if (!Buffer.isBuffer(idListBuf) || idListBuf.length < 4) return '';
+  let off = 0;
+  let drive = '';
+  const segments = [];
+  while (off + 2 <= idListBuf.length) {
+    const itemSize = idListBuf.readUInt16LE(off);
+    if (itemSize === 0) break;
+    if (itemSize < 3 || off + itemSize > idListBuf.length) break;
+    const item = idListBuf.subarray(off, off + itemSize);
+    const type = item[2];
+    if (type >= 0x20 && type <= 0x2f && itemSize >= 6) {
+      const drv = readNullTerminatedAnsi(item, 3, itemSize).trim();
+      if (/^[A-Za-z]:\\?$/.test(drv)) {
+        drive = drv.endsWith('\\') ? drv : `${drv}\\`;
+      }
+    } else if (type >= 0x30 && type <= 0x3f && itemSize >= 16) {
+      let name = '';
+      if (itemSize >= 20) {
+        const extOff = item.readUInt16LE(itemSize - 2);
+        if (extOff >= 14 && extOff + 10 <= itemSize - 2) {
+          const extSize = item.readUInt16LE(extOff);
+          const extVer = item.readUInt16LE(extOff + 2);
+          const extSig = item.readUInt32LE(extOff + 4);
+          if (extSig === 0xbeef0004 && extSize >= 16 && extOff + extSize <= itemSize) {
+            let nameOff = 0;
+            if (extVer === 3) nameOff = extOff + 20;
+            else if (extVer === 7) nameOff = extOff + 38;
+            else if (extVer === 8) nameOff = extOff + 42;
+            else if (extVer >= 9) nameOff = extOff + 46;
+            if (nameOff > 0 && nameOff + 2 <= extOff + extSize) {
+              name = readNullTerminatedUtf16LE(item, nameOff, extOff + extSize);
+            }
+          }
+        }
+      }
+      if (!name) {
+        if ((type & 0x04) !== 0) {
+          name = readNullTerminatedUtf16LE(item, 14, itemSize);
+        } else {
+          name = readNullTerminatedAnsi(item, 14, itemSize);
+        }
+      }
+      if (name) segments.push(name);
+    }
+    off += itemSize;
+  }
+  if (!drive || segments.length === 0) return '';
+  return `${drive}${segments.join('\\')}`;
+}
+
+function parseWindowsLnkBuffer(buf, lnkPath = '') {
+  if (!Buffer.isBuffer(buf) || buf.length < LNK_HEADER_SIZE) {
+    throw new Error('Invalid .lnk file: shorter than 76-byte ShellLinkHeader');
+  }
+  if (buf.length > LNK_MAX_FILE_BYTES) {
+    throw new Error(`Invalid .lnk file: exceeds ${LNK_MAX_FILE_BYTES} bytes`);
+  }
+  const headerSize = buf.readUInt32LE(0);
+  if (headerSize !== LNK_HEADER_SIZE) {
+    throw new Error(`Invalid .lnk HeaderSize: 0x${headerSize.toString(16)}`);
+  }
+  if (!buf.subarray(4, 20).equals(LNK_CLSID)) {
+    throw new Error('Invalid .lnk LinkCLSID');
+  }
+  const flags = buf.readUInt32LE(20);
+  const isUnicode = Boolean(flags & LNK_FLAG_IS_UNICODE);
+  let offset = LNK_HEADER_SIZE;
+
+  let idListStart = offset;
+  let idListEnd = offset;
+  let idListPayload = null;
+  if (flags & LNK_FLAG_HAS_IDLIST) {
+    if (offset + 2 > buf.length) throw new Error('Truncated LinkTargetIDList size');
+    const idListSize = buf.readUInt16LE(offset);
+    if (offset + 2 + idListSize > buf.length) throw new Error('Truncated LinkTargetIDList payload');
+    idListStart = offset;
+    idListPayload = buf.subarray(offset + 2, offset + 2 + idListSize);
+    offset += 2 + idListSize;
+    idListEnd = offset;
+  }
+
+  let linkInfoStart = offset;
+  let linkInfoEnd = offset;
+  let linkInfoBuf = null;
+  if (flags & LNK_FLAG_HAS_LINK_INFO) {
+    if (offset + 4 > buf.length) throw new Error('Truncated LinkInfo size');
+    const liSize = buf.readUInt32LE(offset);
+    if (liSize < 0x1c || offset + liSize > buf.length) throw new Error('Invalid or truncated LinkInfo');
+    linkInfoStart = offset;
+    linkInfoBuf = buf.subarray(offset, offset + liSize);
+    offset += liSize;
+    linkInfoEnd = offset;
+  }
+
+  const stringDataStart = offset;
+  const stringSpecs = [
+    [LNK_FLAG_HAS_NAME, 'name'],
+    [LNK_FLAG_HAS_RELATIVE_PATH, 'relativePath'],
+    [LNK_FLAG_HAS_WORKING_DIR, 'workingDir'],
+    [LNK_FLAG_HAS_ARGUMENTS, 'arguments'],
+    [LNK_FLAG_HAS_ICON_LOCATION, 'iconLocation'],
+  ];
+  const strings = {
+    name: null,
+    relativePath: null,
+    workingDir: null,
+    arguments: null,
+    iconLocation: null,
+  };
+  const stringOffsets = {};
+  let argsStart = -1;
+  let argsEnd = -1;
+
+  for (const [bit, field] of stringSpecs) {
+    if (field === 'arguments' && !(flags & bit)) {
+      argsStart = offset;
+      argsEnd = offset;
+    }
+    if (!(flags & bit)) continue;
+    if (offset + 2 > buf.length) throw new Error(`Truncated StringData count for ${field}`);
+    const countChars = buf.readUInt16LE(offset);
+    const byteLen = isUnicode ? countChars * 2 : countChars;
+    if (offset + 2 + byteLen > buf.length) throw new Error(`Truncated StringData payload for ${field}`);
+    const fieldStart = offset;
+    const rawStr = buf.subarray(offset + 2, offset + 2 + byteLen).toString(isUnicode ? 'utf16le' : 'latin1');
+    offset += 2 + byteLen;
+    strings[field] = rawStr;
+    stringOffsets[field] = { start: fieldStart, end: offset, countChars };
+    if (field === 'arguments') {
+      argsStart = fieldStart;
+      argsEnd = offset;
+    }
+  }
+
+  const extraDataStart = offset;
+  const extraDataBuf = buf.subarray(extraDataStart);
+
+  // 4 级目标路径解析：LinkInfo -> ExtraData(EnvironmentVariableDataBlock) -> RELATIVE_PATH -> LinkTargetIDList
+  let targetPath = linkInfoBuf ? extractTargetFromLinkInfo(linkInfoBuf) : '';
+  if (!targetPath) {
+    targetPath = extractTargetFromExtraData(extraDataBuf);
+  }
+  if (!targetPath && strings.relativePath) {
+    if (lnkPath) {
+      targetPath = path.win32.resolve(path.win32.dirname(String(lnkPath)), strings.relativePath);
+    } else {
+      targetPath = strings.relativePath;
+    }
+  }
+  if (!targetPath && idListPayload) {
+    targetPath = extractTargetFromIdList(idListPayload);
+  }
+  // 当 LinkInfo 仅含 ANSI 且含高位字节（非纯 ASCII 本地代码页）时，优先用 UTF-16LE 的 RELATIVE_PATH / IDList 还原准确 Unicode 路径
+  if (targetPath && /[^\x00-\x7f]/.test(targetPath) && linkInfoBuf && linkInfoBuf.readUInt32LE(4) < 0x24) {
+    const unicodeFallback =
+      extractTargetFromExtraData(extraDataBuf) ||
+      (isUnicode && strings.relativePath && lnkPath
+        ? path.win32.resolve(path.win32.dirname(String(lnkPath)), strings.relativePath)
+        : '') ||
+      (idListPayload ? extractTargetFromIdList(idListPayload) : '');
+    if (unicodeFallback) targetPath = unicodeFallback;
+  }
+
+  return {
+    flags,
+    isUnicode,
+    hasArguments: Boolean(flags & LNK_FLAG_HAS_ARGUMENTS),
+    targetPath: String(targetPath || ''),
+    arguments: strings.arguments || '',
+    name: strings.name,
+    relativePath: strings.relativePath,
+    workingDir: strings.workingDir,
+    iconLocation: strings.iconLocation,
+    offsets: {
+      idListStart,
+      idListEnd,
+      linkInfoStart,
+      linkInfoEnd,
+      stringDataStart,
+      argsStart,
+      argsEnd,
+      extraDataStart,
+      stringOffsets,
+    },
+  };
+}
+
+function encodeLnkStringDataField(text, isUnicode) {
+  const s = String(text || '');
+  if (isUnicode) {
+    if (s.length > 0xffff) {
+      throw new Error('StringData field exceeds MS-SHLLINK 65535 UTF-16 code units limit');
+    }
+    const header = Buffer.allocUnsafe(2);
+    header.writeUInt16LE(s.length, 0);
+    return Buffer.concat([header, Buffer.from(s, 'utf16le')]);
+  }
+  const payload = Buffer.from(s, 'latin1');
+  if (payload.length > 0xffff) {
+    throw new Error('StringData field exceeds MS-SHLLINK 65535 ANSI bytes limit');
+  }
+  const header = Buffer.allocUnsafe(2);
+  header.writeUInt16LE(payload.length, 0);
+  return Buffer.concat([header, payload]);
+}
+
+// 严格遵守 MS-SHLLINK 规范更新 COMMAND_LINE_ARGUMENTS，100% 原样保留其余 Header/IDList/LinkInfo/StringData/ExtraData 字节
+function updateWindowsLnkArguments(buf, nextArguments) {
+  const parsed = parseWindowsLnkBuffer(buf);
+  const nextStr = String(nextArguments || '');
+  const wantHasArgs = nextStr.length > 0;
+  const needUnicodeUpgrade = !parsed.isUnicode && wantHasArgs && /[^\x00-\x7f]/.test(nextStr);
+
+  if (!needUnicodeUpgrade) {
+    const nextFlags = wantHasArgs
+      ? (parsed.flags | LNK_FLAG_HAS_ARGUMENTS) >>> 0
+      : (parsed.flags & ~LNK_FLAG_HAS_ARGUMENTS) >>> 0;
+    const prefix = Buffer.from(buf.subarray(0, parsed.offsets.argsStart));
+    prefix.writeUInt32LE(nextFlags, 20);
+    const suffix = buf.subarray(parsed.offsets.argsEnd);
+    const argChunk = wantHasArgs ? encodeLnkStringDataField(nextStr, parsed.isUnicode) : Buffer.alloc(0);
+    return Buffer.concat([prefix, argChunk, suffix]);
+  }
+
+  // ANSI .lnk 写入非 ASCII 参数时，升格 IsUnicode 并无损转码现有 StringData 字段，保留 Header/IDList/LinkInfo/ExtraData 原样
+  const nextFlags = ((parsed.flags | LNK_FLAG_IS_UNICODE | LNK_FLAG_HAS_ARGUMENTS) >>> 0);
+  const beforeStrings = Buffer.from(buf.subarray(0, parsed.offsets.stringDataStart));
+  beforeStrings.writeUInt32LE(nextFlags, 20);
+  const parts = [beforeStrings];
+  if (parsed.flags & LNK_FLAG_HAS_NAME) parts.push(encodeLnkStringDataField(parsed.name || '', true));
+  if (parsed.flags & LNK_FLAG_HAS_RELATIVE_PATH) parts.push(encodeLnkStringDataField(parsed.relativePath || '', true));
+  if (parsed.flags & LNK_FLAG_HAS_WORKING_DIR) parts.push(encodeLnkStringDataField(parsed.workingDir || '', true));
+  parts.push(encodeLnkStringDataField(nextStr, true));
+  if (parsed.flags & LNK_FLAG_HAS_ICON_LOCATION) parts.push(encodeLnkStringDataField(parsed.iconLocation || '', true));
+  parts.push(buf.subarray(parsed.offsets.extraDataStart));
+  return Buffer.concat(parts);
+}
+
+function readWindowsLnkFileSync(lnkPath) {
+  const { resolved } = assertSafeRegularFileSync(lnkPath, LNK_MAX_FILE_BYTES);
+  const buf = fs.readFileSync(resolved);
+  const parsed = parseWindowsLnkBuffer(buf, resolved);
+  return {
+    lnkPath: resolved,
+    targetPath: parsed.targetPath,
+    arguments: parsed.arguments,
+    parsed,
+  };
+}
+
+function writeFileAtomicallyNoSymlinkSync(filePath, data, opts = null) {
+  const resolved = path.resolve(String(filePath || ''));
+  const dir = path.dirname(resolved);
+  const dirStat = fs.lstatSync(dir);
+  if (dirStat.isSymbolicLink() || !dirStat.isDirectory()) {
+    throw new Error(`Refusing symbolic link directory: ${dir}`);
+  }
+  if (fs.existsSync(resolved)) {
+    assertSafeRegularFileSync(resolved, (opts && opts.maxBytes) || LNK_MAX_FILE_BYTES);
+  }
+  const mode = (opts && opts.mode) || 0o600;
+  const tmpPath = path.join(dir, `.${path.basename(resolved)}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`);
+  let fd = null;
+  try {
+    fd = fs.openSync(tmpPath, 'wx', mode);
+    if (Buffer.isBuffer(data)) {
+      fs.writeFileSync(fd, data);
+    } else {
+      fs.writeFileSync(fd, String(data), 'utf8');
+    }
+    try {
+      fs.fsyncSync(fd);
+    } catch {}
+    fs.closeSync(fd);
+    fd = null;
+
+    let renamed = false;
+    let lastErr = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (fs.existsSync(resolved)) {
+        assertSafeRegularFileSync(resolved, (opts && opts.maxBytes) || LNK_MAX_FILE_BYTES);
+      }
+      try {
+        fs.renameSync(tmpPath, resolved);
+        renamed = true;
+        break;
+      } catch (err) {
+        lastErr = err;
+        if (!IS_WIN || !['EBUSY', 'EPERM', 'EACCES', 'EEXIST'].includes(err && err.code)) {
+          throw err;
+        }
+      }
+    }
+    if (!renamed) {
+      if (IS_WIN && ['EBUSY', 'EPERM', 'EACCES', 'EEXIST'].includes(lastErr && lastErr.code)) {
+        if (fs.existsSync(resolved)) {
+          assertSafeRegularFileSync(resolved, (opts && opts.maxBytes) || LNK_MAX_FILE_BYTES);
+        }
+        fs.copyFileSync(tmpPath, resolved);
+        try { fs.unlinkSync(tmpPath); } catch {}
+      } else {
+        throw lastErr;
+      }
+    }
+  } catch (err) {
+    if (fd !== null) {
+      try { fs.closeSync(fd); } catch {}
+    }
+    try { fs.unlinkSync(tmpPath); } catch {}
+    throw err;
+  }
+}
+
+function writeWindowsLnkArgumentsSync(lnkPath, nextArguments) {
+  const { resolved } = assertSafeRegularFileSync(lnkPath, LNK_MAX_FILE_BYTES);
+  const origBuf = fs.readFileSync(resolved);
+  const nextBuf = updateWindowsLnkArguments(origBuf, nextArguments);
+  // 写盘前自检：确保新二进制可被严格回读且参数 100% 匹配
+  const verify = parseWindowsLnkBuffer(nextBuf, resolved);
+  if (verify.arguments !== String(nextArguments || '')) {
+    throw new Error('Updated .lnk verification mismatch');
+  }
+  writeFileAtomicallyNoSymlinkSync(resolved, nextBuf, { maxBytes: LNK_MAX_FILE_BYTES });
+  return { lnkPath: resolved, bytes: nextBuf.length, arguments: verify.arguments };
+}
+
+function getDefaultWindowsShortcutDirs(env = process.env) {
+  const e = env || process.env;
+  const userProfile = e.USERPROFILE || os.homedir();
+  const appData = e.APPDATA || path.join(userProfile, 'AppData', 'Roaming');
+  const publicDir = e.PUBLIC || 'C:\\Users\\Public';
+  const programData = e.ProgramData || 'C:\\ProgramData';
+  const rawDirs = [
+    path.join(userProfile, 'Desktop'),
+    e.OneDrive ? path.join(e.OneDrive, 'Desktop') : '',
+    e.OneDriveConsumer ? path.join(e.OneDriveConsumer, 'Desktop') : '',
+    path.join(appData, 'Microsoft', 'Windows', 'Start Menu', 'Programs'),
+    path.join(appData, 'Microsoft', 'Internet Explorer', 'Quick Launch', 'User Pinned', 'TaskBar'),
+    path.join(publicDir, 'Desktop'),
+    path.join(programData, 'Microsoft', 'Windows', 'Start Menu', 'Programs'),
+  ].filter(Boolean);
+  const seen = new Set();
+  const uniq = [];
+  for (const d of rawDirs) {
+    const resolved = path.resolve(d);
+    const key = resolved.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    uniq.push(resolved);
+  }
+  return uniq;
+}
+
+function collectWindowsLnkFilesSync(searchDirs, extraFiles) {
+  const dirs = Array.isArray(searchDirs)
+    ? searchDirs.filter((d) => typeof d === 'string' && d.trim()).map((d) => path.resolve(d))
+    : getDefaultWindowsShortcutDirs();
+  const extras = Array.isArray(extraFiles) ? extraFiles : [];
+  const seenFiles = new Set();
+  const seenDirs = new Set();
+  const files = [];
+
+  const pushIfValidLnk = (candidate) => {
+    if (files.length >= LNK_SCAN_MAX_FILES) return;
+    if (!candidate || !String(candidate).toLowerCase().endsWith('.lnk')) return;
+    try {
+      const { resolved } = assertSafeRegularFileSync(candidate, LNK_MAX_FILE_BYTES);
+      const key = resolved.toLowerCase();
+      if (seenFiles.has(key)) return;
+      seenFiles.add(key);
+      files.push(resolved);
+    } catch {}
+  };
+
+  for (const f of extras) pushIfValidLnk(f);
+
+  const walkDir = (dirPath, depth) => {
+    if (depth > LNK_SCAN_MAX_DEPTH || files.length >= LNK_SCAN_MAX_FILES) return;
+    let resolvedDir;
+    try {
+      resolvedDir = path.resolve(dirPath);
+      const dirKey = resolvedDir.toLowerCase();
+      if (seenDirs.has(dirKey)) return;
+      const st = fs.lstatSync(resolvedDir);
+      if (st.isSymbolicLink() || !st.isDirectory()) return;
+      seenDirs.add(dirKey);
+    } catch {
+      return;
+    }
+    let entries;
+    try {
+      entries = fs.readdirSync(resolvedDir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (files.length >= LNK_SCAN_MAX_FILES) break;
+      if (!entry || entry.isSymbolicLink()) continue;
+      const fullPath = path.join(resolvedDir, entry.name);
+      if (entry.isDirectory()) {
+        if (depth < LNK_SCAN_MAX_DEPTH) {
+          walkDir(fullPath, depth + 1);
+        }
+      } else if (entry.isFile() && entry.name.toLowerCase().endsWith('.lnk')) {
+        pushIfValidLnk(fullPath);
+      }
+    }
+  };
+
+  for (const d of dirs) walkDir(d, 0);
+  return files;
+}
 
 function readPatchedShortcutsRecord(pluginDir) {
   if (!pluginDir) return [];
@@ -759,99 +1478,634 @@ function writePatchedShortcutsRecord(pluginDir, pathsList) {
 }
 
 function runWindowsShortcutAdapter(searchDirs, extraFiles) {
-  const env = { ...process.env };
-  if (Array.isArray(searchDirs)) {
-    env.AG_PRISM_LNK_DIRS = JSON.stringify(searchDirs.map((d) => path.resolve(d)));
-  } else {
-    delete env.AG_PRISM_LNK_DIRS;
+  const lnkFiles = collectWindowsLnkFilesSync(searchDirs, extraFiles);
+  const entries = [];
+  for (const lnkPath of lnkFiles) {
+    try {
+      const info = readWindowsLnkFileSync(lnkPath);
+      if (!info.targetPath) continue;
+      entries.push({
+        lnkPath: info.lnkPath,
+        targetPath: info.targetPath,
+        arguments: info.arguments,
+      });
+    } catch {}
   }
-  if (Array.isArray(extraFiles) && extraFiles.length > 0) {
-    env.AG_PRISM_LNK_EXTRA = JSON.stringify(extraFiles.map((f) => path.resolve(f)));
-  } else {
-    delete env.AG_PRISM_LNK_EXTRA;
-  }
-  const listOut = execFileSync(
-    'powershell.exe',
-    ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', WIN_SHORTCUT_LIST_B64],
-    { encoding: 'utf8', env, windowsHide: true, timeout: 10000, stdio: ['ignore', 'pipe', 'ignore'] }
-  );
-  const rawJson = String(listOut || '').trim();
-  const parsed = rawJson ? JSON.parse(rawJson) : [];
-  const entries = Array.isArray(parsed) ? parsed : [parsed];
   return {
     entries,
     applyUpdates(updates) {
       if (!Array.isArray(updates) || updates.length === 0) {
         return { applied: [], skipped: [] };
       }
-      const applyEnv = { ...process.env, AG_PRISM_LNK_UPDATES: JSON.stringify(updates) };
-      const applyOut = execFileSync(
-        'powershell.exe',
-        ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', WIN_SHORTCUT_APPLY_B64],
-        { encoding: 'utf8', env: applyEnv, windowsHide: true, timeout: 10000, stdio: ['ignore', 'pipe', 'ignore'] }
-      );
-      const res = JSON.parse(String(applyOut || '{}').trim() || '{}');
-      return {
-        applied: Array.isArray(res?.applied) ? res.applied : [],
-        skipped: Array.isArray(res?.skipped) ? res.skipped : [],
-      };
+      const applied = [];
+      const skipped = [];
+      for (const u of updates) {
+        const p = String((u && u.lnkPath) || '').trim();
+        if (!p) continue;
+        try {
+          writeWindowsLnkArgumentsSync(p, String((u && u.arguments) || ''));
+          applied.push(p);
+        } catch {
+          skipped.push(p);
+        }
+      }
+      return { applied, skipped };
     },
   };
-}
-
-function execFileTextAsync(file, args, opts) {
-  return new Promise((resolve, reject) => {
-    execFile(file, args, { encoding: 'utf8', windowsHide: true, ...opts }, (err, stdout) => {
-      if (err) reject(err);
-      else resolve(String(stdout || ''));
-    });
-  });
 }
 
 async function runWindowsShortcutAdapterAsync(searchDirs, extraFiles) {
-  const env = { ...process.env };
-  if (Array.isArray(searchDirs)) {
-    env.AG_PRISM_LNK_DIRS = JSON.stringify(searchDirs.map((d) => path.resolve(d)));
-  } else {
-    delete env.AG_PRISM_LNK_DIRS;
-  }
-  if (Array.isArray(extraFiles) && extraFiles.length > 0) {
-    env.AG_PRISM_LNK_EXTRA = JSON.stringify(extraFiles.map((f) => path.resolve(f)));
-  } else {
-    delete env.AG_PRISM_LNK_EXTRA;
-  }
-  const listOut = await execFileTextAsync(
-    'powershell.exe',
-    ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', WIN_SHORTCUT_LIST_B64],
-    { env, timeout: 10000 }
-  );
-  const rawJson = String(listOut || '').trim();
-  const parsed = rawJson ? JSON.parse(rawJson) : [];
-  const entries = Array.isArray(parsed) ? parsed : [parsed];
+  const syncAdapter = runWindowsShortcutAdapter(searchDirs, extraFiles);
   return {
-    entries,
+    entries: syncAdapter.entries,
     async applyUpdates(updates) {
-      if (!Array.isArray(updates) || updates.length === 0) {
-        return { applied: [], skipped: [] };
-      }
-      const applyEnv = { ...process.env, AG_PRISM_LNK_UPDATES: JSON.stringify(updates) };
-      const applyOut = await execFileTextAsync(
-        'powershell.exe',
-        ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', WIN_SHORTCUT_APPLY_B64],
-        { env: applyEnv, timeout: 10000 }
-      );
-      const res = JSON.parse(String(applyOut || '{}').trim() || '{}');
-      return {
-        applied: Array.isArray(res?.applied) ? res.applied : [],
-        skipped: Array.isArray(res?.skipped) ? res.skipped : [],
-      };
+      return syncAdapter.applyUpdates(updates);
     },
   };
+}
+
+const LINUX_DESKTOP_SHADOW_MARKER = '# obsidian-prism-shadow-of=';
+const LINUX_DESKTOP_FIELD_CODE_RE = /^%[fFuUdDnNickvm]$/;
+const LINUX_DEFAULT_SYSTEM_DESKTOP_DIRS = Object.freeze([
+  '/usr/share/applications',
+  '/usr/local/share/applications',
+  '/var/lib/snapd/desktop/applications',
+]);
+const LINUX_GOMEMLIMIT_LINE_RE = /^GOMEMLIMIT=([0-9]+(?:B|KiB|MiB|GiB|TiB))$/;
+
+function getDefaultLinuxDesktopDirs(opts = {}) {
+  const env = opts.env || process.env;
+  const home = opts.homeDir ? path.resolve(opts.homeDir) : os.homedir();
+  const hasCustomHome = Boolean(opts.homeDir && path.resolve(opts.homeDir) !== path.resolve(os.homedir()));
+  const xdgDataHome =
+    !hasCustomHome && env && typeof env.XDG_DATA_HOME === 'string' && env.XDG_DATA_HOME.trim()
+      ? path.resolve(env.XDG_DATA_HOME.trim())
+      : path.join(home, '.local', 'share');
+  const userAppsDir = opts.userApplicationsDir
+    ? path.resolve(opts.userApplicationsDir)
+    : path.join(xdgDataHome, 'applications');
+  const desktopDir = path.join(home, 'Desktop');
+  return {
+    userAppsDir,
+    searchDirs: [
+      userAppsDir,
+      desktopDir,
+      ...LINUX_DEFAULT_SYSTEM_DESKTOP_DIRS,
+    ],
+  };
+}
+
+// 线性词法分词器解析 freedesktop Desktop Entry Exec= 值（支持双引号、单引号与反斜杠转义）
+function tokenizeDesktopExec(execValue) {
+  const s = String(execValue || '');
+  const tokens = [];
+  let i = 0;
+  const len = s.length;
+  while (i < len) {
+    while (i < len && (s[i] === ' ' || s[i] === '\t')) i++;
+    if (i >= len) break;
+    const start = i;
+    let value = '';
+    let inQuote = '';
+    while (i < len) {
+      const ch = s[i];
+      if (inQuote === '"') {
+        if (ch === '\\' && i + 1 < len) {
+          value += s[i + 1];
+          i += 2;
+          continue;
+        }
+        if (ch === '"') {
+          inQuote = '';
+          i++;
+          continue;
+        }
+        value += ch;
+        i++;
+      } else if (inQuote === "'") {
+        if (ch === "'") {
+          inQuote = '';
+          i++;
+          continue;
+        }
+        value += ch;
+        i++;
+      } else {
+        if (ch === ' ' || ch === '\t') break;
+        if (ch === '\\' && i + 1 < len) {
+          value += s[i + 1];
+          i += 2;
+          continue;
+        }
+        if (ch === '"' || ch === "'") {
+          inQuote = ch;
+          i++;
+          continue;
+        }
+        value += ch;
+        i++;
+      }
+    }
+    tokens.push({ raw: s.slice(start, i), value, start, end: i });
+  }
+  return tokens;
+}
+
+// 从 Exec= token 序列提取真正的目标可执行路径（自动跳过前置 env 与 KEY=VAL 环境变量赋值）
+function extractDesktopExecTarget(execValue) {
+  const tokens = tokenizeDesktopExec(execValue);
+  if (tokens.length === 0) return { target: '', targetIndex: -1, tokens };
+  let idx = 0;
+  const firstBase = tokens[0].value.replace(/\\/g, '/').split('/').pop().toLowerCase();
+  if (firstBase === 'env') {
+    idx = 1;
+    while (idx < tokens.length) {
+      const val = tokens[idx].value;
+      if (val === '--') {
+        idx += 1;
+        break;
+      }
+      if (val.startsWith('-')) {
+        idx += val === '-u' || val === '--unset' || val === '-C' || val === '--chdir' ? 2 : 1;
+        continue;
+      }
+      if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(val)) {
+        idx += 1;
+        continue;
+      }
+      break;
+    }
+  }
+  if (idx >= tokens.length) return { target: '', targetIndex: -1, tokens };
+  return { target: tokens[idx].value, targetIndex: idx, tokens };
+}
+
+// 无损修补单条 Desktop Entry Exec= 值：保留已有 --remote-debugging-port，并在 %U/%F 等占位符前精确插入
+function patchDesktopExecLine(execValue) {
+  const orig = String(execValue || '');
+  const { target, targetIndex, tokens } = extractDesktopExecTarget(orig);
+  if (targetIndex < 0 || !isAntigravityLinuxTarget(target)) {
+    return { value: orig, changed: false, matched: false, alreadySet: false };
+  }
+  if (hasRemoteDebuggingPortSwitch(orig)) {
+    return { value: orig, changed: false, matched: true, alreadySet: true };
+  }
+  let fieldCodeIdx = -1;
+  for (let i = targetIndex + 1; i < tokens.length; i++) {
+    if (LINUX_DESKTOP_FIELD_CODE_RE.test(tokens[i].value)) {
+      fieldCodeIdx = i;
+      break;
+    }
+  }
+  const rawTokens = tokens.map((t) => t.raw);
+  if (fieldCodeIdx >= 0) {
+    rawTokens.splice(fieldCodeIdx, 0, CDP_OPT_IN_SWITCH);
+  } else {
+    rawTokens.push(CDP_OPT_IN_SWITCH);
+  }
+  return { value: rawTokens.join(' '), changed: true, matched: true, alreadySet: false };
+}
+
+// 精准剥离单条 Desktop Entry Exec= 值中的 --remote-debugging-port=0（保留自定义端口、引号与占位符顺序）
+function stripDesktopExecLine(execValue) {
+  const orig = String(execValue || '');
+  const { target, targetIndex, tokens } = extractDesktopExecTarget(orig);
+  if (targetIndex < 0 || !isAntigravityLinuxTarget(target)) {
+    return { value: orig, changed: false, matched: false };
+  }
+  let removed = false;
+  const kept = [];
+  for (let i = 0; i < tokens.length; i++) {
+    if (i > targetIndex && tokens[i].value.toLowerCase() === CDP_OPT_IN_SWITCH) {
+      removed = true;
+      continue;
+    }
+    kept.push(tokens[i].raw);
+  }
+  if (!removed) {
+    return { value: orig, changed: false, matched: true };
+  }
+  return { value: kept.join(' '), changed: true, matched: true };
+}
+
+function readDesktopShadowMarker(content) {
+  const lines = String(content || '').split(/\r?\n/);
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith(LINUX_DESKTOP_SHADOW_MARKER)) {
+      const orig = trimmed.slice(LINUX_DESKTOP_SHADOW_MARKER.length).trim();
+      return orig || null;
+    }
+  }
+  return null;
+}
+
+function isManagedPrismDesktopContent(content) {
+  return /^\s*X-ObsidianPrism-Managed\s*=\s*true\s*$/im.test(String(content || ''));
+}
+
+// 解析并修补整份 .desktop 内容（支持 [Desktop Entry] 与多个 [Desktop Action ...] 段）
+function patchDesktopEntryContent(rawContent, opts = {}) {
+  const lines = String(rawContent || '').replace(/\r\n/g, '\n').split('\n');
+  let inSupportedSection = false;
+  let matched = false;
+  let changed = false;
+  let alreadySet = false;
+  let patchedExecCount = 0;
+  const outLines = lines.map((line) => {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) return line;
+    if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+      inSupportedSection = trimmed === '[Desktop Entry]' || trimmed.startsWith('[Desktop Action ');
+      return line;
+    }
+    if (!inSupportedSection) return line;
+    const execMatch = /^(\s*Exec\s*=\s*)(.*)$/.exec(line);
+    if (!execMatch) return line;
+    const res = patchDesktopExecLine(execMatch[2]);
+    if (res.matched) {
+      matched = true;
+      if (res.changed) {
+        changed = true;
+        patchedExecCount += 1;
+        return execMatch[1] + res.value;
+      }
+      if (res.alreadySet) {
+        alreadySet = true;
+      }
+    }
+    return line;
+  });
+  if (matched && changed && opts.shadowOf && !readDesktopShadowMarker(rawContent)) {
+    const safeOrig = String(opts.shadowOf).replace(/[\r\n]+/g, ' ').trim();
+    if (safeOrig) {
+      outLines.unshift(`${LINUX_DESKTOP_SHADOW_MARKER}${safeOrig}`);
+    }
+  }
+  return {
+    content: outLines.join('\n'),
+    matched,
+    changed,
+    alreadySet: matched && !changed && alreadySet,
+    patchedExecCount,
+  };
+}
+
+// 卸载还原整份 .desktop 内容中的 --remote-debugging-port=0
+function stripDesktopEntryContent(rawContent) {
+  const lines = String(rawContent || '').replace(/\r\n/g, '\n').split('\n');
+  let inSupportedSection = false;
+  let matched = false;
+  let changed = false;
+  const outLines = lines.map((line) => {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) return line;
+    if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+      inSupportedSection = trimmed === '[Desktop Entry]' || trimmed.startsWith('[Desktop Action ');
+      return line;
+    }
+    if (!inSupportedSection) return line;
+    const execMatch = /^(\s*Exec\s*=\s*)(.*)$/.exec(line);
+    if (!execMatch) return line;
+    const res = stripDesktopExecLine(execMatch[2]);
+    if (res.matched) {
+      matched = true;
+      if (res.changed) {
+        changed = true;
+        return execMatch[1] + res.value;
+      }
+    }
+    return line;
+  });
+  return { content: outLines.join('\n'), matched, changed };
+}
+
+function isPathInsideDir(filePath, dirPath) {
+  if (!filePath || !dirPath) return false;
+  const rel = path.relative(path.resolve(dirPath), path.resolve(filePath));
+  return Boolean(rel && !rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+function isLinuxReadOnlyOrSystemDesktopPath(filePath, systemDirs) {
+  const resolved = path.resolve(filePath);
+  const dirs = Array.isArray(systemDirs) && systemDirs.length > 0 ? systemDirs : LINUX_DEFAULT_SYSTEM_DESKTOP_DIRS;
+  for (const sysDir of dirs) {
+    if (!sysDir) continue;
+    const normSys = path.resolve(sysDir);
+    if (resolved === normSys || isPathInsideDir(resolved, normSys)) {
+      return true;
+    }
+  }
+  try {
+    fs.accessSync(resolved, fs.constants.W_OK);
+    fs.accessSync(path.dirname(resolved), fs.constants.W_OK);
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+function writeDesktopFileAtomicSync(filePath, content, fileMode = 0o644) {
+  const resolved = path.resolve(filePath);
+  const dir = path.dirname(resolved);
+  if (isSymlinkPathSync(dir) || isSymlinkPathSync(resolved)) {
+    throw new Error(`Refusing symbolic link desktop path: ${resolved}`);
+  }
+  fs.mkdirSync(dir, { recursive: true });
+  if (isSymlinkPathSync(dir) || isSymlinkPathSync(resolved)) {
+    throw new Error(`Refusing symbolic link desktop path: ${resolved}`);
+  }
+  const tmpPath = `${resolved}.tmp.${process.pid}.${crypto.randomBytes(6).toString('hex')}`;
+  let fd = null;
+  try {
+    fd = fs.openSync(tmpPath, 'wx', fileMode);
+    fs.writeFileSync(fd, content, 'utf8');
+    fs.closeSync(fd);
+    fd = null;
+    try { fs.chmodSync(tmpPath, fileMode); } catch {}
+    if (isSymlinkPathSync(dir) || isSymlinkPathSync(resolved)) {
+      throw new Error(`Refusing symbolic link desktop path: ${resolved}`);
+    }
+    fs.renameSync(tmpPath, resolved);
+    try { fs.chmodSync(resolved, fileMode); } catch {}
+  } catch (err) {
+    if (fd !== null) {
+      try { fs.closeSync(fd); } catch {}
+    }
+    try { fs.unlinkSync(tmpPath); } catch {}
+    throw err;
+  }
+}
+
+function ensureLinuxDesktopShortcutsCdpFlag(opts = {}) {
+  const defaults = getDefaultLinuxDesktopDirs(opts);
+  const userAppsDir = defaults.userAppsDir;
+  const searchDirs = Array.isArray(opts.searchDirs) && opts.searchDirs.length > 0
+    ? opts.searchDirs.map((d) => path.resolve(d))
+    : defaults.searchDirs.map((d) => path.resolve(d));
+  const systemDirs = Array.isArray(opts.systemDirs)
+    ? [...LINUX_DEFAULT_SYSTEM_DESKTOP_DIRS, ...opts.systemDirs.map((d) => path.resolve(d))]
+    : [...LINUX_DEFAULT_SYSTEM_DESKTOP_DIRS];
+
+  let scanned = 0;
+  let matched = 0;
+  const patched = [];
+  const alreadySet = [];
+  const skipped = [];
+  const shadowCreated = [];
+  const seenFiles = new Set();
+  const userBasenames = new Set();
+
+  // 预先记录用户 applications 目录中已有的 .desktop basename，用于识别已存在的 XDG 覆盖
+  try {
+    if (fs.existsSync(userAppsDir) && !isSymlinkPathSync(userAppsDir)) {
+      for (const name of fs.readdirSync(userAppsDir)) {
+        if (name.endsWith('.desktop')) {
+          userBasenames.add(name);
+        }
+      }
+    }
+  } catch {}
+
+  for (const dir of searchDirs) {
+    if (!dir) continue;
+    try {
+      const dirLst = fs.lstatSync(dir);
+      if (dirLst.isSymbolicLink() || !dirLst.isDirectory()) {
+        if (dirLst.isSymbolicLink()) skipped.push(dir);
+        continue;
+      }
+    } catch {
+      continue;
+    }
+
+    let names = [];
+    try {
+      names = fs.readdirSync(dir).filter((n) => n.endsWith('.desktop')).sort();
+    } catch {
+      continue;
+    }
+
+    for (const name of names) {
+      const filePath = path.join(dir, name);
+      if (seenFiles.has(filePath)) continue;
+      seenFiles.add(filePath);
+
+      let st;
+      try {
+        st = fs.lstatSync(filePath);
+      } catch {
+        continue;
+      }
+      if (st.isSymbolicLink()) {
+        skipped.push(filePath);
+        continue;
+      }
+      if (!st.isFile()) continue;
+
+      const isSystemOrRo = isLinuxReadOnlyOrSystemDesktopPath(filePath, systemDirs);
+      // 若系统目录的 .desktop 在用户 applications 目录已有同名条目，则遵循 XDG 优先级跳过
+      if (isSystemOrRo && userBasenames.has(name) && !isPathInsideDir(filePath, userAppsDir)) {
+        continue;
+      }
+
+      scanned += 1;
+      let rawContent = '';
+      try {
+        rawContent = fs.readFileSync(filePath, 'utf8');
+      } catch {
+        skipped.push(filePath);
+        continue;
+      }
+
+      const patchRes = patchDesktopEntryContent(rawContent, isSystemOrRo ? { shadowOf: filePath } : {});
+      if (!patchRes.matched) continue;
+      matched += 1;
+
+      if (!patchRes.changed) {
+        alreadySet.push(filePath);
+        continue;
+      }
+
+      if (isSystemOrRo) {
+        const shadowPath = path.join(userAppsDir, name);
+        if (isSymlinkPathSync(userAppsDir) || isSymlinkPathSync(shadowPath)) {
+          skipped.push(shadowPath);
+          continue;
+        }
+        try {
+          writeDesktopFileAtomicSync(shadowPath, patchRes.content, 0o644);
+          userBasenames.add(name);
+          patched.push(shadowPath);
+          shadowCreated.push({ shadowPath, originalPath: filePath });
+        } catch {
+          skipped.push(filePath);
+        }
+      } else {
+        try {
+          const mode = (st.mode & 0o777) || 0o644;
+          writeDesktopFileAtomicSync(filePath, patchRes.content, mode);
+          patched.push(filePath);
+        } catch {
+          skipped.push(filePath);
+        }
+      }
+    }
+  }
+
+  if (opts.pluginDir && patched.length > 0) {
+    const prev = readPatchedShortcutsRecord(opts.pluginDir);
+    writePatchedShortcutsRecord(opts.pluginDir, [...prev, ...patched]);
+  }
+
+  return {
+    supported: true,
+    scanned,
+    matched,
+    patched,
+    alreadySet,
+    skipped,
+    shadowCreated,
+  };
+}
+
+function restoreLinuxDesktopShortcutsCdpFlag(opts = {}) {
+  const defaults = getDefaultLinuxDesktopDirs(opts);
+  const userAppsDir = defaults.userAppsDir;
+  const searchDirs = Array.isArray(opts.searchDirs) && opts.searchDirs.length > 0
+    ? opts.searchDirs.map((d) => path.resolve(d))
+    : [userAppsDir, path.join(opts.homeDir ? path.resolve(opts.homeDir) : os.homedir(), 'Desktop')];
+  const systemDirs = Array.isArray(opts.systemDirs)
+    ? [...LINUX_DEFAULT_SYSTEM_DESKTOP_DIRS, ...opts.systemDirs.map((d) => path.resolve(d))]
+    : [...LINUX_DEFAULT_SYSTEM_DESKTOP_DIRS];
+
+  const recorded = opts.pluginDir ? readPatchedShortcutsRecord(opts.pluginDir) : [];
+  const candidates = new Set();
+  for (const p of recorded) {
+    if (typeof p === 'string' && p.endsWith('.desktop')) {
+      candidates.add(path.resolve(p));
+    }
+  }
+  for (const dir of searchDirs) {
+    if (!dir) continue;
+    try {
+      const dirLst = fs.lstatSync(dir);
+      if (dirLst.isSymbolicLink() || !dirLst.isDirectory()) continue;
+      for (const name of fs.readdirSync(dir)) {
+        if (name.endsWith('.desktop')) {
+          candidates.add(path.join(dir, name));
+        }
+      }
+    } catch {}
+  }
+
+  const restored = [];
+  const skipped = [];
+  const shadowRemoved = [];
+
+  for (const filePath of candidates) {
+    let st;
+    try {
+      st = fs.lstatSync(filePath);
+    } catch {
+      continue;
+    }
+    if (st.isSymbolicLink()) {
+      skipped.push(filePath);
+      continue;
+    }
+    if (!st.isFile()) continue;
+    if (isLinuxReadOnlyOrSystemDesktopPath(filePath, systemDirs)) {
+      continue;
+    }
+    let rawContent = '';
+    try {
+      rawContent = fs.readFileSync(filePath, 'utf8');
+    } catch {
+      skipped.push(filePath);
+      continue;
+    }
+    if (isManagedPrismDesktopContent(rawContent)) {
+      continue;
+    }
+    const shadowOf = readDesktopShadowMarker(rawContent);
+    if (shadowOf) {
+      try {
+        if (isSymlinkPathSync(path.dirname(filePath)) || isSymlinkPathSync(filePath)) {
+          skipped.push(filePath);
+          continue;
+        }
+        fs.unlinkSync(filePath);
+        restored.push(filePath);
+        shadowRemoved.push({ shadowPath: filePath, originalPath: shadowOf });
+      } catch {
+        skipped.push(filePath);
+      }
+      continue;
+    }
+    const stripped = stripDesktopEntryContent(rawContent);
+    if (!stripped.changed) continue;
+    try {
+      const mode = (st.mode & 0o777) || 0o644;
+      writeDesktopFileAtomicSync(filePath, stripped.content, mode);
+      restored.push(filePath);
+    } catch {
+      skipped.push(filePath);
+    }
+  }
+
+  if (opts.pluginDir) {
+    try {
+      const recFile = path.join(opts.pluginDir, PATCHED_SHORTCUTS_FILENAME);
+      if (fs.existsSync(recFile) && !isSymlinkPathSync(recFile)) fs.unlinkSync(recFile);
+    } catch {}
+  }
+
+  return {
+    supported: true,
+    restored,
+    skipped,
+    shadowRemoved,
+  };
+}
+
+// 严格按白名单正则读取 ~/.config/environment.d/90-obsidian-prism-gomemlimit.conf（零 source / eval，拦截 symlink）
+function readLinuxGoMemLimitFromEnvD(opts = {}) {
+  const env = opts.env || process.env;
+  const home = opts.homeDir ? path.resolve(opts.homeDir) : os.homedir();
+  const hasCustomHome = Boolean(opts.homeDir && path.resolve(opts.homeDir) !== path.resolve(os.homedir()));
+  const xdgConfig =
+    !hasCustomHome && env && typeof env.XDG_CONFIG_HOME === 'string' && env.XDG_CONFIG_HOME.trim()
+      ? path.resolve(env.XDG_CONFIG_HOME.trim())
+      : path.join(home, '.config');
+  const confPath = opts.envFile
+    ? path.resolve(opts.envFile)
+    : path.join(xdgConfig, 'environment.d', '90-obsidian-prism-gomemlimit.conf');
+  try {
+    const dir = path.dirname(confPath);
+    if (isSymlinkPathSync(dir) || isSymlinkPathSync(confPath)) return '';
+    const st = fs.lstatSync(confPath);
+    if (!st.isFile()) return '';
+    const lines = fs.readFileSync(confPath, 'utf8').split(/\r?\n/);
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+      if (!line || line.startsWith('#')) continue;
+      const m = LINUX_GOMEMLIMIT_LINE_RE.exec(line);
+      if (m && m[1]) return m[1];
+    }
+    return '';
+  } catch {
+    return '';
+  }
 }
 
 // 异步非阻塞版：供常驻 Daemon 事件循环后台巡检快捷方式，避免 execFileSync 卡死 CDP RPC 与 Omni 流式媒体
 async function ensureAntigravityShortcutsCdpFlagAsync(opts = {}) {
-  const isWinPlatform = opts.platformOverride ? opts.platformOverride === 'win32' : IS_WIN;
+  const effectivePlatform = opts.platformOverride || process.platform;
+  if (effectivePlatform === 'linux' && typeof opts.shortcutAdapter !== 'function') {
+    return ensureLinuxDesktopShortcutsCdpFlag(opts);
+  }
+  const isWinPlatform = effectivePlatform === 'win32';
   if (!isWinPlatform && typeof opts.shortcutAdapter !== 'function') {
     return { supported: false, scanned: 0, matched: 0, patched: [], alreadySet: [], skipped: [] };
   }
@@ -900,9 +2154,13 @@ async function ensureAntigravityShortcutsCdpFlagAsync(opts = {}) {
   }
 }
 
-// 扫描并无损为 Antigravity.lnk 补齐 --remote-debugging-port=0（支持真实 Windows COM 与注入式沙箱适配器）
+// 扫描并无损为 Antigravity 快捷方式（Windows .lnk / Linux XDG .desktop）补齐 --remote-debugging-port=0
 function ensureAntigravityShortcutsCdpFlag(opts = {}) {
-  const isWinPlatform = opts.platformOverride ? opts.platformOverride === 'win32' : IS_WIN;
+  const effectivePlatform = opts.platformOverride || process.platform;
+  if (effectivePlatform === 'linux' && typeof opts.shortcutAdapter !== 'function') {
+    return ensureLinuxDesktopShortcutsCdpFlag(opts);
+  }
+  const isWinPlatform = effectivePlatform === 'win32';
   if (!isWinPlatform && typeof opts.shortcutAdapter !== 'function') {
     return { supported: false, scanned: 0, matched: 0, patched: [], alreadySet: [], skipped: [] };
   }
@@ -951,9 +2209,13 @@ function ensureAntigravityShortcutsCdpFlag(opts = {}) {
   }
 }
 
-// 卸载时精准剥离 Antigravity.lnk 中的 --remote-debugging-port=0 并保留用户原有其他启动参数
+// 卸载时精准剥离 Antigravity 快捷方式（Windows .lnk / Linux XDG .desktop + Shadow Copy 撤回）中的 --remote-debugging-port=0
 function restoreAntigravityShortcutsCdpFlag(opts = {}) {
-  const isWinPlatform = opts.platformOverride ? opts.platformOverride === 'win32' : IS_WIN;
+  const effectivePlatform = opts.platformOverride || process.platform;
+  if (effectivePlatform === 'linux' && typeof opts.shortcutAdapter !== 'function') {
+    return restoreLinuxDesktopShortcutsCdpFlag(opts);
+  }
+  const isWinPlatform = effectivePlatform === 'win32';
   if (!isWinPlatform && typeof opts.shortcutAdapter !== 'function') {
     return { supported: false, restored: [], skipped: [] };
   }
@@ -994,39 +2256,253 @@ function restoreAntigravityShortcutsCdpFlag(opts = {}) {
   }
 }
 
-const WIN_HOST_PROBE_PS = [
-  '$ErrorActionPreference = "SilentlyContinue"',
-  '$ProgressPreference = "SilentlyContinue"',
-  '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8',
-  '$procs = @(Get-Process -Name "Antigravity" -ErrorAction SilentlyContinue)',
-  'if ($procs.Count -eq 0) { Write-Output "[]"; exit 0 }',
-  '$filter = ($procs | ForEach-Object { "ProcessId = " + $_.Id }) -join " OR "',
-  '$cimMap = @{}',
-  'try {',
-  '  foreach ($c in @(Get-CimInstance Win32_Process -Filter $filter -ErrorAction SilentlyContinue)) {',
-  '    $cimMap[[int]$c.ProcessId] = $c',
-  '  }',
-  '} catch {}',
-  '$out = @(foreach ($p in $procs) {',
-  '  $st = 0',
-  '  try { $st = [long]([DateTimeOffset]$p.StartTime).ToUnixTimeMilliseconds() } catch {}',
-  '  $cim = $cimMap[[int]$p.Id]',
-  '  $exe = ""',
-  '  try { $exe = [string]$p.Path } catch {}',
-  '  if (-not $exe -and $cim) { $exe = [string]$cim.ExecutablePath }',
-  '  $cmd = if ($cim) { [string]$cim.CommandLine } else { "" }',
-  '  [pscustomobject]@{',
-  '    pid = [int]$p.Id',
-  '    imageName = [string]$p.ProcessName',
-  '    startMs = $st',
-  '    exePath = $exe',
-  '    commandLine = $cmd',
-  '  }',
-  '})',
-  'if ($out.Count -eq 0) { Write-Output "[]" } elseif ($out.Count -eq 1) { Write-Output ("[" + ($out[0] | ConvertTo-Json -Compress) + "]") } else { $out | ConvertTo-Json -Compress }',
-].join('\n');
+function isElectronHostBinaryPath(rawPath) {
+  const s = String(rawPath || '').trim();
+  if (!s) return false;
+  const base = path.basename(s);
+  if (/^(?:antigravity|agy)(?:\.exe)?$/i.test(base)) return true;
+  if (/Antigravity(?:\s+Helper(?:\s+\([^)]+\))?)?\.app[\\/]Contents[\\/]MacOS[\\/]/i.test(s)) return true;
+  return false;
+}
 
-const WIN_HOST_PROBE_B64 = Buffer.from(WIN_HOST_PROBE_PS, 'utf16le').toString('base64');
+function resolveWindowsDetachedNodeRuntime(opts = {}) {
+  const raw = String(opts.nodeExecPath || process.execPath || '').trim();
+  const existsFn = typeof opts.existsSync === 'function' ? opts.existsSync : fs.existsSync;
+  const execFn = typeof opts.execFileSyncFn === 'function' ? opts.execFileSyncFn : execFileSync;
+  if (raw && !isElectronHostBinaryPath(raw)) {
+    return { execPath: path.resolve(raw), useElectronAsNode: false };
+  }
+  const candidates = [];
+  try {
+    const out = execFn('where.exe', ['node.exe'], {
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: 3000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    for (const line of String(out || '').split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (trimmed) candidates.push(trimmed);
+    }
+  } catch {}
+  for (const cand of candidates) {
+    if (isElectronHostBinaryPath(cand)) continue;
+    try {
+      if (existsFn(cand)) {
+        return { execPath: path.resolve(cand), useElectronAsNode: false };
+      }
+    } catch {}
+  }
+  if (raw) {
+    return { execPath: path.resolve(raw), useElectronAsNode: true };
+  }
+  return { execPath: process.execPath, useElectronAsNode: isElectronHostBinaryPath(process.execPath) };
+}
+
+function normalizeLoopbackPort(rawPort) {
+  const n = Number(rawPort);
+  return Number.isInteger(n) && n >= 1 && n <= 65535 ? n : 0;
+}
+
+function readPortFromCustomOrDefaultFile(portFile = null) {
+  if (portFile) {
+    try {
+      const text = fs.readFileSync(portFile, 'utf8');
+      const port = parseInt(text.split(/\r?\n/)[0].trim(), 10);
+      return normalizeLoopbackPort(port) || null;
+    } catch {
+      return null;
+    }
+  }
+  return normalizeLoopbackPort(readPort()) || null;
+}
+
+function isAntigravityCdpVersionInfo(info, port) {
+  if (!info || typeof info !== 'object') return false;
+  const browserSig = `${String(info.Browser || '')} ${String(info['User-Agent'] || '')}`;
+  if (/\bEdg\//i.test(browserSig) && !/\bAntigravity\b/i.test(browserSig)) {
+    return false;
+  }
+  const wsUrl = typeof info.webSocketDebuggerUrl === 'string' ? info.webSocketDebuggerUrl.trim() : '';
+  if (!wsUrl) return false;
+  try {
+    const parsed = new URL(wsUrl);
+    const hostOk = parsed.hostname === '127.0.0.1' || parsed.hostname === 'localhost' || parsed.hostname === '[::1]';
+    const portNum = parsed.port ? Number(parsed.port) : 80;
+    return parsed.protocol === 'ws:' && hostOk && portNum === port && parsed.pathname.startsWith('/devtools/browser/');
+  } catch {
+    return false;
+  }
+}
+
+async function probeLoopbackCdpVersionAsync(port, opts = {}) {
+  const p = normalizeLoopbackPort(port);
+  if (!p) return false;
+  if (typeof opts.probeCdpVersionAsync === 'function') {
+    return Boolean(await opts.probeCdpVersionAsync(p));
+  }
+  const fetchImpl = typeof opts.fetchImpl === 'function' ? opts.fetchImpl : globalThis.fetch;
+  if (typeof fetchImpl !== 'function') return false;
+  const timeoutMs = Math.max(200, Math.min(5000, Number(opts.timeoutMs) || 1000));
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetchImpl(`http://127.0.0.1:${p}/json/version`, { signal: controller.signal });
+    if (!res || !res.ok) return false;
+    const info = await res.json();
+    return isAntigravityCdpVersionInfo(info, p);
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function probeLoopbackCdpVersionSync(port, opts = {}) {
+  const p = normalizeLoopbackPort(port);
+  if (!p) return false;
+  if (typeof opts.probeCdpVersionSync === 'function') {
+    return Boolean(opts.probeCdpVersionSync(p));
+  }
+  const timeoutMs = Math.max(200, Math.min(4000, Number(opts.timeoutMs) || 1000));
+  const runtime = resolveWindowsDetachedNodeRuntime(opts);
+  const env = { ...process.env };
+  if (runtime.useElectronAsNode) env.ELECTRON_RUN_AS_NODE = '1';
+  else delete env.ELECTRON_RUN_AS_NODE;
+  const probeCode = [
+    "const http = require('node:http');",
+    `const req = http.get({ host: '127.0.0.1', port: ${p}, path: '/json/version', timeout: ${timeoutMs} }, (res) => {`,
+    "  if (res.statusCode !== 200) { process.exit(1); }",
+    "  let body = '';",
+    "  res.setEncoding('utf8');",
+    "  res.on('data', (c) => { body += c; if (body.length > 65536) process.exit(1); });",
+    "  res.on('end', () => {",
+    "    try {",
+    "      const info = JSON.parse(body);",
+    "      const sig = String(info.Browser || '') + ' ' + String(info['User-Agent'] || '');",
+    "      if (/\\bEdg\\//i.test(sig) && !/\\bAntigravity\\b/i.test(sig)) process.exit(1);",
+    "      const u = new URL(String(info.webSocketDebuggerUrl || ''));",
+    `      const ok = u.protocol === 'ws:' && (u.hostname === '127.0.0.1' || u.hostname === 'localhost' || u.hostname === '[::1]') && Number(u.port || 80) === ${p} && u.pathname.startsWith('/devtools/browser/');`,
+    "      process.exit(ok ? 0 : 1);",
+    "    } catch { process.exit(1); }",
+    "  });",
+    "});",
+    "req.on('timeout', () => { try { req.destroy(); } catch {} process.exit(1); });",
+    "req.on('error', () => process.exit(1));",
+  ].join(' ');
+  try {
+    execFileSync(runtime.execPath, ['-e', probeCode], {
+      env,
+      windowsHide: true,
+      timeout: timeoutMs + 1000,
+      stdio: 'ignore',
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function resolveInstalledAntigravityExeWin(opts = {}) {
+  const env = (opts && opts.env) || process.env;
+  const existsFn = typeof opts.existsSync === 'function' ? opts.existsSync : fs.existsSync;
+  if (opts && typeof opts.exePath === 'string' && opts.exePath.trim()) {
+    return opts.exePath.trim();
+  }
+  const localApp = (env && env.LOCALAPPDATA) || path.join(os.homedir(), 'AppData', 'Local');
+  const progFiles = (env && env.ProgramFiles) || 'C:\\Program Files';
+  const candidates = [
+    path.join(localApp, 'Programs', 'antigravity', 'Antigravity.exe'),
+    path.join(localApp, 'antigravity', 'Antigravity.exe'),
+    path.join(progFiles, 'Antigravity', 'Antigravity.exe'),
+  ];
+  if (isElectronHostBinaryPath(process.execPath) && String(process.execPath).toLowerCase().endsWith('.exe')) {
+    candidates.unshift(process.execPath);
+  }
+  for (const c of candidates) {
+    try {
+      if (existsFn(c)) return c;
+    } catch {}
+  }
+  return candidates[0];
+}
+
+function collectKnownPrismDaemonPids(opts = {}) {
+  const excluded = new Set([process.pid]);
+  if (Array.isArray(opts.excludePids)) {
+    for (const p of opts.excludePids) {
+      const n = Number(p);
+      if (Number.isInteger(n) && n > 0) excluded.add(n);
+    }
+  }
+  const lockFiles = Array.isArray(opts.daemonPidFiles)
+    ? opts.daemonPidFiles
+    : [
+        path.join(__dirname, '.daemon.pid'),
+        path.join(__dirname, '.watch.pid'),
+        process.env.AG_PRISM_PLUGIN_DIR ? path.join(process.env.AG_PRISM_PLUGIN_DIR, '.daemon.pid') : '',
+        path.join(os.homedir(), '.gemini', 'config', 'plugins', 'obsidian-prism', '.daemon.pid'),
+      ];
+  for (const lf of lockFiles) {
+    if (!lf) continue;
+    const pid = readPidFromLockFile(lf);
+    if (pid && pid > 0) excluded.add(pid);
+  }
+  return excluded;
+}
+
+function readAntigravitySessionStartHintMs(opts = {}) {
+  const dataDir =
+    (opts && opts.antigravityDataDir) ||
+    path.join(APP_DATA, 'Antigravity');
+  const candidates = [
+    opts && opts.portFile ? opts.portFile : path.join(dataDir, 'DevToolsActivePort'),
+    path.join(dataDir, 'lockfile'),
+    path.join(dataDir, 'SingletonLock'),
+  ];
+  for (const p of candidates) {
+    try {
+      const st = fs.statSync(p);
+      if (st && st.mtimeMs > 0) return Math.round(st.mtimeMs);
+    } catch {}
+  }
+  return 0;
+}
+
+const WIN_NON_MAIN_TITLES_RE = /^(?:|n\/a|暂缺|olemainthreadwndname|default ime|msctfime ui)$/i;
+
+function isMeaningfulWindowsHostTitle(rawTitle) {
+  const t = String(rawTitle || '').trim();
+  if (!t || WIN_NON_MAIN_TITLES_RE.test(t)) return false;
+  // 中文 CP936 "暂缺" 在 UTF-8 解码下为短替换符串（<=4 字符且全是 U+FFFD 或非可见 ASCII）
+  if (t.length <= 4 && /^[\ufffd\x80-\xff]+$/.test(t)) return false;
+  return true;
+}
+
+function buildWindowsHostCandidatesFromTasklist(csvText, opts = {}) {
+  const rows = parseWindowsTasklistCsv(csvText);
+  if (rows.length === 0) return [];
+  const excluded = collectKnownPrismDaemonPids(opts);
+  const matching = rows.filter(
+    (r) => r.imageName.toLowerCase() === 'antigravity.exe' && !excluded.has(r.pid)
+  );
+  if (matching.length === 0) return [];
+
+  const withTitle = matching.filter((r) => isMeaningfulWindowsHostTitle(r.windowTitle));
+  const selectedRows = withTitle.length > 0 ? withTitle : matching;
+  const exePath = resolveInstalledAntigravityExeWin(opts);
+  const hasActiveCdp = Boolean(opts.hasActiveCdp);
+  const startMsHint = Number(opts.startMsHint) > 0 ? Number(opts.startMsHint) : readAntigravitySessionStartHintMs(opts);
+  const commandLine = hasActiveCdp ? `"${exePath}" ${CDP_OPT_IN_SWITCH}` : `"${exePath}"`;
+
+  return selectedRows.map((r) => ({
+    pid: r.pid,
+    imageName: r.imageName,
+    startMs: startMsHint,
+    exePath,
+    commandLine,
+  }));
+}
 
 // 解析 POSIX `ps -axo pid=,etime=,comm=,args=` 的 BSD/Linux etime（[[dd-]hh:]mm:ss）为毫秒
 function parsePsElapsedMs(etimeStr) {
@@ -1076,7 +2552,79 @@ function selectPrimaryHostCandidate(candidates, nowMs = Date.now()) {
   return mains[0];
 }
 
-function parsePosixPsHostCandidates(psStdout, nowMs = Date.now()) {
+function extractPosixCommandExecutable(cmdLine) {
+  const s = String(cmdLine || '').trim();
+  if (!s) return '';
+  if (s[0] === '"' || s[0] === "'") {
+    const q = s[0];
+    let out = '';
+    for (let i = 1; i < s.length; i++) {
+      const ch = s[i];
+      if (q === '"' && ch === '\\' && i + 1 < s.length) {
+        out += s[i + 1];
+        i += 1;
+        continue;
+      }
+      if (ch === q) break;
+      out += ch;
+    }
+    return out;
+  }
+  const macAppIdx = s.indexOf('.app/Contents/MacOS/');
+  if (macAppIdx > 0) {
+    const slashAfter = s.indexOf(' ', macAppIdx + 20);
+    return slashAfter > 0 ? s.slice(0, slashAfter) : s;
+  }
+  const linuxSpacedMatch = /^(\/[^\0]*?\/(?:antigravity(?:[-_.][^\s/]+\.appimage|\.appimage)?))(?=\s|$)/i.exec(s);
+  if (linuxSpacedMatch && linuxSpacedMatch[1]) {
+    return linuxSpacedMatch[1];
+  }
+  const spIdx = s.indexOf(' ');
+  return spIdx > 0 ? s.slice(0, spIdx) : s;
+}
+
+function parseAppImageFromProcEnviron(rawEnviron) {
+  if (!rawEnviron) return '';
+  const text = Buffer.isBuffer(rawEnviron) ? rawEnviron.toString('utf8') : String(rawEnviron);
+  const parts = text.split(/\0|\r?\n/);
+  for (const entry of parts) {
+    if (entry.startsWith('APPIMAGE=')) {
+      const val = entry.slice('APPIMAGE='.length).trim();
+      if (val) return val;
+    }
+  }
+  return '';
+}
+
+function parsePosixPsHostCandidates(psStdout, nowMs = Date.now(), opts = null) {
+  const effectivePlatform = (opts && opts.platformOverride) || process.platform;
+  const isMacPlatform = effectivePlatform === 'darwin';
+  const isLinuxPlatform = effectivePlatform === 'linux';
+  const readProcExe =
+    opts && typeof opts.readProcExe === 'function'
+      ? opts.readProcExe
+      : isLinuxPlatform && IS_LINUX
+        ? (pid) => {
+            try {
+              return fs.readlinkSync(`/proc/${pid}/exe`);
+            } catch {
+              return '';
+            }
+          }
+        : null;
+  const readProcEnviron =
+    opts && typeof opts.readProcEnviron === 'function'
+      ? opts.readProcEnviron
+      : isLinuxPlatform && IS_LINUX
+        ? (pid) => {
+            try {
+              return fs.readFileSync(`/proc/${pid}/environ`);
+            } catch {
+              return '';
+            }
+          }
+        : null;
+
   const lines = String(psStdout || '').split(/\r?\n/);
   const list = [];
   for (const rawLine of lines) {
@@ -1087,26 +2635,55 @@ function parsePosixPsHostCandidates(psStdout, nowMs = Date.now()) {
     const pid = parseInt(m[1], 10);
     const elapsedMs = parsePsElapsedMs(m[2]);
     const cmdLine = m[3].trim();
-    if (!cmdLine.toLowerCase().includes('antigravity')) continue;
-    let firstExe = cmdLine;
-    const macAppIdx = cmdLine.indexOf('.app/Contents/MacOS/');
-    if (macAppIdx > 0) {
-      const slashAfter = cmdLine.indexOf(' ', macAppIdx + 20);
-      firstExe = slashAfter > 0 ? cmdLine.slice(0, slashAfter) : cmdLine;
-    } else {
-      const spIdx = cmdLine.indexOf(' ');
-      firstExe = spIdx > 0 ? cmdLine.slice(0, spIdx) : cmdLine;
+    const lowCmd = cmdLine.toLowerCase();
+    const looksRelevant = lowCmd.includes('antigravity') || lowCmd.includes('.mount_antigr');
+    let procExe = '';
+    let appImagePath = '';
+    if (isLinuxPlatform && (looksRelevant || (opts && opts.probeAllProc))) {
+      if (readProcExe) {
+        try {
+          procExe = String(readProcExe(pid) || '').replace(/\s+\(deleted\)$/, '').trim();
+        } catch {
+          procExe = '';
+        }
+      }
+      if (readProcEnviron) {
+        try {
+          appImagePath = parseAppImageFromProcEnviron(readProcEnviron(pid));
+        } catch {
+          appImagePath = '';
+        }
+      }
     }
+    if (!looksRelevant && !isAntigravityLinuxTarget(procExe) && !isAntigravityLinuxTarget(appImagePath)) {
+      continue;
+    }
+    const firstExe = extractPosixCommandExecutable(cmdLine);
     let appBundlePath = firstExe;
     const appEnd = firstExe.indexOf('.app/');
     if (appEnd > 0) {
       appBundlePath = firstExe.slice(0, appEnd + 4);
     }
+    let resolvedExePath = isMacPlatform && appBundlePath.endsWith('.app') ? appBundlePath : firstExe;
+    let resolvedImageName = firstExe;
+    if (isLinuxPlatform) {
+      if (appImagePath && isAntigravityLinuxTarget(appImagePath)) {
+        resolvedExePath = appImagePath;
+        if (!isAntigravityLinuxTarget(resolvedImageName)) {
+          resolvedImageName = appImagePath;
+        }
+      } else if (procExe && isAntigravityLinuxTarget(procExe)) {
+        resolvedExePath = procExe;
+        if (!isAntigravityLinuxTarget(resolvedImageName)) {
+          resolvedImageName = procExe;
+        }
+      }
+    }
     list.push({
       pid,
-      imageName: firstExe,
+      imageName: resolvedImageName,
       startMs: elapsedMs > 0 ? Math.max(1, nowMs - elapsedMs) : 0,
-      exePath: IS_MAC && appBundlePath.endsWith('.app') ? appBundlePath : firstExe,
+      exePath: resolvedExePath,
       commandLine: cmdLine,
     });
   }
@@ -1118,24 +2695,30 @@ function detectRunningAntigravityHostSync(opts = {}) {
   if (typeof opts.probeProcesses === 'function') {
     return selectPrimaryHostCandidate(opts.probeProcesses(), nowMs);
   }
+  const effectivePlatform = opts.platformOverride || process.platform;
+  const execSyncFn = typeof opts.execFileSyncFn === 'function' ? opts.execFileSyncFn : execFileSync;
   try {
-    if (IS_WIN) {
-      const out = execFileSync(
-        'powershell.exe',
-        ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', WIN_HOST_PROBE_B64],
+    if (effectivePlatform === 'win32') {
+      const out = execSyncFn(
+        'tasklist',
+        ['/FI', 'IMAGENAME eq Antigravity.exe', '/V', '/FO', 'CSV', '/NH'],
         { encoding: 'utf8', windowsHide: true, timeout: 6000, stdio: ['ignore', 'pipe', 'ignore'] }
       );
-      const trimmed = String(out || '').trim();
-      if (!trimmed) return null;
-      const parsed = JSON.parse(trimmed);
-      return selectPrimaryHostCandidate(Array.isArray(parsed) ? parsed : [parsed], nowMs);
+      const preliminary = buildWindowsHostCandidatesFromTasklist(out, { ...opts, hasActiveCdp: false });
+      if (preliminary.length === 0) return null;
+      const activePort = opts.cdpPort !== undefined ? normalizeLoopbackPort(opts.cdpPort) : readPortFromCustomOrDefaultFile(opts.portFile || null);
+      const hasActiveCdp = activePort > 0 ? probeLoopbackCdpVersionSync(activePort, opts) : false;
+      const candidates = hasActiveCdp
+        ? buildWindowsHostCandidatesFromTasklist(out, { ...opts, hasActiveCdp: true })
+        : preliminary;
+      return selectPrimaryHostCandidate(candidates, nowMs);
     }
-    const psOut = execFileSync('ps', ['-axo', 'pid=,etime=,args='], {
+    const psOut = execSyncFn('ps', ['-axo', 'pid=,etime=,args='], {
       encoding: 'utf8',
       timeout: 3000,
       stdio: ['ignore', 'pipe', 'ignore'],
     });
-    return selectPrimaryHostCandidate(parsePosixPsHostCandidates(psOut, nowMs), nowMs);
+    return selectPrimaryHostCandidate(parsePosixPsHostCandidates(psOut, nowMs, opts), nowMs);
   } catch {
     return null;
   }
@@ -1146,33 +2729,44 @@ function detectRunningAntigravityHost(opts = {}) {
   if (typeof opts.probeProcesses === 'function') {
     return Promise.resolve(opts.probeProcesses()).then((list) => selectPrimaryHostCandidate(list, nowMs));
   }
+  const effectivePlatform = opts.platformOverride || process.platform;
+  const execFn = typeof opts.execFileFn === 'function' ? opts.execFileFn : execFile;
   return new Promise((resolve) => {
-    if (IS_WIN) {
-      execFile(
-        'powershell.exe',
-        ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', WIN_HOST_PROBE_B64],
+    if (effectivePlatform === 'win32') {
+      execFn(
+        'tasklist',
+        ['/FI', 'IMAGENAME eq Antigravity.exe', '/V', '/FO', 'CSV', '/NH'],
         { encoding: 'utf8', windowsHide: true, timeout: 6000, maxBuffer: 1024 * 1024 },
         (err, stdout) => {
           if (err) {
             resolve(null);
             return;
           }
-          try {
-            const trimmed = String(stdout || '').trim();
-            if (!trimmed) {
+          (async () => {
+            try {
+              const preliminary = buildWindowsHostCandidatesFromTasklist(stdout, { ...opts, hasActiveCdp: false });
+              if (preliminary.length === 0) {
+                resolve(null);
+                return;
+              }
+              const activePort =
+                opts.cdpPort !== undefined
+                  ? normalizeLoopbackPort(opts.cdpPort)
+                  : readPortFromCustomOrDefaultFile(opts.portFile || null);
+              const hasActiveCdp = activePort > 0 ? await probeLoopbackCdpVersionAsync(activePort, opts) : false;
+              const candidates = hasActiveCdp
+                ? buildWindowsHostCandidatesFromTasklist(stdout, { ...opts, hasActiveCdp: true })
+                : preliminary;
+              resolve(selectPrimaryHostCandidate(candidates, nowMs));
+            } catch {
               resolve(null);
-              return;
             }
-            const parsed = JSON.parse(trimmed);
-            resolve(selectPrimaryHostCandidate(Array.isArray(parsed) ? parsed : [parsed], nowMs));
-          } catch {
-            resolve(null);
-          }
+          })();
         }
       );
       return;
     }
-    execFile(
+    execFn(
       'ps',
       ['-axo', 'pid=,etime=,args='],
       { encoding: 'utf8', timeout: 3000, maxBuffer: 2 * 1024 * 1024 },
@@ -1181,7 +2775,7 @@ function detectRunningAntigravityHost(opts = {}) {
           resolve(null);
           return;
         }
-        resolve(selectPrimaryHostCandidate(parsePosixPsHostCandidates(stdout, nowMs), nowMs));
+        resolve(selectPrimaryHostCandidate(parsePosixPsHostCandidates(stdout, nowMs, opts), nowMs));
       }
     );
   });
@@ -1201,6 +2795,10 @@ function getRelaunchPromptStatePaths(pluginDir, extraDirs = []) {
     } else if (IS_MAC) {
       const macWatcherDir = path.join(os.homedir(), 'Library', 'Application Support', 'obsidian-prism');
       if (fs.existsSync(macWatcherDir)) dirs.push(macWatcherDir);
+    } else if (IS_LINUX) {
+      const xdgState = process.env.XDG_STATE_HOME || path.join(os.homedir(), '.local', 'state');
+      const linuxStateDir = path.join(xdgState, 'obsidian-prism');
+      if (fs.existsSync(linuxStateDir)) dirs.push(linuxStateDir);
     }
   }
   const uniq = [];
@@ -1296,19 +2894,7 @@ function recordRelaunchPromptState(pluginDir, hostPid, hostStartMs = 0, decision
   return payload;
 }
 
-const WIN_MESSAGEBOX_PS = [
-  '$ErrorActionPreference = "SilentlyContinue"',
-  'Add-Type -AssemblyName System.Windows.Forms',
-  '$res = [System.Windows.Forms.MessageBox]::Show(',
-  '  [string]$env:AG_PRISM_DLG_BODY,',
-  '  [string]$env:AG_PRISM_DLG_TITLE,',
-  '  [System.Windows.Forms.MessageBoxButtons]::YesNo,',
-  '  [System.Windows.Forms.MessageBoxIcon]::Information',
-  ')',
-  'Write-Output ([string]$res)',
-].join('\n');
-
-const WIN_MESSAGEBOX_B64 = Buffer.from(WIN_MESSAGEBOX_PS, 'utf16le').toString('base64');
+// Windows 桌面弹窗交由原生 C# 图形安装器/Watcher 处理，Node 侧不再派生 PowerShell MessageBox
 
 const MAC_DIALOG_APPLESCRIPT = [
   'on run argv',
@@ -1321,8 +2907,89 @@ const MAC_DIALOG_APPLESCRIPT = [
   'end run',
 ].join('\n');
 
-function buildRelaunchDialogCopy(lang = 'zh-CN') {
-  const low = String(lang || 'zh-CN').toLowerCase();
+let _cachedWinUiLocale = undefined;
+let _winUiLocaleReaderOverride = null;
+
+function _setWindowsUiLocaleReaderForTest(fn) {
+  _winUiLocaleReaderOverride = typeof fn === 'function' ? fn : null;
+  _cachedWinUiLocale = undefined;
+}
+
+function parseRegMultiSzFirstLocale(output) {
+  const lines = String(output || '').split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const m = /\bREG_(?:MULTI_)?SZ\s+(.+)$/i.exec(lines[i]);
+    if (!m) continue;
+    const parts = m[1].split(/\\0|\s+/).map((s) => s.trim()).filter(Boolean);
+    for (let j = 0; j < parts.length; j++) {
+      if (/^[a-z]{2,3}(?:-[a-z0-9]{2,8})*$/i.test(parts[j])) {
+        return parts[j];
+      }
+    }
+  }
+  return '';
+}
+
+function readWindowsPreferredUiLanguage() {
+  if (_winUiLocaleReaderOverride) {
+    try {
+      return String(_winUiLocaleReaderOverride() || '').trim();
+    } catch {
+      return '';
+    }
+  }
+  if (!IS_WIN) return '';
+  if (_cachedWinUiLocale !== undefined) return _cachedWinUiLocale;
+  const keys = [
+    ['HKCU\\Control Panel\\Desktop', 'PreferredUILanguages'],
+    ['HKCU\\Control Panel\\Desktop\\MuiCached', 'MachinePreferredUILanguages'],
+  ];
+  let found = '';
+  for (let i = 0; i < keys.length; i++) {
+    try {
+      const out = execFileSync('reg.exe', ['query', keys[i][0], '/v', keys[i][1]], {
+        encoding: 'utf8',
+        windowsHide: true,
+        timeout: 1500,
+      });
+      const parsed = parseRegMultiSzFirstLocale(out);
+      if (parsed) {
+        found = parsed;
+        break;
+      }
+    } catch {}
+  }
+  _cachedWinUiLocale = found;
+  return found;
+}
+
+function detectSystemUiLocale(opts = null) {
+  try {
+    const candidates = [process.env.LC_ALL, process.env.LC_MESSAGES, process.env.LANG];
+    for (let i = 0; i < candidates.length; i++) {
+      const val = String(candidates[i] || '').trim();
+      if (val && !/^(?:c|posix)(?:[.@]|$)/i.test(val)) {
+        return val;
+      }
+    }
+    if (!opts?.bypassWinUiLocale) {
+      if (typeof opts?.winUiLocaleReader === 'function') {
+        const custom = String(opts.winUiLocaleReader() || '').trim();
+        if (custom) return custom;
+      } else {
+        const winUi = readWindowsPreferredUiLanguage();
+        if (winUi) return winUi;
+      }
+    }
+    return Intl.DateTimeFormat().resolvedOptions().locale || '';
+  } catch {
+    return '';
+  }
+}
+
+function buildRelaunchDialogCopy(lang = 'auto') {
+  const rawLang = !lang || String(lang).trim().toLowerCase() === 'auto' ? detectSystemUiLocale() : lang;
+  const low = String(rawLang || 'en').toLowerCase();
   const isZh = low.startsWith('zh') || low === 'yue';
   if (isZh) {
     return {
@@ -1347,46 +3014,102 @@ function buildRelaunchDialogCopy(lang = 'zh-CN') {
 }
 
 function promptUserForHostRelaunch(opts = {}) {
-  const copy = buildRelaunchDialogCopy(opts.lang || 'zh-CN');
+  const copy = buildRelaunchDialogCopy(opts.lang || 'auto');
   if (typeof opts.dialogHook === 'function') {
     return Promise.resolve(opts.dialogHook(copy)).then((ans) => Boolean(ans));
   }
+  const effectivePlatform = opts.platformOverride || process.platform;
+  const execFn = typeof opts.execFileFn === 'function' ? opts.execFileFn : execFile;
+  const env = opts.env || process.env;
   return new Promise((resolve) => {
-    if (IS_WIN) {
-      execFile(
-        'powershell.exe',
-        ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', WIN_MESSAGEBOX_B64],
-        {
-          encoding: 'utf8',
-          windowsHide: true,
-          timeout: 120000,
-          env: {
-            ...process.env,
-            AG_PRISM_DLG_TITLE: copy.title,
-            AG_PRISM_DLG_BODY: copy.body,
-          },
-        },
-        (err, stdout) => {
-          if (err) {
-            resolve(false);
-            return;
-          }
-          resolve(String(stdout || '').trim().toLowerCase() === 'yes');
+    if (effectivePlatform === 'win32') {
+      // Windows 图形弹窗统一交由原生 C# 安装器/Watcher 处理，Node 侧仅输出清晰 CLI 提示并返回 false（零 PowerShell 弹窗）
+      const notice = {
+        title: copy.title,
+        body: copy.body,
+        actionRequired: true,
+        handledBy: 'cli-notice',
+      };
+      if (typeof opts.onCliNotice === 'function') {
+        try {
+          opts.onCliNotice(notice);
+        } catch {}
+      } else if (!opts.silent) {
+        const stream = opts.outputStream || process.stderr;
+        if (stream && typeof stream.write === 'function') {
+          try {
+            stream.write(`\n[${copy.title}] ${copy.body}\n`);
+          } catch {}
         }
-      );
+      }
+      resolve(false);
       return;
     }
-    if (IS_MAC) {
-      execFile(
+    if (effectivePlatform === 'darwin') {
+      execFn(
         'osascript',
         ['-e', MAC_DIALOG_APPLESCRIPT, copy.body, copy.title, copy.laterBtn, copy.relaunchBtn],
-        { encoding: 'utf8', timeout: 120000 },
+        { encoding: 'utf8', timeout: 120000, env },
         (err, stdout) => {
           if (err) {
             resolve(false);
             return;
           }
           resolve(String(stdout || '').trim() === copy.relaunchBtn);
+        }
+      );
+      return;
+    }
+    if (effectivePlatform === 'linux') {
+      const hasGuiSession = Boolean(
+        (env && typeof env.DISPLAY === 'string' && env.DISPLAY.trim()) ||
+          (env && typeof env.WAYLAND_DISPLAY === 'string' && env.WAYLAND_DISPLAY.trim())
+      );
+      if (!hasGuiSession) {
+        resolve(false);
+        return;
+      }
+      execFn(
+        'zenity',
+        [
+          '--question',
+          '--no-markup',
+          '--title',
+          copy.title,
+          '--text',
+          copy.body,
+          '--ok-label',
+          copy.relaunchBtn,
+          '--cancel-label',
+          copy.laterBtn,
+        ],
+        { encoding: 'utf8', timeout: 120000, env },
+        (zenityErr) => {
+          if (!zenityErr) {
+            resolve(true);
+            return;
+          }
+          if (zenityErr.code !== 'ENOENT') {
+            resolve(false);
+            return;
+          }
+          execFn(
+            'kdialog',
+            [
+              '--title',
+              copy.title,
+              '--yesno',
+              copy.body,
+              '--yes-label',
+              copy.relaunchBtn,
+              '--no-label',
+              copy.laterBtn,
+            ],
+            { encoding: 'utf8', timeout: 120000, env },
+            (kdialogErr) => {
+              resolve(!kdialogErr);
+            }
+          );
         }
       );
       return;
@@ -1440,60 +3163,379 @@ async function executeHostRelaunchSequence(task, hooks = {}) {
   return { relaunched: true, exePath, args: [CDP_OPT_IN_SWITCH] };
 }
 
-const WIN_DETACHED_RELAUNCH_PS = [
-  '$ErrorActionPreference = "SilentlyContinue"',
-  '$taskFile = [string]$env:AG_PRISM_RELAUNCH_TASK_FILE',
-  'if (-not $taskFile -or -not (Test-Path -LiteralPath $taskFile -PathType Leaf)) { exit 0 }',
-  '$task = Get-Content -LiteralPath $taskFile -Raw -Encoding UTF8 | ConvertFrom-Json',
-  'Remove-Item -LiteralPath $taskFile -Force -ErrorAction SilentlyContinue',
-  '$targetPid = [int]$task.hostPid',
-  '$exePath = [string]$task.exePath',
-  'if (-not $exePath) {',
-  '  $exePath = Join-Path $env:LOCALAPPDATA "Programs\\antigravity\\Antigravity.exe"',
-  '}',
-  'if (-not (Test-Path -LiteralPath $exePath -PathType Leaf)) { exit 0 }',
-  'function Test-MainHostAlive {',
-  '  $ps = @(Get-Process -Name "Antigravity" -ErrorAction SilentlyContinue)',
-  '  if ($ps.Count -eq 0) { return $false }',
-  '  foreach ($p in $ps) {',
-  '    if ($p.Id -eq $targetPid) { return $true }',
-  '    $cl = [string](Get-CimInstance Win32_Process -Filter ("ProcessId = " + $p.Id) -ErrorAction SilentlyContinue).CommandLine',
-  '    if ($cl -and ($cl -notmatch "--type=") -and ($cl -notmatch "sidecar_sdk") -and ($cl -notmatch "register_loader\\.js")) {',
-  '      return $true',
-  '    }',
-  '  }',
-  '  return $false',
-  '}',
-  'foreach ($p in @(Get-Process -Name "Antigravity" -ErrorAction SilentlyContinue)) {',
-  '  if ($p.MainWindowHandle -ne 0) { $null = $p.CloseMainWindow() }',
-  '}',
-  '$exited = $false',
-  'for ($i = 0; $i -lt 100; $i++) {',
-  '  if (-not (Test-MainHostAlive)) { $exited = $true; break }',
-  '  if ($i -eq 12) {',
-  '    foreach ($p in @(Get-Process -Name "Antigravity" -ErrorAction SilentlyContinue)) {',
-  '      if ($p.MainWindowHandle -ne 0) { $null = $p.CloseMainWindow() }',
-  '    }',
-  '  }',
-  '  Start-Sleep -Milliseconds 250',
-  '}',
-  'if (-not $exited) { exit 0 }',
-  'Start-Sleep -Milliseconds 350',
-  '$workDir = Split-Path -Parent $exePath',
-  'Start-Process -FilePath $exePath -ArgumentList "--remote-debugging-port=0" -WorkingDirectory $workDir | Out-Null',
-].join('\n');
+// 纯 Node Windows 脱离重启引擎：优雅处理 app_storage.json runInBackground 托盘陷阱 + loopback CDP Browser.close + 零 PowerShell/WMI
+const APP_STORAGE_MAX_BYTES = 8 * 1024 * 1024;
+const APP_STORAGE_RESTORE_RETRIES = 3;
+const APP_STORAGE_RESTORE_RETRY_DELAY_MS = 50;
+const RELAUNCH_TASK_MAX_BYTES = 1024 * 1024;
 
-const WIN_DETACHED_RELAUNCH_B64 = Buffer.from(WIN_DETACHED_RELAUNCH_PS, 'utf16le').toString('base64');
+function getAntigravityAppStoragePath(opts = {}) {
+  if (opts && typeof opts.appStoragePath === 'string' && opts.appStoragePath.trim()) {
+    return path.resolve(opts.appStoragePath.trim());
+  }
+  const baseAppData =
+    (opts && opts.appDataDir) ||
+    (opts && opts.env && opts.env.APPDATA) ||
+    APP_DATA;
+  return path.join(baseAppData, 'Antigravity', 'app_storage.json');
+}
 
-const WIN_WMI_BREAKAWAY_PS = [
-  '$ErrorActionPreference = "Stop"',
-  '$cmd = "powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand " + $env:AG_PRISM_HELPER_B64',
-  '$psi = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ ShowWindow = [uint16]0 }',
-  '$r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmd; ProcessStartupInformation = $psi }',
-  'if ($r -and $r.ReturnValue -eq 0 -and $r.ProcessId) { Write-Output $r.ProcessId }',
-].join('\n');
+function suspendAntigravityRunInBackground(appStoragePath, opts = {}) {
+  const targetPath = getAntigravityAppStoragePath({ appStoragePath });
+  if (!fs.existsSync(targetPath)) {
+    return { modified: false, originalValue: undefined, path: targetPath, skippedReason: 'not-found' };
+  }
+  let resolved;
+  try {
+    ({ resolved } = assertSafeRegularFileSync(targetPath, APP_STORAGE_MAX_BYTES));
+  } catch (err) {
+    return {
+      modified: false,
+      originalValue: undefined,
+      path: targetPath,
+      skippedReason: String(err && err.message ? err.message : err),
+    };
+  }
+  try {
+    const raw = fs.readFileSync(resolved, 'utf8').replace(/^\uFEFF/, '');
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return { modified: false, originalValue: undefined, path: resolved, skippedReason: 'invalid-json-object' };
+    }
+    const cur = parsed.runInBackground;
+    if (cur !== 'true' && cur !== true) {
+      return { modified: false, originalValue: cur, path: resolved };
+    }
+    const nextVal = typeof cur === 'boolean' ? false : 'false';
+    parsed.runInBackground = nextVal;
+    const writeFn =
+      typeof opts.writeFileSync === 'function'
+        ? opts.writeFileSync
+        : (p, data) => writeFileAtomicallyNoSymlinkSync(p, data, { maxBytes: APP_STORAGE_MAX_BYTES });
+    writeFn(resolved, JSON.stringify(parsed, null, 2) + '\n');
+    return { modified: true, originalValue: cur, path: resolved };
+  } catch (err) {
+    return {
+      modified: false,
+      originalValue: undefined,
+      path: resolved,
+      skippedReason: String(err && err.message ? err.message : err),
+    };
+  }
+}
 
-const WIN_WMI_BREAKAWAY_B64 = Buffer.from(WIN_WMI_BREAKAWAY_PS, 'utf16le').toString('base64');
+async function restoreAntigravityRunInBackground(appStoragePath, suspendState, opts = {}) {
+  if (!suspendState || !suspendState.modified) {
+    return { restored: false, skipped: true, attempts: 0 };
+  }
+  const targetPath = suspendState.path || getAntigravityAppStoragePath({ appStoragePath });
+  const retries =
+    Number.isInteger(opts.retries) && opts.retries > 0 ? opts.retries : APP_STORAGE_RESTORE_RETRIES;
+  const retryDelayMs =
+    Number.isFinite(Number(opts.retryDelayMs)) && Number(opts.retryDelayMs) >= 0
+      ? Number(opts.retryDelayMs)
+      : APP_STORAGE_RESTORE_RETRY_DELAY_MS;
+  const sleepFn =
+    typeof opts.sleep === 'function' ? opts.sleep : (ms) => new Promise((r) => setTimeout(r, ms));
+  const readFn = typeof opts.readFileSync === 'function' ? opts.readFileSync : (p) => fs.readFileSync(p, 'utf8');
+  const writeFn =
+    typeof opts.writeFileSync === 'function'
+      ? opts.writeFileSync
+      : (p, data) => writeFileAtomicallyNoSymlinkSync(p, data, { maxBytes: APP_STORAGE_MAX_BYTES });
+
+  let lastErr = null;
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const { resolved } = assertSafeRegularFileSync(targetPath, APP_STORAGE_MAX_BYTES);
+      const latestRaw = String(readFn(resolved) || '').replace(/^\uFEFF/, '');
+      const latestObj = JSON.parse(latestRaw);
+      if (!latestObj || typeof latestObj !== 'object' || Array.isArray(latestObj)) {
+        throw new Error('Invalid app_storage.json root object');
+      }
+      latestObj.runInBackground = suspendState.originalValue;
+      writeFn(resolved, JSON.stringify(latestObj, null, 2) + '\n');
+      return {
+        restored: true,
+        attempts: attempt,
+        path: resolved,
+        restoredValue: suspendState.originalValue,
+      };
+    } catch (err) {
+      lastErr = err;
+      if (attempt < retries && retryDelayMs > 0) {
+        await sleepFn(retryDelayMs);
+      }
+    }
+  }
+  return {
+    restored: false,
+    attempts: retries,
+    path: targetPath,
+    error: String(lastErr && lastErr.message ? lastErr.message : lastErr),
+  };
+}
+
+function isAntigravityCdpCloseTarget(target) {
+  if (!target || !target.webSocketDebuggerUrl) return false;
+  const url = String(target.url || '').trim();
+  const title = String(target.title || '').trim();
+  if (!url) return false;
+  if (isSwarmSidecarUrl(url)) return true;
+  if (target.type !== 'page') return false;
+  if (/\bvisual studio code\b/i.test(title) && !/\bantigravity\b/i.test(title)) {
+    return false;
+  }
+  return isEligibleTarget(target);
+}
+
+// 通过本机回环 CDP 发送 Browser.close（严格双重校验 /json/version 与 /json/list 属于 Antigravity；严禁调用 timer.unref 避免 Node 22 早退）
+async function requestLoopbackCdpBrowserClose(cdpPort, opts = {}) {
+  const port = normalizeLoopbackPort(cdpPort);
+  if (!port) return false;
+  const fetchImpl = typeof opts.fetchImpl === 'function' ? opts.fetchImpl : globalThis.fetch;
+  const WsCtor = typeof opts.WebSocketCtor === 'function' ? opts.WebSocketCtor : globalThis.WebSocket;
+  if (typeof fetchImpl !== 'function' || typeof WsCtor !== 'function') return false;
+  const timeoutMs = Math.max(200, Math.min(8000, Number(opts.timeoutMs) || 2500));
+
+  const fetchJsonLoopback = async (endpointPath) => {
+    const controller = new AbortController();
+    const fetchTimer = setTimeout(() => controller.abort(), Math.min(1500, timeoutMs));
+    try {
+      const res = await fetchImpl(`http://127.0.0.1:${port}${endpointPath}`, { signal: controller.signal });
+      if (!res || !res.ok) return null;
+      return await res.json();
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(fetchTimer);
+    }
+  };
+
+  const versionInfo = await fetchJsonLoopback('/json/version');
+  if (!isAntigravityCdpVersionInfo(versionInfo, port)) {
+    return false;
+  }
+  const targets = await fetchJsonLoopback('/json/list');
+  if (!Array.isArray(targets) || !targets.some(isAntigravityCdpCloseTarget)) {
+    return false;
+  }
+
+  const wsUrl = String(versionInfo.webSocketDebuggerUrl).trim();
+  return new Promise((resolve) => {
+    let settled = false;
+    let sent = false;
+    let ws = null;
+    const finish = (ok) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try {
+        if (ws && typeof ws.close === 'function') ws.close();
+      } catch {}
+      resolve(Boolean(ok));
+    };
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    try {
+      ws = new WsCtor(wsUrl);
+    } catch {
+      finish(false);
+      return;
+    }
+    const onOpen = () => {
+      try {
+        ws.send(JSON.stringify({ id: 1, method: 'Browser.close' }));
+        sent = true;
+      } catch {
+        finish(false);
+      }
+    };
+    const onMessage = (evt) => {
+      try {
+        const raw = typeof evt === 'string' ? evt : evt && evt.data;
+        const msg = JSON.parse(String(raw || ''));
+        if (msg && msg.id === 1) {
+          finish(!msg.error);
+        }
+      } catch {}
+    };
+    const onClose = () => finish(sent);
+    const onError = () => finish(false);
+    if (typeof ws.addEventListener === 'function') {
+      ws.addEventListener('open', onOpen, { once: true });
+      ws.addEventListener('message', onMessage);
+      ws.addEventListener('close', onClose, { once: true });
+      ws.addEventListener('error', onError, { once: true });
+    } else if (typeof ws.on === 'function') {
+      ws.once('open', onOpen);
+      ws.on('message', onMessage);
+      ws.once('close', onClose);
+      ws.once('error', onError);
+    } else {
+      finish(false);
+    }
+  });
+}
+
+function isWindowsAntigravityHostAliveSync(hostPid, opts = {}) {
+  const pid = Number(hostPid);
+  const excluded = collectKnownPrismDaemonPids(opts);
+  if (Number.isInteger(pid) && pid > 0 && !excluded.has(pid)) {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (err) {
+      if (err && err.code === 'EPERM') return true;
+    }
+  }
+  const targetExe = String((opts && opts.exePath) || '').trim();
+  if (targetExe && !isAntigravityShortcutTarget(targetExe)) {
+    return false;
+  }
+  const execSyncFn = typeof opts.execFileSyncFn === 'function' ? opts.execFileSyncFn : execFileSync;
+  try {
+    const out = execSyncFn(
+      'tasklist',
+      ['/FI', 'IMAGENAME eq Antigravity.exe', '/FO', 'CSV', '/NH'],
+      { encoding: 'utf8', windowsHide: true, timeout: 4000, stdio: ['ignore', 'pipe', 'ignore'] }
+    );
+    const rows = parseWindowsTasklistCsv(out);
+    return rows.some((r) => r.imageName.toLowerCase() === 'antigravity.exe' && !excluded.has(r.pid));
+  } catch {
+    return false;
+  }
+}
+
+async function runWindowsDetachedRelaunchTask(task = {}, hooks = {}) {
+  const hostPid = Number(task && task.hostPid) || 0;
+  const exePath = String((task && task.exePath) || '').trim() || resolveInstalledAntigravityExeWin();
+  const launchArgs =
+    Array.isArray(task && task.args) && task.args.length > 0
+      ? task.args.map((a) => String(a))
+      : [CDP_OPT_IN_SWITCH];
+  const maxWaitMs = Math.max(200, Math.min(180000, Number(task && task.maxWaitMs) || 25000));
+  const pollMs = Math.max(20, Math.min(2000, Number(task && task.pollMs) || 250));
+  const settleMs = Math.max(0, Math.min(10000, Number((task && task.settleMs) ?? 350)));
+  const appStoragePath = getAntigravityAppStoragePath({
+    appStoragePath: task && task.appStoragePath,
+  });
+  const cdpPort =
+    normalizeLoopbackPort(task && task.cdpPort) ||
+    normalizeLoopbackPort(readPortFromCustomOrDefaultFile((task && task.portFile) || null));
+
+  const sleepFn = typeof hooks.sleep === 'function' ? hooks.sleep : (ms) => new Promise((r) => setTimeout(r, ms));
+  const suspendFn =
+    typeof hooks.suspendRunInBackground === 'function'
+      ? hooks.suspendRunInBackground
+      : (p) => suspendAntigravityRunInBackground(p);
+  const restoreFn =
+    typeof hooks.restoreRunInBackground === 'function'
+      ? hooks.restoreRunInBackground
+      : (p, st) => restoreAntigravityRunInBackground(p, st, hooks.restoreOpts || {});
+  const requestCdpCloseFn =
+    typeof hooks.requestCdpClose === 'function'
+      ? hooks.requestCdpClose
+      : (p) => requestLoopbackCdpBrowserClose(p, hooks.cdpCloseOpts || {});
+  const isHostStillRunningFn =
+    typeof hooks.isHostStillRunning === 'function'
+      ? hooks.isHostStillRunning
+      : () => isWindowsAntigravityHostAliveSync(hostPid, { excludePids: task && task.excludePids, exePath });
+  const spawnFn = typeof hooks.spawnFn === 'function' ? hooks.spawnFn : spawn;
+  const existsFn = typeof hooks.existsSync === 'function' ? hooks.existsSync : fs.existsSync;
+
+  if (!hooks.launchHost && !hooks.spawnFn && (!exePath || !existsFn(exePath))) {
+    return { relaunched: false, reason: 'missing-exe', exePath };
+  }
+
+  let suspendState = null;
+  let restoreRes = null;
+  let cdpClosed = false;
+  let exited = false;
+
+  try {
+    suspendState = suspendFn(appStoragePath);
+    if (cdpPort > 0) {
+      try {
+        cdpClosed = Boolean(await requestCdpCloseFn(cdpPort));
+      } catch {
+        cdpClosed = false;
+      }
+    }
+    const deadline = Date.now() + maxWaitMs;
+    while (Date.now() <= deadline) {
+      const alive = await isHostStillRunningFn(hostPid, exePath);
+      if (!alive) {
+        exited = true;
+        break;
+      }
+      await sleepFn(pollMs);
+    }
+  } finally {
+    if (suspendState && suspendState.modified) {
+      restoreRes = await restoreFn(appStoragePath, suspendState);
+    }
+  }
+
+  if (!exited) {
+    return {
+      relaunched: false,
+      reason: 'host-did-not-exit',
+      exePath,
+      cdpClosed,
+      suspendState,
+      restoreRes,
+    };
+  }
+
+  if (settleMs > 0) {
+    await sleepFn(settleMs);
+  }
+
+  if (typeof hooks.launchHost === 'function') {
+    const ok = await hooks.launchHost(exePath, launchArgs);
+    return {
+      relaunched: Boolean(ok !== false),
+      exePath,
+      args: launchArgs,
+      cdpClosed,
+      suspendState,
+      restoreRes,
+    };
+  }
+
+  const cleanEnv = { ...(hooks.env || process.env) };
+  delete cleanEnv.ELECTRON_RUN_AS_NODE;
+  try {
+    const child = spawnFn(exePath, launchArgs, {
+      cwd: path.dirname(exePath),
+      detached: true,
+      windowsHide: false,
+      stdio: 'ignore',
+      env: cleanEnv,
+    });
+    if (child && typeof child.on === 'function') child.on('error', () => {});
+    if (child && typeof child.unref === 'function') child.unref();
+    return {
+      relaunched: Boolean(child),
+      pid: (child && child.pid) || null,
+      exePath,
+      args: launchArgs,
+      cdpClosed,
+      suspendState,
+      restoreRes,
+    };
+  } catch (err) {
+    return {
+      relaunched: false,
+      reason: 'launch-failed',
+      error: String(err && err.message ? err.message : err),
+      exePath,
+      args: launchArgs,
+      cdpClosed,
+      suspendState,
+      restoreRes,
+    };
+  }
+}
 
 function normalizeMacAppBundlePath(rawPath) {
   const s = String(rawPath || '').trim();
@@ -1530,6 +3572,66 @@ const MAC_DETACHED_RELAUNCH_SH = [
   'open -na "$app_path" --args --remote-debugging-port=0 >/dev/null 2>&1 &',
 ].join('\n');
 
+// 纯 POSIX sh 脱离重启脚本（所有动态参数经位置参数 "$1" "$2" 传入，零拼接、零强制终止、零宿主归档修改）
+const LINUX_DETACHED_RELAUNCH_SH = [
+  'target_pid="$1"',
+  'exe_path="$2"',
+  'unset ELECTRON_RUN_AS_NODE',
+  'resolve_exe() {',
+  '  if [ -n "$exe_path" ] && [ -x "$exe_path" ]; then',
+  '    printf \'%s\\n\' "$exe_path"',
+  '    return 0',
+  '  fi',
+  '  for cand in "/usr/share/antigravity/antigravity" "/opt/Antigravity/antigravity" "/usr/bin/antigravity" "$HOME/.local/bin/antigravity"; do',
+  '    if [ -x "$cand" ]; then',
+  '      printf \'%s\\n\' "$cand"',
+  '      return 0',
+  '    fi',
+  '  done',
+  '  if command -v antigravity >/dev/null 2>&1; then',
+  '    command -v antigravity',
+  '    return 0',
+  '  fi',
+  '  return 1',
+  '}',
+  'kill -TERM "$target_pid" >/dev/null 2>&1 || true',
+  'xdg_cfg="${XDG_CONFIG_HOME:-$HOME/.config}"',
+  'lock_file="$xdg_cfg/Antigravity/SingletonLock"',
+  'i=0',
+  'exited=0',
+  'while [ "$i" -lt 120 ]; do',
+  '  main_alive=0',
+  '  lock_alive=0',
+  '  if kill -0 "$target_pid" >/dev/null 2>&1; then main_alive=1; fi',
+  '  if [ -L "$lock_file" ]; then',
+  '    link_dest="$(readlink "$lock_file" 2>/dev/null || true)"',
+  '    lock_pid="${link_dest##*-}"',
+  '    case "$lock_pid" in',
+  '      \'\'|*[!0-9]*) lock_alive=1 ;;',
+  '      *) if kill -0 "$lock_pid" >/dev/null 2>&1; then lock_alive=1; fi ;;',
+  '    esac',
+  '  elif [ -e "$lock_file" ]; then',
+  '    lock_alive=1',
+  '  fi',
+  '  if [ "$main_alive" -eq 0 ] && [ "$lock_alive" -eq 0 ]; then exited=1; break; fi',
+  '  if [ "$i" -eq 40 ] && [ "$main_alive" -eq 1 ]; then kill -TERM "$target_pid" >/dev/null 2>&1 || true; fi',
+  '  sleep 0.25',
+  '  i=$((i + 1))',
+  'done',
+  'if [ "$exited" -ne 1 ] && kill -0 "$target_pid" >/dev/null 2>&1; then exit 0; fi',
+  'sleep 0.5',
+  'env_conf="$xdg_cfg/environment.d/90-obsidian-prism-gomemlimit.conf"',
+  'if [ -f "$env_conf" ] && [ ! -L "$env_conf" ]; then',
+  '  gomem_line="$(grep -E \'^GOMEMLIMIT=([0-9]+(B|KiB|MiB|GiB|TiB))$\' "$env_conf" 2>/dev/null | head -n 1 || true)"',
+  '  if [ -n "$gomem_line" ]; then',
+  '    export GOMEMLIMIT="${gomem_line#GOMEMLIMIT=}"',
+  '  fi',
+  'fi',
+  'launch_exe="$(resolve_exe || true)"',
+  'if [ -z "$launch_exe" ]; then exit 0; fi',
+  'nohup "$launch_exe" --remote-debugging-port=0 >/dev/null 2>&1 </dev/null &',
+].join('\n');
+
 // 派生物理脱离宿主进程树与 Job Object 的独立微进程执行「温和退出 -> 等单实例锁释放 -> 带参重开」
 function spawnDetachedHostRelaunchHelper(task, opts = {}) {
   const hostPid = Number(task && task.hostPid);
@@ -1543,66 +3645,99 @@ function spawnDetachedHostRelaunchHelper(task, opts = {}) {
       args: [CDP_OPT_IN_SWITCH],
     });
   }
-  if (IS_WIN) {
-    const privateStateDir = path.join(os.homedir(), '.gemini', 'config', 'plugins', 'obsidian-prism');
-    fs.mkdirSync(privateStateDir, { recursive: true });
-    const privateTaskFile = path.join(privateStateDir, '.relaunch-task.json');
-    const resolvedExe =
-      task.exePath ||
-      path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'Programs', 'antigravity', 'Antigravity.exe');
-    const tmpTaskFile = `${privateTaskFile}.${process.pid}.tmp`;
-    fs.writeFileSync(
-      tmpTaskFile,
-      JSON.stringify({ hostPid, exePath: resolvedExe }, null, 2) + '\n',
-      { encoding: 'utf8', mode: 0o600 }
-    );
-    fs.renameSync(tmpTaskFile, privateTaskFile);
-    if (!opts.disableWmiBreakaway) {
-      try {
-        const wmiRunnerPs = `$env:AG_PRISM_RELAUNCH_TASK_FILE = [System.IO.Path]::Combine($env:USERPROFILE, '.gemini', 'config', 'plugins', 'obsidian-prism', '.relaunch-task.json'); powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand ${WIN_DETACHED_RELAUNCH_B64}`;
-        const wmiRunnerB64 = Buffer.from(wmiRunnerPs, 'utf16le').toString('base64');
-        const out = execFileSync(
-          'powershell.exe',
-          ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', WIN_WMI_BREAKAWAY_B64],
-          {
-            encoding: 'utf8',
-            windowsHide: true,
-            timeout: 6000,
-            stdio: ['ignore', 'pipe', 'ignore'],
-            env: { ...process.env, AG_PRISM_HELPER_B64: wmiRunnerB64 },
-          }
-        );
-        const helperPid = parseInt(String(out || '').trim().split(/\s+/).pop(), 10);
-        if (Number.isInteger(helperPid) && helperPid > 0) {
-          return { spawned: true, pid: helperPid, method: 'wmi-breakaway' };
-        }
-      } catch {}
+  const effectivePlatform = opts.platformOverride || process.platform;
+  const spawnFn = typeof opts.spawnFn === 'function' ? opts.spawnFn : spawn;
+  if (effectivePlatform === 'win32') {
+    const privateStateDir = opts.stateDir
+      ? path.resolve(opts.stateDir)
+      : path.join(os.homedir(), '.gemini', 'config', 'plugins', 'obsidian-prism');
+    if (isSymlinkPathSync(privateStateDir)) {
+      return { spawned: false, reason: 'symlink-state-dir' };
     }
-    const child = spawn(
-      'powershell.exe',
-      ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', WIN_DETACHED_RELAUNCH_B64],
-      {
+    fs.mkdirSync(privateStateDir, { recursive: true });
+    const privateTaskFile = path.join(
+      privateStateDir,
+      `.relaunch-task-${crypto.randomBytes(6).toString('hex')}.json`
+    );
+    const resolvedExe =
+      String((task && task.exePath) || '').trim() ||
+      resolveInstalledAntigravityExeWin(opts);
+    const taskPayload = {
+      schema: 1,
+      hostPid,
+      exePath: resolvedExe,
+      args: Array.isArray(task.args) && task.args.length > 0 ? task.args : [CDP_OPT_IN_SWITCH],
+      cdpPort: normalizeLoopbackPort(task.cdpPort) || normalizeLoopbackPort(readPortFromCustomOrDefaultFile(task.portFile || null)),
+      appStoragePath: task.appStoragePath ? path.resolve(String(task.appStoragePath)) : getAntigravityAppStoragePath(opts),
+      maxWaitMs: Number(task.maxWaitMs) || 25000,
+      pollMs: Number(task.pollMs) || 250,
+      settleMs: task.settleMs !== undefined ? Number(task.settleMs) : 350,
+    };
+    writeFileAtomicallyNoSymlinkSync(privateTaskFile, JSON.stringify(taskPayload, null, 2) + '\n', {
+      maxBytes: RELAUNCH_TASK_MAX_BYTES,
+      mode: 0o600,
+    });
+
+    const runtime = resolveWindowsDetachedNodeRuntime(opts);
+    const helperPath = path.resolve(opts.helperPath || __filename);
+    const cleanEnv = { ...(opts.env || process.env) };
+    if (runtime.useElectronAsNode) {
+      cleanEnv.ELECTRON_RUN_AS_NODE = '1';
+    } else {
+      delete cleanEnv.ELECTRON_RUN_AS_NODE;
+    }
+
+    try {
+      const child = spawnFn(runtime.execPath, [helperPath, '--run-relaunch-task', privateTaskFile], {
+        cwd: path.dirname(helperPath),
         detached: true,
         stdio: 'ignore',
         windowsHide: true,
-        env: { ...process.env, AG_PRISM_RELAUNCH_TASK_FILE: privateTaskFile },
-      }
-    );
-    child.unref();
-    return { spawned: true, pid: child.pid || null, method: 'detached-spawn' };
+        env: cleanEnv,
+      });
+      if (child && typeof child.on === 'function') child.on('error', () => {});
+      if (child && typeof child.unref === 'function') child.unref();
+      return {
+        spawned: Boolean(child),
+        pid: (child && child.pid) || null,
+        method: 'node-detached-helper',
+        taskFile: privateTaskFile,
+        useElectronAsNode: runtime.useElectronAsNode,
+      };
+    } catch (err) {
+      try { fs.unlinkSync(privateTaskFile); } catch {}
+      return {
+        spawned: false,
+        reason: 'spawn-failed',
+        error: String(err && err.message ? err.message : err),
+      };
+    }
   }
 
-  if (IS_MAC) {
+  if (effectivePlatform === 'darwin') {
     const appPath = normalizeMacAppBundlePath(task.exePath);
     const cleanEnv = { ...process.env };
     delete cleanEnv.ELECTRON_RUN_AS_NODE;
-    const child = spawn('/usr/bin/nohup', ['/bin/sh', '-c', MAC_DETACHED_RELAUNCH_SH, 'sh', String(hostPid), appPath], {
+    const child = spawnFn('/usr/bin/nohup', ['/bin/sh', '-c', MAC_DETACHED_RELAUNCH_SH, 'sh', String(hostPid), appPath], {
       detached: true,
       stdio: 'ignore',
       env: cleanEnv,
     });
-    child.unref();
-    return { spawned: true, pid: child.pid || null, method: 'nohup-sh', appPath };
+    if (child && typeof child.unref === 'function') child.unref();
+    return { spawned: true, pid: (child && child.pid) || null, method: 'nohup-sh', appPath };
+  }
+
+  if (effectivePlatform === 'linux') {
+    const exePath = String(task.exePath || '').trim();
+    const cleanEnv = { ...(opts.env || process.env) };
+    delete cleanEnv.ELECTRON_RUN_AS_NODE;
+    const child = spawnFn('/bin/sh', ['-c', LINUX_DETACHED_RELAUNCH_SH, '--', String(hostPid), exePath], {
+      detached: true,
+      stdio: 'ignore',
+      env: cleanEnv,
+    });
+    if (child && typeof child.unref === 'function') child.unref();
+    return { spawned: true, pid: (child && child.pid) || null, method: 'linux-sh', exePath };
   }
 
   return { spawned: false, reason: 'unsupported-platform' };
@@ -1648,12 +3783,58 @@ function isEligibleTarget(target) {
   return false;
 }
 
+const SENSITIVE_URL_QUERY_RE = /([?&](?:token|auth|signature|key|secret)=)[^&\s#"']+/gi;
+const SWARM_SIDECAR_HOST_RE = /^swarm--swarm_board-\d+$/;
+
+function redactSensitiveUrl(rawUrl) {
+  if (rawUrl === null || rawUrl === undefined) return '';
+  return String(rawUrl)
+    .replace(/(https?:\/\/)[^/\s:@]+:[^/\s@]+@/gi, '$1***@')
+    .replace(SENSITIVE_URL_QUERY_RE, '$1<REDACTED>');
+}
+
+function isSwarmSidecarUrl(rawUrl) {
+  const s = String(rawUrl || '').trim();
+  if (!s) return false;
+  try {
+    const u = new URL(s);
+    return (
+      u.protocol === 'plugin:' &&
+      SWARM_SIDECAR_HOST_RE.test(u.hostname || '') &&
+      !u.port &&
+      !u.username &&
+      !u.password &&
+      u.pathname === '/'
+    );
+  } catch {
+    return false;
+  }
+}
+
 async function listPages(port) {
   const res = await fetch(`http://127.0.0.1:${port}/json/list`, {
     signal: AbortSignal.timeout(2000),
   });
   const targets = await res.json();
   return targets.filter(isEligibleTarget);
+}
+
+async function listSwarmTargets(port) {
+  const res = await fetch(`http://127.0.0.1:${port}/json/list`, {
+    signal: AbortSignal.timeout(2000),
+  });
+  const targets = await res.json();
+  if (!Array.isArray(targets)) return [];
+  return targets
+    .filter((t) => {
+      if (!t || (t.type !== 'iframe' && t.type !== 'page') || !t.webSocketDebuggerUrl) return false;
+      return isSwarmSidecarUrl(t.url);
+    })
+    .map((t) => ({
+      ...t,
+      url: redactSensitiveUrl(t.url || ''),
+      title: redactSensitiveUrl(t.title || t.url || ''),
+    }));
 }
 
 async function getBrowserWsUrl(port) {
@@ -1677,6 +3858,8 @@ class CdpSession {
     this.closed = false;
     this.onClose = null;
     this.listeners = new Map();
+    this.sessionListeners = new Map();
+    this._childSessions = new Map();
     ws.addEventListener('message', (evt) => {
       let msg;
       try {
@@ -1685,6 +3868,13 @@ class CdpSession {
         return;
       }
       if (msg.method) {
+        if (msg.sessionId) {
+          const sMap = this.sessionListeners.get(msg.sessionId);
+          if (sMap) {
+            for (const cb of sMap.get(msg.method) || []) cb(msg.params);
+          }
+          return;
+        }
         for (const cb of this.listeners.get(msg.method) || []) cb(msg.params);
         return;
       }
@@ -1703,6 +3893,14 @@ class CdpSession {
         p.reject(new Error(reason || 'CDP connection closed'));
       }
       this.pending.clear();
+      const children = [...this._childSessions.values()];
+      this._childSessions.clear();
+      this.sessionListeners.clear();
+      for (const ch of children) {
+        try {
+          ch.detachLocal();
+        } catch {}
+      }
       if (this.onClose) {
         try {
           this.onClose();
@@ -1742,7 +3940,7 @@ class CdpSession {
     });
   }
 
-  send(method, params = {}, timeoutMs = 5000) {
+  send(method, params = {}, timeoutMs = 5000, sessionId = null) {
     if (this.closed) return Promise.reject(new Error('CDP connection closed'));
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
@@ -1753,7 +3951,8 @@ class CdpSession {
       if (timer && typeof timer.unref === 'function') timer.unref();
       this.pending.set(id, { resolve, reject, timer });
       try {
-        this.ws.send(JSON.stringify({ id, method, params }));
+        const payload = sessionId ? { id, method, params, sessionId } : { id, method, params };
+        this.ws.send(JSON.stringify(payload));
       } catch (err) {
         clearTimeout(timer);
         this.pending.delete(id);
@@ -1765,6 +3964,83 @@ class CdpSession {
   on(method, callback) {
     if (!this.listeners.has(method)) this.listeners.set(method, []);
     this.listeners.get(method).push(callback);
+  }
+
+  onSessionEvent(sessionId, method, callback) {
+    if (!sessionId || !method || typeof callback !== 'function') return;
+    let sMap = this.sessionListeners.get(sessionId);
+    if (!sMap) {
+      sMap = new Map();
+      this.sessionListeners.set(sessionId, sMap);
+    }
+    if (!sMap.has(method)) sMap.set(method, []);
+    sMap.get(method).push(callback);
+  }
+
+  offSession(sessionId) {
+    if (!sessionId) return;
+    this.sessionListeners.delete(sessionId);
+    this._childSessions.delete(sessionId);
+  }
+
+  createChildSession(sessionId, targetId = '') {
+    const parent = this;
+    let childClosed = false;
+    const child = {
+      sessionId: String(sessionId || ''),
+      targetId: String(targetId || ''),
+      parent,
+      onClose: null,
+      get closed() {
+        return childClosed || parent.closed;
+      },
+      send(method, params = {}, timeoutMs = 5000) {
+        if (childClosed || parent.closed) {
+          return Promise.reject(new Error('CDP child session closed'));
+        }
+        return parent.send(method, params, timeoutMs, child.sessionId);
+      },
+      on(method, callback) {
+        if (childClosed || parent.closed) return;
+        parent.onSessionEvent(child.sessionId, method, callback);
+      },
+      async evaluate(expression, awaitPromise = false, timeoutMs = 4000) {
+        const res = await child.send(
+          'Runtime.evaluate',
+          {
+            expression,
+            returnByValue: true,
+            awaitPromise,
+          },
+          timeoutMs
+        );
+        if (res && res.exceptionDetails) {
+          throw new Error(res.exceptionDetails.exception?.description || res.exceptionDetails.text);
+        }
+        return res && res.result ? res.result.value : undefined;
+      },
+      detachLocal() {
+        if (childClosed) return;
+        childClosed = true;
+        parent.offSession(child.sessionId);
+        if (typeof child.onClose === 'function') {
+          try {
+            child.onClose();
+          } catch {}
+        }
+      },
+      close() {
+        if (childClosed) return;
+        child.detachLocal();
+        if (!parent.closed && child.sessionId) {
+          parent.send('Target.detachFromTarget', { sessionId: child.sessionId }, 1500).catch(() => {});
+        }
+      },
+    };
+    if (child.sessionId) {
+      this._childSessions.set(child.sessionId, child);
+    }
+    return child;
   }
 
   async evaluate(expression, awaitPromise = false, timeoutMs = 4000) {
@@ -4884,8 +7160,15 @@ function minifySingleSource(src) {
   return plainMin;
 }
 
-const RUNTIME_PARTS = [
+// 按需独立通道模块（不打入 Channel 1 主包以严控体积 < 550 KB，仍纳入 SYNC_ROOT_FILES 随安装包/热更新同步）
+const DEFERRED_ROOT_MODULES = [
   'i18n-locales.js',
+  'dual-mascot-rig.js',
+  'settings-panel.js',
+  'home-studio-panel.js',
+];
+
+const RUNTIME_PARTS = [
   'i18n-core.js',
   'usage-core.js',
   'crystal-prism-core.js',
@@ -4894,13 +7177,10 @@ const RUNTIME_PARTS = [
   'ripple-core.js',
   'conv-aura.js',
   'smooth-caret.js',
-  'dual-mascot-rig.js',
   'vial-core.js',
   'pulse-vial-bridge.js',
   'vendor/pulse-dashboard/inline-fallback.js',
   'vendor/effort-slider/slider-coexist.js',
-  'settings-panel.js',
-  'home-studio-panel.js',
   'home-ripple-host.js',
   'model-glyph-crystal.js',
   'stream-choreography.js',
@@ -4921,6 +7201,7 @@ const SYNC_ROOT_FILES = [
   'inject.js',
   'remove.js',
   'style.css',
+  ...DEFERRED_ROOT_MODULES,
   ...RUNTIME_PARTS.filter((p) => !p.includes('/')),
 ];
 
@@ -4931,11 +7212,11 @@ let _cssCache = { sig: '', minCss: '', packedExpr: '' };
 const BUNDLE_CACHE_SCHEMA_VERSION = 2;
 const BUNDLE_CACHE_FILENAME = '.bundle-cache.json';
 const BUNDLE_CACHE_MAX_ENTRIES = 4;
-const BUNDLE_CACHE_MAX_FILE_BYTES = 4 * 1024 * 1024;
+const BUNDLE_CACHE_MAX_FILE_BYTES = 6 * 1024 * 1024;
 const BUNDLE_CACHE_MAX_EXPR_BYTES = 2 * 1024 * 1024;
 const BUNDLE_CACHE_MAX_BOOTCFG_BYTES = 64 * 1024;
-const CHANNEL_CACHE_MAX_PAYLOAD_BYTES = 1024 * 1024;
-const CHANNEL_CACHE_NAMES = ['omni', 'sidebar', 'hostI18n', 'thought', 'inlineDiff', 'wallpaper'];
+const CHANNEL_CACHE_MAX_PAYLOAD_BYTES = 2 * 1024 * 1024;
+const CHANNEL_CACHE_NAMES = ['omni', 'sidebar', 'hostI18n', 'swarmI18n', 'thought', 'inlineDiff', 'wallpaper', 'periodicPicker', 'settings', 'mascot', 'suggester', 'homeStudio'];
 const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
 const CODE_HASH_RE = /^[0-9a-z]{1,16}$/;
 
@@ -4953,7 +7234,7 @@ const _bundleCacheStats = {
   channelDiskHits: 0,
   channelDiskMisses: 0,
   channelCompileRuns: 0,
-  channelHitsByName: { omni: 0, sidebar: 0, hostI18n: 0, thought: 0, inlineDiff: 0, wallpaper: 0 },
+  channelHitsByName: { omni: 0, sidebar: 0, hostI18n: 0, thought: 0, inlineDiff: 0, wallpaper: 0, periodicPicker: 0, settings: 0, mascot: 0, suggester: 0, homeStudio: 0 },
   lastOutcome: 'none',
   lastCachePath: null,
 };
@@ -5037,10 +7318,6 @@ function readPackedCssExpr() {
 }
 
 function getEffectiveBundlePartNames() {
-  const brandRel = 'assets/brand-mark-svg.js';
-  if (fs.existsSync(path.join(__dirname, brandRel))) {
-    return [brandRel, ...RUNTIME_PARTS];
-  }
   return [...RUNTIME_PARTS];
 }
 
@@ -5120,6 +7397,7 @@ function stripJsFunctionsByName(src, replacementsByName) {
 function stripUnusedUpstreamMenuObserver(src) {
   const preCleaned = src
     .replace(/\bvar\s+(?:SET_TITLE_I18N|SET_HEAD_I18N|FILL_RADIUS_CSS|TRACK_HEIGHT|BASE_SPEEDUP|MIN_HEIGHT_SLOTS|CLAUDE_ROWS|CLAUDE_KNOB_[WHR]|TRACE_CAPACITY|traceRingBuffer)\s*=\s*(?:\{[^{}]*\}|[^;\n]+);?/g, '')
+    .replace(/\bvar\s+SETTINGS_SCHEMA\s*=\s*_F\(\[[\s\S]*?(?=\r?\nfunction\s+schemaDefaults\b)/, '')
     .replace(/,\s*(?:label|hint|labelEn|hintEn)\s*:\s*"[^"]*"/g, '')
     .replace(/(?<!function\s)\btracePush\([^\n;]*\);?/g, '')
     .replace(/if\s*\(\s*typeof\s+window\s*!==\s*"undefined"\s*&&[\s\S]*?(?=\nreturn\s*\{)/, '')
@@ -5133,6 +7411,8 @@ function stripUnusedUpstreamMenuObserver(src) {
       }
     });
   return stripJsFunctionsByName(preCleaned, {
+    schemaDefaults: 'function schemaDefaults(){return{v:1,motion:"fast",ticks:"highlight"};}',
+    normalizeSettings: 'function normalizeSettings(r){var b={v:1,motion:"fast",ticks:"highlight"};if(!r||typeof r!=="object")return b;if(r.motion==="fast"||r.motion==="quick"||r.motion==="full")b.motion=r.motion;else if(!r.motion&&r.reducedMotion===true)b.motion="quick";if(r.ticks==="highlight"||r.ticks==="dim"||r.ticks==="hidden")b.ticks=r.ticks;return b;}',
     installMenuObserver: 'function installMenuObserver(){return{stop:function(){},rescan:function(){},getCurrent:function(){return null;}};}',
     openSettingsPanel: 'function openSettingsPanel(){return function(){};}',
     installSettingsUi: 'function installSettingsUi(){return{stop:function(){}};}',
@@ -5702,41 +7982,116 @@ function resolveCurrentBundleCodeHash() {
   return computeHash(readRuntimeBundle());
 }
 
-function buildConfigRefreshExpression(customConfig, extraMeta = null) {
-  const config = customConfig ? reconcileConfigAliases(customConfig) : readConfig();
-  const codeHash = resolveCurrentBundleCodeHash();
-  const bootCfg = {
-    ...config,
-    ...(extraMeta && typeof extraMeta === 'object' ? extraMeta : {}),
-    binding: SETTING_BINDING,
-    codeHash,
-    __fromFile: true,
-  };
-  return `(() => {
-    const cfg = ${JSON.stringify(bootCfg)};
+// Channel 1 自身实际消费的最小运行时 key 集（Omni / InlineDiff 均在各自独立通道内自带完整 8 语表，无需重复打入 Channel 1 bootCfg）
+const CH1_RUNTIME_UI_KEYS = Object.freeze([
+  'cacheRead', 'cacheShort', 'effortTitle', 'fiveHourLabel',
+  'homeLocalOnlyTag', 'homeLocalScopeNote', 'homeScopeActive', 'homeScopeActiveCount', 'homeScopeAll', 'homeScopeArchivedCount',
+  'kpiCacheHit', 'kpiCalls', 'kpiDays', 'kpiFavModel', 'kpiSessions', 'kpiTokens',
+  'noModelUsage',
+  'optHost', 'optLightAlabaster', 'optLightCrystal', 'optMotionOff', 'optMotionStandard', 'optMotionSubtle',
+  'optMotionUltra', 'optObsidian', 'optThoughtBilingual', 'optThoughtImmersive', 'optWarm',
+  'quotaEmptyHint', 'quotaJustNow', 'quotaLoading', 'quotaPoolsTitle', 'refreshBtnTitle', 'sessionsUnit',
+  'showLess', 'sidebarLessLabel', 'sidebarMoreLabel', 'studioPlaceholder', 'subagentsUnit', 'swarmBadge',
+  'tabModels', 'tabOverview', 'tabQuotas', 'thinkingEllipsis', 'tokenUnit', 'tokensInShort', 'tokensOutShort',
+  'weeklyLabel', 'workspaceAll', 'workspaceFilterAria',
+]);
+
+let _localesFreshCache = { sig: '', mod: null };
+
+function loadLocalesModuleFresh() {
+  const locPath = path.join(__dirname, 'i18n-locales.js');
+  if (!fs.existsSync(locPath)) return null;
+  try {
+    const sig = getFileSig(locPath);
+    if (_localesFreshCache.sig === sig && _localesFreshCache.mod) {
+      return _localesFreshCache.mod;
+    }
+    try { delete require.cache[require.resolve(locPath)]; } catch {}
+    const mod = require(locPath);
+    _localesFreshCache = { sig, mod };
+    return mod;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeLangIdNode(rawLang, fallback = 'en') {
+  const raw = typeof rawLang === 'string' ? rawLang.trim().toLowerCase().replace(/_/g, '-') : '';
+  if (!raw || raw === 'auto') return fallback;
+  if (raw === 'en' || raw.startsWith('en-') || raw === 'english') return 'en';
+  if (raw === 'ja' || raw.startsWith('ja-') || raw === 'jp' || raw === 'japanese') return 'ja';
+  if (raw === 'ko' || raw.startsWith('ko-') || raw === 'kr' || raw === 'korean') return 'ko';
+  if (raw === 'es' || raw.startsWith('es-') || raw === 'spanish') return 'es';
+  if (raw === 'fr' || raw.startsWith('fr-') || raw === 'french') return 'fr';
+  if (raw === 'de' || raw.startsWith('de-') || raw === 'german') return 'de';
+  if (raw === 'yue' || raw.startsWith('yue-') || raw === 'zh-yue' || raw.includes('cantonese')) return 'zh-CN';
+  if (raw === 'zh-tw' || raw === 'zh-hk' || raw.startsWith('zh-hk-') || raw === 'zh-mo' || raw === 'zh-hant' || raw.startsWith('zh-hant-') || raw === 'tw' || raw === 'hant') return 'zh-TW';
+  if (raw === 'zh' || raw === 'zh-cn' || raw === 'zh-hans' || raw.startsWith('zh-')) return 'zh-CN';
+  return fallback;
+}
+
+function resolveSystemLangNode(hostLocaleHint = null) {
+  const sysLocale = hostLocaleHint || detectSystemUiLocale();
+  const stripped = String(sysLocale || '').trim().split(/[.@]/)[0];
+  return normalizeLangIdNode(stripped, 'en');
+}
+
+function extractSingleLangRuntimeSlice(mod, langId) {
+  if (!mod) return {};
+  const src =
+    typeof mod.getRuntimeUiSlice === 'function'
+      ? mod.getRuntimeUiSlice(langId)?.strings
+      : typeof mod.getUiStrings === 'function'
+        ? mod.getUiStrings(langId)
+        : null;
+  if (!src || typeof src !== 'object') return {};
+  const out = {};
+  for (let i = 0; i < CH1_RUNTIME_UI_KEYS.length; i++) {
+    const k = CH1_RUNTIME_UI_KEYS[i];
+    if (typeof src[k] === 'string') out[k] = src[k];
+  }
+  return out;
+}
+
+// 为 Channel 1 bootCfg 生成当前活跃语言（及 auto 模式下的 en 兜底）迷你运行时词典（列式编码消除双语重复键名），避免打包完整 8 语设置词典
+function buildRuntimeUiSlicePayload(config) {
+  const mod = loadLocalesModuleFresh();
+  if (!mod) return null;
+  const rawLang = (config && (config.language || config.lang)) || 'auto';
+  const isAuto = String(rawLang).trim().toLowerCase() === 'auto';
+  const primary = isAuto ? resolveSystemLangNode() : normalizeLangIdNode(rawLang, 'en');
+  const pObj = extractSingleLangRuntimeSlice(mod, primary);
+  const enObj = isAuto && primary !== 'en' ? extractSingleLangRuntimeSlice(mod, 'en') : null;
+  const keys = CH1_RUNTIME_UI_KEYS.filter((k) => typeof pObj[k] === 'string' || typeof enObj?.[k] === 'string');
+  const vals = { [primary]: keys.map((k) => pObj[k] ?? '') };
+  if (enObj) vals.en = keys.map((k) => enObj[k] ?? '');
+  return { active: primary, keys, vals };
+}
+
+let _configRefreshTemplate = '';
+
+function getConfigRefreshTemplate() {
+  if (_configRefreshTemplate) return _configRefreshTemplate;
+  const rawTpl = `(() => {
+    const cfg = __AG_REF_CFG__;
     const api = window.__agPrism || window.__agClaudeStyle;
-    if (api && api.version === ${JSON.stringify(PLUGIN_VERSION)} && api.codeHash === ${JSON.stringify(codeHash)} && typeof api.refreshConfig === 'function') {
+    if (api && api.version === __AG_REF_VER__ && api.codeHash === __AG_REF_HASH__ && typeof api.refreshConfig === 'function') {
       const applied = api.refreshConfig(cfg);
-      if (applied === false) {
-        return { refreshed: true, skippedStale: true, version: api.version };
-      }
+      if (applied === false) return { refreshed: true, skippedStale: true, version: api.version };
       const effectiveCfg = api.getState?.()?.cfg || cfg;
       try { window.__agPrismTelemetry?.sync?.(effectiveCfg); } catch {}
       try { window.__agPrismEffortSlider?.sync?.(effectiveCfg); } catch {}
       try { window.__agPrismThought?.sync?.(effectiveCfg); } catch {}
       try { window.__agPrismInlineDiff?.sync?.(effectiveCfg); } catch {}
-      if (effectiveCfg?.omniModule === 'off') {
-        try { window.__agPrismOmni?.destroy?.(); } catch {}
-      } else {
-        try { window.__agPrismOmni?.sync?.(effectiveCfg, window.__agPrismOmniServerMeta || null); } catch {}
-      }
+      if (effectiveCfg?.omniModule === 'off') { try { window.__agPrismOmni?.destroy?.(); } catch {} }
+      else { try { window.__agPrismOmni?.sync?.(effectiveCfg, window.__agPrismOmniServerMeta || null); } catch {} }
       if (effectiveCfg?.sidebarStudio !== 'on') {
         try { window.__agPrismSidebar?.sync?.(effectiveCfg, window.__agPrismSidebarMeta || null); } catch {}
         try { window.__agPrismSidebar?.destroy?.(); } catch {}
         try { delete window.__agPrismSidebar; } catch {}
         try {
           if (document.documentElement) {
-            ['data-ag-prism-mode', 'data-ag-prism-chat-kind', 'data-ag-prism-chat-telemetry', 'data-ag-cs-space', 'data-ag-cs-space-palette', 'data-ag-cs-space-accent'].forEach((a) => document.documentElement.removeAttribute(a));
+            ['data-ag-prism-mode','data-ag-prism-chat-kind','data-ag-prism-chat-telemetry','data-ag-cs-space','data-ag-cs-space-palette','data-ag-cs-space-accent'].forEach((a) => document.documentElement.removeAttribute(a));
           }
         } catch {}
       } else {
@@ -5745,11 +8100,46 @@ function buildConfigRefreshExpression(customConfig, extraMeta = null) {
       try {
         const hiMode = effectiveCfg?.hostLocalization;
         const hiLang = effectiveCfg?.language;
-        const navL = String((typeof navigator !== 'undefined' && navigator.language) || '').trim();
-        if (hiMode === 'off' || (hiMode !== 'on' && ((hiLang && hiLang !== 'zh-CN' && hiLang !== 'auto') || (hiLang === 'auto' && navL && !/^zh(?:$|-(?:cn|hans|sg)(?:-|$))/i.test(navL))))) {
-          window.__agPrismHostI18n?.destroy?.();
-        }
+        const navL = String((typeof navigator !== 'undefined' && ((navigator.languages && navigator.languages[0]) || navigator.language)) || '').trim();
+        if (hiMode === 'off') window.__agPrismHostI18n?.setMode?.('off');
+        else if (hiMode === 'on') window.__agPrismHostI18n?.setMode?.('on');
+        else if ((hiLang && hiLang !== 'zh-CN' && hiLang !== 'auto') || ((!hiLang || hiLang === 'auto') && navL && !/^zh(?:$|-(?:cn|hans|sg)(?:-|$))/i.test(navL))) window.__agPrismHostI18n?.destroy?.();
+        else window.__agPrismHostI18n?.setMode?.('auto');
       } catch {}
+      if (effectiveCfg?.mascot === 'off' || effectiveCfg?.mascot === false) {
+        try {
+          try { window.__agDualMascotRig?.dispose?.(); } catch {}
+          try { (window.__agPrism || window.__agClaudeStyle)?.sync?.(); } catch {}
+          document.querySelectorAll?.('.ag-cs-crab, .ag-cs-dual-stage, .ag-cs-crab-stage, .ag-cs-mascot-stage, .ag-v2-mascot-stage, .ag-v2-habitat-prop').forEach((n) => {
+            try { n.__agMascotApi?.dispose?.(); } catch {}
+            n.remove?.();
+          });
+          document.querySelectorAll?.('[data-ag-cs-crab-anchor]').forEach((n) => n.removeAttribute?.('data-ag-cs-crab-anchor'));
+          document.documentElement?.removeAttribute?.('data-ag-cs-has-crab');
+          document.documentElement?.removeAttribute?.('data-ag-cs-mascot-drag');
+          delete window.__agDualMascotRig;
+          delete globalThis.__agDualMascotRig;
+          delete window.__agPrismMascotArt;
+          delete globalThis.__agPrismMascotArt;
+        } catch {}
+      }
+      if (effectiveCfg?.homeLayout && effectiveCfg.homeLayout !== 'studio') {
+        try {
+          (window.__agPrism || window.__agClaudeStyle)?.detachHomeStudio?.();
+          document.getElementById?.('ag-prism-studio-v101-css')?.remove?.();
+          document.querySelectorAll?.('.ag-cs-home-panel-seat,.ag-cs-home-panel')?.forEach?.((n) => n.remove());
+          document.documentElement?.removeAttribute?.('data-ag-prism-scope');
+          for (const k of ['__agPrismHomeStudioPanel', '__agHomeStudioPanel']) { delete window[k]; delete globalThis[k]; }
+        } catch {}
+      }
+      if (effectiveCfg?.periodicModelPicker === 'off' || effectiveCfg?.periodicModelPicker === false) {
+        try {
+          window.__agPrismPeriodicPicker?.destroy?.();
+          ['data-ag-prism-periodic-picker','data-ag-pp-open','data-ag-pp-holding'].forEach((a) => document.documentElement?.removeAttribute?.(a));
+          document.querySelectorAll?.('#ag-prism-periodic-picker-css,#ag-prism-periodic-picker-root,.ag-pp-hold-ring,.ag-pp-mini-keycap').forEach((n) => n.remove());
+          ['__agPrismPeriodicPicker','__agPrismPeriodicPickerFactory','__agPrismKeyboard3D','__agPrismPeriodicKeyboard3D','__agPrismOledScreen','__agPrismGrainAssets','__agPeriodicAudioFx','__agPeriodicModelCatalog','__agPeriodicHostBridge','__agPeriodicBentoUi','__agPeriodicPbrGrainAssets','__agPeriodicOledScreen','__agPeriodicKeyboard3D'].forEach((k) => { try { delete window[k]; } catch {} try { delete globalThis[k]; } catch {} });
+        } catch {}
+      }
       if (document.documentElement) {
         if (effectiveCfg?.thoughtTranslate && effectiveCfg.thoughtTranslate !== 'off') {
           document.documentElement.setAttribute('data-ag-prism-thought-view', effectiveCfg.thoughtView === 'bilingual' ? 'bilingual' : 'immersive');
@@ -5762,6 +8152,27 @@ function buildConfigRefreshExpression(customConfig, extraMeta = null) {
     }
     return { refreshed: false };
   })()`;
+  _configRefreshTemplate = minifySingleSource(rawTpl);
+  return _configRefreshTemplate;
+}
+
+function buildConfigRefreshExpression(customConfig, extraMeta = null) {
+  const config = customConfig ? reconcileConfigAliases(customConfig) : readConfig();
+  const codeHash = resolveCurrentBundleCodeHash();
+  const hasExplicitLang = !customConfig || Object.prototype.hasOwnProperty.call(config, 'language') || Object.prototype.hasOwnProperty.call(config, 'lang');
+  const uiSlice = hasExplicitLang ? buildRuntimeUiSlicePayload(config) : null;
+  const bootCfg = {
+    ...config,
+    ...(uiSlice ? { __uiSlice: uiSlice } : {}),
+    ...(extraMeta && typeof extraMeta === 'object' ? extraMeta : {}),
+    binding: SETTING_BINDING,
+    codeHash,
+    __fromFile: true,
+  };
+  return getConfigRefreshTemplate()
+    .replace('__AG_REF_CFG__', () => JSON.stringify(bootCfg))
+    .replace('__AG_REF_VER__', () => JSON.stringify(PLUGIN_VERSION))
+    .replace('__AG_REF_HASH__', () => JSON.stringify(codeHash));
 }
 
 let _injectWrapperTemplate = null;
@@ -5769,400 +8180,266 @@ let _injectWrapperTemplate = null;
 function getInjectWrapperTemplate() {
   if (_injectWrapperTemplate) return _injectWrapperTemplate;
   const rawTpl = `(() => {
-    let _cssVal = null;
-    const getCss = () => (_cssVal === null ? (_cssVal = __AG_INJ_CSS__) : _cssVal);
-    const cleanupLegacyResidue = () => {
+    const W = window, D = document, G = globalThis, isF = (v) => typeof v === 'function';
+    const VER = ${JSON.stringify(PLUGIN_VERSION)}, SID = ${JSON.stringify(STYLE_ID)}, LSID = ${JSON.stringify(LEGACY_STYLE_ID)};
+    let _css = null;
+    const getCss = () => (_css === null ? (_css = __AG_INJ_CSS__) : _css);
+    const cleanOld = () => {
+      try { D.getElementById(LSID)?.remove(); } catch {}
       try {
-        const oldStyle = document.getElementById(${JSON.stringify(LEGACY_STYLE_ID)});
-        if (oldStyle) oldStyle.remove();
-      } catch {}
-      try {
-        const oldApi = window.__agClaudeStyle;
-        if (oldApi && (!window.__agPrism || Number(oldApi.version) <= 2)) {
-          if (typeof oldApi.destroy === 'function') oldApi.destroy();
-          delete window.__agClaudeStyle;
+        const o = W.__agClaudeStyle;
+        if (o && (!W.__agPrism || Number(o.version) <= 2)) {
+          if (isF(o.destroy)) o.destroy();
+          delete W.__agClaudeStyle;
         }
       } catch {}
     };
     const applyStyle = () => {
-      const targetParent = document.head || document.documentElement;
-      if (!targetParent) return;
-      cleanupLegacyResidue();
-      let style = document.getElementById(${JSON.stringify(STYLE_ID)});
-      if (!style) {
-        style = document.createElement('style');
-        style.id = ${JSON.stringify(STYLE_ID)};
+      const p = D.head || D.documentElement;
+      if (!p) return;
+      cleanOld();
+      let st = D.getElementById(SID);
+      if (!st) { st = D.createElement('style'); st.id = SID; }
+      const fk = __AG_INJ_CSSHASH__, flatOk = st.getAttribute?.('data-ag-cs-flat') === fk + ':' + (st.textContent || '').length;
+      const rawOk = st.getAttribute?.('data-ag-cs-css-hash') === fk && (st.textContent || '').length > 0 && typeof CSS !== 'undefined' && CSS.supports?.('selector(&)');
+      if (!flatOk && !rawOk) {
+        const c = getCss();
+        if (st.textContent !== c) st.textContent = c;
+        st.removeAttribute?.('data-ag-cs-flat');
+        st.setAttribute?.('data-ag-cs-css-hash', fk);
       }
-      const flatKey = __AG_INJ_CSSHASH__;
-      if (style.getAttribute?.('data-ag-cs-flat') !== flatKey + ':' + (style.textContent || '').length) {
-        const css = getCss();
-        if (style.textContent !== css) style.textContent = css;
-        style.removeAttribute?.('data-ag-cs-flat');
-        style.setAttribute?.('data-ag-cs-css-hash', flatKey);
-      }
-      if (style.parentNode !== targetParent || targetParent.lastElementChild !== style) {
-        targetParent.appendChild(style);
-      }
-      try {
-        window.__agPrism?.flattenCss?.();
-      } catch {}
+      if (st.parentNode !== p || p.lastElementChild !== st) p.appendChild(st);
+      try { W.__agPrism?.flattenCss?.(); } catch {}
     };
 
-    const mkRpcCore = (bindingKey, maxInflight, onTimeout, onError, disposedPayload) => {
-      const pending = new Map();
+    const mkRpc = (bk, lim, onTo, onErr, disp) => {
+      const pend = new Map();
       let seq = 0;
-      const send = (buildReq, timeoutMs, extra, bypassLimit) =>
-        new Promise((resolve) => {
-          if (!bypassLimit && pending.size >= maxInflight) {
-            resolve(onError('busy', true));
-            return;
-          }
-          const id = ++seq;
-          const item = extra ? { resolve, timer: null, ...extra } : { resolve, timer: null };
-          item.arm = (ms = timeoutMs) => {
-            clearTimeout(item.timer);
-            item.timer = setTimeout(() => {
-              pending.delete(id);
-              resolve(onTimeout());
-            }, ms);
-          };
-          item.arm();
-          pending.set(id, item);
-          try {
-            window[bindingKey](JSON.stringify(buildReq(id)));
-          } catch (err) {
-            clearTimeout(item.timer);
-            pending.delete(id);
-            resolve(onError(String(err && err.message ? err.message : err), false));
-          }
+      const send = (mkReq, ms, ext, bypass) =>
+        new Promise((res) => {
+          if (!bypass && pend.size >= lim) { res(onErr('busy', true)); return; }
+          const id = ++seq, it = ext ? { res, t: null, ...ext } : { res, t: null };
+          it.arm = (d = ms) => { clearTimeout(it.t); it.t = setTimeout(() => { pend.delete(id); res(onTo()); }, d); };
+          it.arm();
+          pend.set(id, it);
+          try { W[bk](JSON.stringify(mkReq(id))); }
+          catch (e) { clearTimeout(it.t); pend.delete(id); res(onErr(String(e && e.message ? e.message : e), false)); }
         });
-      const resolve = (id, res) => {
-        const item = pending.get(id);
-        if (!item) return;
-        clearTimeout(item.timer);
-        pending.delete(id);
-        item.resolve(res);
+      const resolve = (id, r) => {
+        const it = pend.get(id);
+        if (!it) return;
+        clearTimeout(it.t);
+        pend.delete(id);
+        it.res(r);
       };
       const dispose = () => {
-        for (const item of pending.values()) {
-          clearTimeout(item.timer);
-          item.resolve(disposedPayload);
-        }
-        pending.clear();
+        for (const it of pend.values()) { clearTimeout(it.t); it.res(disp); }
+        pend.clear();
       };
-      return { pending, send, resolve, dispose };
+      return { pend, send, resolve, dispose };
     };
 
-    const ensureRepoBridge = () => {
+    const ensureRepo = () => {
       try {
-        if (window.__agPrismRepoBridge?.__prismBridgeReady) return;
-        const core = mkRpcCore('__agPrismRepoCall', 8, () => ({ ok: false, timeout: true, noRemote: true, hasRemote: false }), (e) => ({ ok: false, error: e }), { ok: false, disposed: true });
-        const callRepo = (inp) => {
-          const payload = typeof inp === 'string' ? { action: inp } : inp && typeof inp === 'object' ? { ...inp } : { action: 'status' };
-          const act = payload.action || 'status';
-          if (typeof window.__agPrismRepoCall !== 'function') {
+        if (W.__agPrismRepoBridge?.__prismBridgeReady) return;
+        const c = mkRpc('__agPrismRepoCall', 8, () => ({ ok: false, timeout: true, noRemote: true, hasRemote: false }), (e) => ({ ok: false, error: e }), { ok: false, disposed: true });
+        const fn = (inp) => {
+          const p = typeof inp === 'string' ? { action: inp } : inp && typeof inp === 'object' ? { ...inp } : { action: 'status' };
+          const a = p.action || 'status';
+          if (!isF(W.__agPrismRepoCall)) {
             return Promise.resolve({
-              ok: false, offline: true, action: act, isGitRepo: false, noRemote: true, hasRemote: false,
-              branch: 'local', commit: ${JSON.stringify(PLUGIN_VERSION)}, shortHash: ${JSON.stringify(PLUGIN_VERSION)},
-              remoteUrl: '', hasUpdates: false, upToDate: true, updated: false, message: 'Sidecar daemon offline',
+              ok: false, offline: true, action: a, isGitRepo: false, noRemote: true, hasRemote: false,
+              branch: 'local', commit: VER, shortHash: VER, remoteUrl: '', hasUpdates: false, upToDate: true, updated: false, message: 'Sidecar daemon offline',
             });
           }
-          return core.send((id) => ({ id, action: act, input: payload }), 16000).then((r) => (r && !r.action ? { ...r, action: act } : r));
+          return c.send((id) => ({ id, action: a, input: p }), 16000).then((r) => (r && !r.action ? { ...r, action: a } : r));
         };
-        Object.assign(callRepo, {
-          __prismBridgeReady: true, call: callRepo, request: callRepo,
-          status: () => callRepo({ action: 'status' }), pull: () => callRepo({ action: 'pull' }), sync: () => callRepo({ action: 'pull' }),
-          resolve: core.resolve, dispose: core.dispose,
+        Object.assign(fn, {
+          __prismBridgeReady: true, call: fn, request: fn,
+          status: () => fn({ action: 'status' }), pull: () => fn({ action: 'pull' }), sync: () => fn({ action: 'pull' }),
+          resolve: c.resolve, dispose: c.dispose,
         });
-        window.__agPrismRepoBridge = callRepo;
-        window.__agPrismRepoResolve = core.resolve;
+        W.__agPrismRepoBridge = fn;
+        W.__agPrismRepoResolve = c.resolve;
       } catch {}
     };
 
-    const ensureThoughtBridge = () => {
+    const ensureThought = () => {
       try {
-        const cur = window.__agPrismThoughtBridge;
-        if (cur && cur.__prismBridgeReady && typeof cur.cacheStats === 'function' && typeof cur.cancelTranslate === 'function') return;
+        const cur = W.__agPrismThoughtBridge;
+        if (cur?.__prismBridgeReady && isF(cur.cacheStats) && isF(cur.cancelTranslate)) return;
         try { cur?.dispose?.(); } catch {}
-        const core = mkRpcCore(
-          '__agPrismThoughtCall',
-          64,
-          () => ({ ok: false, timeout: true, error: 'Request timed out' }),
-          (e) => ({ ok: false, error: e }),
-          { ok: false, disposed: true }
-        );
-        const sendRpc = (payload, onPartial, timeoutMs = 48000) => {
-          const act = (payload && payload.action) || 'get-config';
-          if (typeof window.__agPrismThoughtCall !== 'function') {
-            return Promise.resolve({ ok: false, offline: true, action: act, error: 'Sidecar daemon offline' });
-          }
-          const isCtrl = act === 'cancel-translate' || act === 'cache-stats' || act === 'clear-cache';
-          return core
-            .send((id) => ({ id, action: act, input: payload }), timeoutMs, onPartial ? { onPartial, buf: '' } : null, isCtrl)
-            .then((r) => (r && !r.action && !r.ok ? { ...r, action: act } : r));
+        const c = mkRpc('__agPrismThoughtCall', 64, () => ({ ok: false, timeout: true, error: 'Request timed out' }), (e) => ({ ok: false, error: e }), { ok: false, disposed: true });
+        const rpc = (p, onP, ms = 48000) => {
+          const a = p?.action || 'get-config';
+          if (!isF(W.__agPrismThoughtCall)) return Promise.resolve({ ok: false, offline: true, action: a, error: 'Sidecar daemon offline' });
+          const ctrl = a === 'cancel-translate' || a === 'cache-stats' || a === 'clear-cache';
+          return c.send((id) => ({ id, action: a, input: p }), ms, onP ? { onP, buf: '' } : null, ctrl).then((r) => (r && !r.action && !r.ok ? { ...r, action: a } : r));
         };
-        const bridge = {
+        const b = {
           __prismBridgeReady: true,
-          call: (input) => sendRpc(input && typeof input === 'object' ? { ...input } : { action: String(input || 'get-config') }, null, 25000),
-          translateStream: (opts, onPartial) => {
-            const waitMs = Math.min(180000, 90000 + Math.max(0, core.pending.size - 2) * 30000);
-            return sendRpc({ ...(opts && typeof opts === 'object' ? opts : {}), action: 'translate-stream', text: (opts && opts.text) || '', mode: (opts && opts.mode) || 'ai' }, onPartial, waitMs);
-          },
-          cancelTranslate: (v) => sendRpc(v && typeof v === 'object' ? { ...v, action: 'cancel-translate' } : { action: 'cancel-translate', requestId: v, key: v }, null, 8000),
-          cacheStats: () => sendRpc({ action: 'cache-stats' }, null, 8000),
-          clearCache: () => sendRpc({ action: 'clear-cache' }, null, 8000),
-          onChunk: (id, chunk) => {
-            const item = core.pending.get(id);
-            if (!item || typeof item.onPartial !== 'function') return;
-            let fullText = null;
-            if (typeof chunk === 'string') {
-              item.buf = chunk;
-              fullText = chunk;
-            } else if (chunk && typeof chunk === 'object' && typeof chunk.a === 'string') {
-              const cur = typeof item.buf === 'string' ? item.buf : '';
-              if ((chunk.o | 0) === cur.length) {
-                item.buf = cur + chunk.a;
-                fullText = item.buf;
-              }
+          call: (i) => rpc(i && typeof i === 'object' ? { ...i } : { action: String(i || 'get-config') }, null, 25000),
+          translateStream: (o, onP) => rpc({ ...(o && typeof o === 'object' ? o : {}), action: 'translate-stream', text: o?.text || '', mode: o?.mode || 'ai' }, onP, Math.min(180000, 90000 + Math.max(0, c.pend.size - 2) * 30000)),
+          cancelTranslate: (v) => rpc(v && typeof v === 'object' ? { ...v, action: 'cancel-translate' } : { action: 'cancel-translate', requestId: v, key: v }, null, 8000),
+          cacheStats: () => rpc({ action: 'cache-stats' }, null, 8000),
+          clearCache: () => rpc({ action: 'clear-cache' }, null, 8000),
+          onChunk: (id, ch) => {
+            const it = c.pend.get(id);
+            if (!it || !isF(it.onP)) return;
+            let txt = null;
+            if (typeof ch === 'string') { it.buf = txt = ch; }
+            else if (ch && typeof ch === 'object' && typeof ch.a === 'string') {
+              const s = typeof it.buf === 'string' ? it.buf : '';
+              if ((ch.o | 0) === s.length) it.buf = txt = s + ch.a;
             }
-            if (fullText !== null) {
-              try { item.arm?.(60000); } catch {}
-              try { item.onPartial(fullText); } catch {}
+            if (txt !== null) {
+              try { it.arm?.(60000); } catch {}
+              try { it.onP(txt); } catch {}
             }
           },
-          resolve: core.resolve,
-          dispose: core.dispose,
+          resolve: c.resolve,
+          dispose: c.dispose,
         };
-        window.__agPrismThoughtBridge = bridge;
-        window.__agPrismThoughtOnChunk = bridge.onChunk;
-        window.__agPrismThoughtResolve = core.resolve;
+        W.__agPrismThoughtBridge = b;
+        W.__agPrismThoughtOnChunk = b.onChunk;
+        W.__agPrismThoughtResolve = c.resolve;
       } catch {}
     };
 
-    const ensureUsageBridge = () => {
+    const ensureUsage = () => {
       try {
-        const cur = window.__agPrismUsageBridge;
-        if (cur && cur.__prismBridgeReady && typeof cur.listSummaries === 'function') return;
+        const cur = W.__agPrismUsageBridge;
+        if (cur?.__prismBridgeReady && isF(cur.listSummaries)) return;
         try { cur?.dispose?.(); } catch {}
-        const failU = (extra) => ({ ok: false, records: [], summaries: [], ...extra });
-        const core = mkRpcCore('__agPrismUsageCall', 12, () => failU({ timeout: true }), (e, busy) => failU(busy ? { busy: true } : { error: e }), failU({ disposed: true }));
-        const sendUsageRpc = (reqObj, timeoutMs = 18000) =>
-          typeof window.__agPrismUsageCall !== 'function' ? Promise.resolve(failU({ offline: true })) : core.send((id) => ({ id, ...reqObj }), timeoutMs);
-        const fetchBatch = (itemsOrOpts, timeoutMs = 18000) => {
-          if (itemsOrOpts && typeof itemsOrOpts === 'object' && !Array.isArray(itemsOrOpts)) {
-            return sendUsageRpc({ action: itemsOrOpts.action || 'fetch-batch', items: Array.isArray(itemsOrOpts.items) ? itemsOrOpts.items : [], includeSummaries: Boolean(itemsOrOpts.includeSummaries) }, timeoutMs);
-          }
-          return sendUsageRpc({ action: 'fetch-batch', items: Array.isArray(itemsOrOpts) ? itemsOrOpts : [] }, timeoutMs);
-        };
-        const listSummaries = (timeoutMs = 12000) => sendUsageRpc({ action: 'list-summaries', items: [], includeSummaries: true }, timeoutMs);
-        const bridge = {
+        const fu = (x) => ({ ok: false, records: [], summaries: [], ...x });
+        const c = mkRpc('__agPrismUsageCall', 12, () => fu({ timeout: true }), (e, b) => fu(b ? { busy: true } : { error: e }), fu({ disposed: true }));
+        const rpc = (q, ms = 18000) => (!isF(W.__agPrismUsageCall) ? Promise.resolve(fu({ offline: true })) : c.send((id) => ({ id, ...q }), ms));
+        const b = {
           __prismBridgeReady: true,
-          isOnline: () => typeof window.__agPrismUsageCall === 'function',
-          fetchBatch,
-          listSummaries,
-          resolve: core.resolve,
-          dispose: core.dispose,
+          isOnline: () => isF(W.__agPrismUsageCall),
+          fetchBatch: (o, ms = 18000) => (o && typeof o === 'object' && !Array.isArray(o) ? rpc({ action: o.action || 'fetch-batch', items: Array.isArray(o.items) ? o.items : [], includeSummaries: Boolean(o.includeSummaries) }, ms) : rpc({ action: 'fetch-batch', items: Array.isArray(o) ? o : [] }, ms)),
+          listSummaries: (ms = 12000) => rpc({ action: 'list-summaries', items: [], includeSummaries: true }, ms),
+          resolve: c.resolve,
+          dispose: c.dispose,
         };
-        window.__agPrismUsageBridge = bridge;
-        window.__agPrismUsageResolve = core.resolve;
+        W.__agPrismUsageBridge = b;
+        W.__agPrismUsageResolve = c.resolve;
       } catch {}
     };
 
-    const destroyModules = (includeMain) => {
-      const ks = includeMain
-        ? ['__agPrismTelemetry', '__agPrismEffortSlider', '__agPrismThought', '__agPrismOmni', '__agPrismContextMenu', '__agPrism']
-        : ['__agPrismTelemetry', '__agPrismEffortSlider', '__agPrismThought', '__agPrismOmni', '__agPrismContextMenu'];
-      for (const k of ks) {
-        try { window[k]?.destroy?.(); } catch {}
-      }
+    const destroyMods = (incMain) => {
+      const ks = '__agPrismTelemetry,__agPrismEffortSlider,__agPrismThought,__agPrismOmni,__agPrismContextMenu'.split(',');
+      if (incMain) ks.push('__agPrism');
+      for (const k of ks) { try { W[k]?.destroy?.(); } catch {} }
     };
 
-    const stripForeignMount = () => {
-      destroyModules(true);
-      try { window.__agPrismInlineDiff?.destroy?.(); } catch {}
-      try { window.__agPrismContextMenu?.destroy?.(); } catch {}
-      try { window.__agPrismHostI18n?.destroy?.(); document.documentElement?.removeAttribute?.('data-ag-prism-host-i18n'); } catch {}
+    const stripForeign = () => {
+      destroyMods(true);
+      for (const k of '__agPrismInlineDiff,__agPrismHostI18n,__agPrismPeriodicPicker'.split(',')) { try { W[k]?.destroy?.(); } catch {} }
       try {
-        document.documentElement?.removeAttribute?.('data-ag-cs-model-menu');
-        document.querySelectorAll?.('[data-ag-cs-aux-dual],[data-ag-cs-model-overlay]').forEach((el) => {
+        const de = D.documentElement;
+        for (const a of 'data-ag-prism-host-i18n,data-ag-prism-periodic-picker,data-ag-pp-open,data-ag-cs-model-menu'.split(',')) de?.removeAttribute?.(a);
+        D.querySelectorAll?.('[data-ag-cs-aux-dual],[data-ag-cs-model-overlay]').forEach((el) => {
           el.removeAttribute('data-ag-cs-aux-dual');
           el.removeAttribute('data-ag-cs-model-overlay');
         });
       } catch {}
-      for (const k of ['__agPrismRepoBridge', '__agPrismThoughtBridge', '__agPrismUsageBridge', '__agPrismOmniBridge']) {
-        try { window[k]?.dispose?.(); } catch {}
-      }
-      for (const id of [${JSON.stringify(STYLE_ID)},${JSON.stringify(LEGACY_STYLE_ID)},'ag-prism-settings-v101-css','ag-prism-studio-v101-css','ag-prism-omni-css','ag-prism-inline-diff-css']) {
-        try { document.getElementById(id)?.remove(); } catch {}
-      }
-      try { document.querySelectorAll?.('[data-testid="prism-thought-ai-config"], [data-testid="prism-thought-general-config"], .ag-cs-ctx-menu, .ag-cs-ctx-toast, .ag-cs-inline-diff-box, .ag-cs-diff-ctx-menu')?.forEach?.((el) => el.remove()); } catch {}
-      delete window.__agPrismThought;
-      delete window.__agPrismThoughtSettingsUi;
-      delete globalThis.__agPrismThoughtSettingsUi;
-      delete window.__agPrismInlineDiff;
-      delete globalThis.__agPrismInlineDiff;
-      delete window.__agPrismInlineDiffFactory;
-      delete globalThis.__agPrismInlineDiffFactory;
-      delete window.__agPrismInlineDiffResolve;
-      delete window.__agPrismOmni;
-      delete window.__agPrismContextMenu;
-      delete globalThis.__agPrismContextMenu;
-      delete window.__agPrism;
-      delete window.__agClaudeStyle;
-    };
-
-    const hasDomWorkbenchMarkers = () => {
-      try {
-        if (
-          document.body &&
-          document.body.classList &&
-          (document.body.classList.contains('theme-standalone') || document.body.classList.contains('monaco-workbench'))
-        ) {
-          return true;
-        }
-        return Boolean(
-          document.querySelector(
-            '.agy-shell, .agy-home, [data-testid="aux-pane-split"], [data-testid="conversation-view"], [data-testid="agent-input-box"], [data-testid="model-selector-trigger"], .monaco-workbench'
-          )
-        );
-      } catch {
-        return false;
+      for (const k of '__agPrismRepoBridge,__agPrismThoughtBridge,__agPrismUsageBridge,__agPrismOmniBridge'.split(',')) { try { W[k]?.dispose?.(); } catch {} }
+      for (const id of [SID, LSID, 'ag-prism-settings-v101-css', 'ag-prism-studio-v101-css', 'ag-prism-omni-css', 'ag-prism-inline-diff-css']) { try { D.getElementById(id)?.remove(); } catch {} }
+      try { D.querySelectorAll?.('[data-testid="prism-thought-ai-config"],[data-testid="prism-thought-general-config"],.ag-cs-ctx-menu,.ag-cs-ctx-toast,.ag-cs-inline-diff-box,.ag-cs-diff-ctx-menu')?.forEach?.((el) => el.remove()); } catch {}
+      for (const k of '__agPrismThought,__agPrismThoughtSettingsUi,__agPrismInlineDiff,__agPrismInlineDiffFactory,__agPrismInlineDiffResolve,__agPrismOmni,__agPrismContextMenu,__agPrism,__agClaudeStyle'.split(',')) {
+        delete W[k];
+        delete G[k];
       }
     };
 
-    const checkHostIdentity = () => {
+    const hasMarkers = () => {
       try {
-        const loc = typeof window !== 'undefined' && window.location;
-        const href = loc && typeof loc.href === 'string' ? loc.href : '';
+        const cl = D.body?.classList;
+        if (cl && (cl.contains('theme-standalone') || cl.contains('monaco-workbench'))) return true;
+        return Boolean(D.querySelector('.agy-shell,.agy-home,[data-testid="aux-pane-split"],[data-testid="conversation-view"],[data-testid="agent-input-box"],[data-testid="model-selector-trigger"],.monaco-workbench'));
+      } catch { return false; }
+    };
+
+    const checkHost = () => {
+      try {
+        const href = typeof W.location?.href === 'string' ? W.location.href : '';
         if (!href) return 'ok';
         const low = href.toLowerCase();
-        if (low.startsWith('devtools://') || low.startsWith('data:') || low.startsWith('chrome:') || low.startsWith('chrome-extension:') || low.startsWith('edge:') || low.startsWith('blob:') || low.startsWith('plugin:')) {
-          return 'reject';
-        }
-        if (low.startsWith('vscode-file://') || low.startsWith('app://') || low.startsWith('about:')) {
-          const ttl = String(document.title || '').trim();
-          return /^(?:untitled|launchpad)$/i.test(ttl) || /\\/launchpad(?:\\.html)?(?:[?#]|$)/i.test(low) ? 'reject' : 'ok';
+        if (/^(?:devtools:\\/\\/|data:|chrome:|chrome-extension:|edge:|blob:|plugin:)/.test(low)) return 'reject';
+        if (/^(?:vscode-file:\\/\\/|app:\\/\\/|about:)/.test(low)) {
+          return /^(?:untitled|launchpad)$/i.test(String(D.title || '').trim()) || /\\/launchpad(?:\\.html)?(?:[?#]|$)/i.test(low) ? 'reject' : 'ok';
         }
         const m = /^(https?):\\/\\/(127\\.0\\.0\\.1|localhost|\\[::1\\])(?::\\d+)?(\\/[^?#]*)?(?:[?#]|$)/i.exec(href);
-        if (!m) {
-          return low.startsWith('http:') || low.startsWith('https:') ? 'reject' : 'ok';
-        }
-        const pathname = (m[3] || '/').toLowerCase();
-        if (/^\\/(?:viewer(?:\\/|$)|sandbox(?:\\/|$)|stream(?:\\/|$)|api(?:\\/|$))/.test(pathname)) {
-          return 'reject';
-        }
-        if (hasDomWorkbenchMarkers()) return 'ok';
-        const isPlainHttp = m[1].toLowerCase() === 'http';
-        const rs = String(document.readyState || '');
-        if (isPlainHttp) {
-          return rs === 'loading' ? 'defer' : 'reject';
-        }
-        if (/\\bantigravity\\b/i.test(String(document.title || ''))) return 'ok';
+        if (!m) return /^https?:/.test(low) ? 'reject' : 'ok';
+        if (/^\\/(?:viewer(?:\\/|$)|sandbox(?:\\/|$)|stream(?:\\/|$)|api(?:\\/|$))/.test((m[3] || '/').toLowerCase())) return 'reject';
+        if (hasMarkers()) return 'ok';
+        const rs = String(D.readyState || '');
+        if (m[1].toLowerCase() === 'http') return rs === 'loading' ? 'defer' : 'reject';
+        if (/\\bantigravity\\b/i.test(String(D.title || ''))) return 'ok';
         return rs === 'complete' ? 'reject' : 'ok';
-      } catch {
-        return 'ok';
-      }
+      } catch { return 'ok'; }
     };
 
-    let status = 'ok';
-    let mounted = false;
+    let status = 'ok', mounted = false;
     const mount = () => {
-      if (mounted || !document.documentElement) return;
-      const hostVerdict = checkHostIdentity();
-      if (hostVerdict === 'reject') {
-        status = 'skipped-non-host';
-        stripForeignMount();
-        return;
-      }
-      if (hostVerdict === 'defer') {
-        status = 'deferred';
-        document.addEventListener('DOMContentLoaded', () => mount(), { once: true });
-        return;
-      }
+      if (mounted || !D.documentElement) return;
+      const v = checkHost();
+      if (v === 'reject') { status = 'skipped-non-host'; stripForeign(); return; }
+      if (v === 'defer') { status = 'deferred'; D.addEventListener('DOMContentLoaded', () => mount(), { once: true }); return; }
       mounted = true;
-      if (typeof window !== 'undefined' && window.addEventListener && String(document.readyState || '') !== 'complete') {
-        window.addEventListener(
-          'load',
-          () => {
-            if (checkHostIdentity() === 'reject') stripForeignMount();
-          },
-          { once: true }
-        );
+      if (W.addEventListener && String(D.readyState || '') !== 'complete') {
+        W.addEventListener('load', () => { if (checkHost() === 'reject') stripForeign(); }, { once: true });
       }
       try {
-        cleanupLegacyResidue();
-        ensureRepoBridge();
-        ensureThoughtBridge();
-        ensureUsageBridge();
-        if (document.head) applyStyle();
-        else document.addEventListener('DOMContentLoaded', applyStyle, { once: true });
+        cleanOld();
+        ensureRepo();
+        ensureThought();
+        ensureUsage();
+        if (D.head) applyStyle();
+        else D.addEventListener('DOMContentLoaded', applyStyle, { once: true });
         const bootCfg = __AG_INJ_BOOTCFG__;
-        const existingPrism = window.__agPrism || window.__agClaudeStyle;
-        const bundleUnchanged = Boolean(
-          existingPrism &&
-            existingPrism.version === ${JSON.stringify(PLUGIN_VERSION)} &&
-            existingPrism.codeHash === __AG_INJ_CODEHASH__ &&
-            window.__agPrismTelemetry &&
-            window.__agPrismEffortSlider
-        );
-        if (bundleUnchanged) {
-          existingPrism.refreshConfig(bootCfg);
+        const cur = W.__agPrism || W.__agClaudeStyle;
+        if (cur && cur.version === VER && cur.codeHash === __AG_INJ_CODEHASH__ && W.__agPrismTelemetry && W.__agPrismEffortSlider) {
+          cur.refreshConfig(bootCfg);
         } else {
-          destroyModules(false);
-          try {
-            document.querySelectorAll('[data-ag-prism-fallback="1"]').forEach((n) => n.remove());
-          } catch {}
+          destroyMods(false);
+          try { D.querySelectorAll('[data-ag-prism-fallback="1"]').forEach((n) => n.remove()); } catch {}
           __AG_INJ_BUNDLE__();
-          if (typeof globalThis.__agCsUiMain === 'function') {
-            globalThis.__agCsUiMain(bootCfg);
-          }
+          if (isF(G.__agCsUiMain)) G.__agCsUiMain(bootCfg);
         }
-        if (window.__agClaudeStyle && !window.__agPrism) {
-          window.__agPrism = window.__agClaudeStyle;
-        } else if (window.__agPrism) {
-          window.__agClaudeStyle = window.__agPrism;
-        }
-        const liveState = window.__agPrism && typeof window.__agPrism.getState === 'function' ? window.__agPrism.getState() : null;
-        const effectiveCfg = (liveState && liveState.cfg) || bootCfg;
-        if (effectiveCfg?.omniModule === 'off') {
-          try { window.__agPrismOmni?.destroy?.(); } catch {}
-        } else {
-          try { window.__agPrismOmni?.sync?.(effectiveCfg, window.__agPrismOmniServerMeta || null); } catch {}
-        }
-        if (document.documentElement) {
-          if (!document.documentElement.hasAttribute('data-ag-prism')) document.documentElement.setAttribute('data-ag-prism', ${JSON.stringify(PLUGIN_VERSION)});
-          if (effectiveCfg?.thoughtTranslate && effectiveCfg.thoughtTranslate !== 'off') document.documentElement.setAttribute('data-ag-prism-thought-view', effectiveCfg.thoughtView === 'bilingual' ? 'bilingual' : 'immersive');
-          else document.documentElement.removeAttribute('data-ag-prism-thought-view');
+        if (W.__agClaudeStyle && !W.__agPrism) W.__agPrism = W.__agClaudeStyle;
+        else if (W.__agPrism) W.__agClaudeStyle = W.__agPrism;
+        const eCfg = (isF(W.__agPrism?.getState) ? W.__agPrism.getState()?.cfg : null) || bootCfg;
+        if (eCfg?.omniModule === 'off') { try { W.__agPrismOmni?.destroy?.(); } catch {} }
+        else { try { W.__agPrismOmni?.sync?.(eCfg, W.__agPrismOmniServerMeta || null); } catch {} }
+        const de = D.documentElement;
+        if (de) {
+          if (!de.hasAttribute('data-ag-prism')) de.setAttribute('data-ag-prism', VER);
+          if (eCfg?.thoughtTranslate && eCfg.thoughtTranslate !== 'off') de.setAttribute('data-ag-prism-thought-view', eCfg.thoughtView === 'bilingual' ? 'bilingual' : 'immersive');
+          else de.removeAttribute('data-ag-prism-thought-view');
         }
       } catch (e) {
-        status = 'error: ' + (e && e.message ? e.message : String(e));
-        if (typeof console !== 'undefined' && console.error) {
-          console.error('[obsidian-prism] init error:', e);
-        }
+        status = 'error: ' + (e?.message || String(e));
+        if (typeof console !== 'undefined' && console.error) console.error('[obsidian-prism] init error:', e);
       }
     };
 
-    if (document.documentElement) {
-      mount();
-    } else {
+    if (D.documentElement) mount();
+    else {
       status = 'deferred';
-      const onReady = () => {
-        if (document.documentElement) {
-          document.removeEventListener('readystatechange', onReady);
-          document.removeEventListener('DOMContentLoaded', onReady);
+      const onR = () => {
+        if (D.documentElement) {
+          D.removeEventListener('readystatechange', onR);
+          D.removeEventListener('DOMContentLoaded', onR);
           mount();
         }
       };
-      document.addEventListener('readystatechange', onReady);
-      document.addEventListener('DOMContentLoaded', onReady);
+      D.addEventListener('readystatechange', onR);
+      D.addEventListener('DOMContentLoaded', onR);
     }
-    const api = window.__agPrism || window.__agClaudeStyle;
-    const st = api && typeof api.getState === 'function' ? api.getState() : null;
-    return {
-      version: ${JSON.stringify(PLUGIN_VERSION)},
-      status,
-      state: st,
-    };
+    const api = W.__agPrism || W.__agClaudeStyle;
+    return { version: VER, status, state: isF(api?.getState) ? api.getState() : null };
   })()`;
   _injectWrapperTemplate = minifySingleSource(rawTpl);
   return _injectWrapperTemplate;
@@ -6176,7 +8453,8 @@ function getBundleSourceFiles() {
   const files = [
     { rel: 'cdp.js', fullPath: __filename, optional: false },
     { rel: 'style.css', fullPath: path.join(__dirname, 'style.css'), optional: false },
-    { rel: 'assets/brand-mark-svg.js', fullPath: path.join(__dirname, 'assets', 'brand-mark-svg.js'), optional: true },
+    // i18n-locales.js 虽已拆至按需 Settings 通道，但其活跃语言迷你切片会打入 Channel 1 bootCfg.__uiSlice，故纳入源哈希确保缓存强一致
+    { rel: 'i18n-locales.js', fullPath: path.join(__dirname, 'i18n-locales.js'), optional: true },
   ];
   for (const partName of RUNTIME_PARTS) {
     files.push({ rel: partName, fullPath: path.join(__dirname, partName), optional: false });
@@ -6226,8 +8504,10 @@ function computeBundleSourceHash() {
 
 // 计算规范化后的有效 bootCfg 指纹（确保缓存命中输出与现场编译逐字节 100% 一致）
 function computeBundleConfigHash(config) {
+  const uiSlice = buildRuntimeUiSlicePayload(config);
   const effective = {
     ...(config && typeof config === 'object' ? config : {}),
+    ...(uiSlice ? { __uiSlice: uiSlice } : {}),
     binding: SETTING_BINDING,
     codeHash: '',
     __fromFile: true,
@@ -6565,15 +8845,21 @@ function resetBundleCacheStats() {
   _bundleCacheStats.channelDiskHits = 0;
   _bundleCacheStats.channelDiskMisses = 0;
   _bundleCacheStats.channelCompileRuns = 0;
-  _bundleCacheStats.channelHitsByName = { omni: 0, sidebar: 0, hostI18n: 0, thought: 0, inlineDiff: 0, wallpaper: 0 };
+  _bundleCacheStats.channelHitsByName = { omni: 0, sidebar: 0, hostI18n: 0, thought: 0, inlineDiff: 0, wallpaper: 0, periodicPicker: 0, settings: 0, mascot: 0, suggester: 0, homeStudio: 0 };
   _bundleCacheStats.lastOutcome = 'none';
   _bundleCacheStats.lastCachePath = null;
   try { _omniClientCache.cachedPaths?.clear?.(); } catch {}
   try { _sidebarClientCache.cachedPaths?.clear?.(); } catch {}
   try { _hostI18nCache.cachedPaths?.clear?.(); } catch {}
+  try { _swarmI18nCache.cachedPaths?.clear?.(); } catch {}
   try { _thoughtAssetsCache.cachedPaths?.clear?.(); } catch {}
   try { _inlineDiffClientCache.cachedPaths?.clear?.(); } catch {}
   try { _wallpaperAssetsCache.cachedPaths?.clear?.(); } catch {}
+  try { _periodicPickerCache.cachedPaths?.clear?.(); } catch {}
+  try { _settingsChannelCache.cachedPaths?.clear?.(); } catch {}
+  try { _mascotChannelCache.cachedPaths?.clear?.(); } catch {}
+  try { _suggesterAssetsCache.cachedPaths?.clear?.(); } catch {}
+  try { _homeStudioChannelCache.cachedPaths?.clear?.(); } catch {}
   invalidateBundleCacheRootCache();
 }
 
@@ -6627,7 +8913,7 @@ function isValidChannelCacheEntry(channelName, entry) {
     if (computeHash(entry.minCode) !== entry.codeHash) return false;
     return sha256Text(`${entry.codeHash}\0${entry.minCode}`) === entry.payloadSha256;
   }
-  if (channelName === 'hostI18n') {
+  if (channelName === 'hostI18n' || channelName === 'swarmI18n') {
     if (!hasOwn('minRuntime') || typeof entry.minRuntime !== 'string' || entry.minRuntime.length === 0) return false;
     if (!hasOwn('dictRaw') || typeof entry.dictRaw !== 'string' || entry.dictRaw.length === 0) return false;
     const totalBytes = Buffer.byteLength(entry.minRuntime, 'utf8') + Buffer.byteLength(entry.dictRaw, 'utf8');
@@ -6635,13 +8921,19 @@ function isValidChannelCacheEntry(channelName, entry) {
     if (computeHash(`${entry.minRuntime}:${entry.dictRaw}`) !== entry.codeHash) return false;
     return sha256Text(`${entry.codeHash}\0${entry.minRuntime}\0${entry.dictRaw}`) === entry.payloadSha256;
   }
-  if (channelName === 'thought' || channelName === 'wallpaper') {
+  if (channelName === 'thought' || channelName === 'wallpaper' || channelName === 'suggester') {
     if (!hasOwn('minClient') || typeof entry.minClient !== 'string' || entry.minClient.length === 0) return false;
     if (!hasOwn('minSettingsUi') || typeof entry.minSettingsUi !== 'string' || entry.minSettingsUi.length === 0) return false;
     const totalBytes = Buffer.byteLength(entry.minClient, 'utf8') + Buffer.byteLength(entry.minSettingsUi, 'utf8');
     if (totalBytes > CHANNEL_CACHE_MAX_PAYLOAD_BYTES) return false;
     if (computeHash(`${entry.minClient}\n${entry.minSettingsUi}`) !== entry.codeHash) return false;
     return sha256Text(`${entry.codeHash}\0${entry.minClient}\0${entry.minSettingsUi}`) === entry.payloadSha256;
+  }
+  if (channelName === 'periodicPicker' || channelName === 'settings' || channelName === 'mascot' || channelName === 'homeStudio') {
+    if (!hasOwn('minRuntime') || typeof entry.minRuntime !== 'string' || entry.minRuntime.length === 0) return false;
+    if (Buffer.byteLength(entry.minRuntime, 'utf8') > CHANNEL_CACHE_MAX_PAYLOAD_BYTES) return false;
+    if (computeHash(entry.minRuntime) !== entry.codeHash) return false;
+    return sha256Text(`${entry.codeHash}\0${entry.minRuntime}`) === entry.payloadSha256;
   }
   return false;
 }
@@ -6935,9 +9227,15 @@ function markChannelCachedOnPath(cachePath, chMap) {
     omni: _omniClientCache,
     sidebar: _sidebarClientCache,
     hostI18n: _hostI18nCache,
+    swarmI18n: _swarmI18nCache,
     thought: _thoughtAssetsCache,
     inlineDiff: _inlineDiffClientCache,
     wallpaper: _wallpaperAssetsCache,
+    periodicPicker: _periodicPickerCache,
+    settings: _settingsChannelCache,
+    mascot: _mascotChannelCache,
+    suggester: _suggesterAssetsCache,
+    homeStudio: _homeStudioChannelCache,
   };
   for (const name of CHANNEL_CACHE_NAMES) {
     const rec = chMap[name];
@@ -6995,16 +9293,25 @@ function flushPendingBundleCache() {
 
 function buildInjectExpression(customConfig, opts = null) {
   const config = customConfig ? reconcileConfigAliases(customConfig) : readConfig();
+  const uiSlice = buildRuntimeUiSlicePayload(config);
+  const buildBootCfgJson = (codeHash) =>
+    JSON.stringify({
+      ...config,
+      ...(uiSlice ? { __uiSlice: uiSlice } : {}),
+      binding: SETTING_BINDING,
+      codeHash,
+      __fromFile: true,
+    });
   const cachePath = resolveBundleCachePathOption(opts);
   const deferCacheWrite = Boolean(opts && opts.deferCacheWrite === true);
 
   // 同进程配置热刷新快路径（broadcastConfigRefresh）：源 stat 未变化时直接复用已验签的内存基础模板（< 1ms，零磁盘阻塞）
-  // P2-7a: 延迟对 676 KB 字符串计算 exprSha256 至 flushPendingBundleCache() 实际落盘时再执行，避免防抖期内重复白算哈希
+  // P2-7a: 延迟对主包字符串计算 exprSha256 至 flushPendingBundleCache() 实际落盘时再执行，避免防抖期内重复白算哈希
   if (cachePath && deferCacheWrite && _warmBaseCache.basePrefix && _warmBaseCache.statSig) {
     try {
       if (getBundleSourceStatSig() === _warmBaseCache.statSig) {
         const codeHash = _warmBaseCache.codeHash;
-        const bootCfgJson = JSON.stringify({ ...config, binding: SETTING_BINDING, codeHash, __fromFile: true });
+        const bootCfgJson = buildBootCfgJson(codeHash);
         const expr = _warmBaseCache.basePrefix + bootCfgJson + _warmBaseCache.baseSuffix;
         const configHash = computeBundleConfigHash(config);
         _bundleCacheStats.diskBaseHits += 1;
@@ -7089,7 +9396,7 @@ function buildInjectExpression(customConfig, opts = null) {
 
   if (cachedBaseTemplate) {
     codeHash = cachedBaseTemplate.codeHash;
-    bootCfgJson = JSON.stringify({ ...config, binding: SETTING_BINDING, codeHash, __fromFile: true });
+    bootCfgJson = buildBootCfgJson(codeHash);
     expr = cachedBaseTemplate.basePrefix + bootCfgJson + cachedBaseTemplate.baseSuffix;
     baseForDisk = cachedBaseTemplate;
     _bundleCacheStats.diskBaseHits += 1;
@@ -7103,7 +9410,7 @@ function buildInjectExpression(customConfig, opts = null) {
 
     const compiledBase = compileBaseInjectTemplate();
     codeHash = compiledBase.codeHash;
-    bootCfgJson = JSON.stringify({ ...config, binding: SETTING_BINDING, codeHash, __fromFile: true });
+    bootCfgJson = buildBootCfgJson(codeHash);
     if (compiledBase.basePrefix !== null && compiledBase.baseSuffix !== null) {
       expr = compiledBase.basePrefix + bootCfgJson + compiledBase.baseSuffix;
       baseForDisk = {
@@ -7624,29 +9931,13 @@ let _hostI18nCache = { sig: '', sourceHash: '', minRuntime: '', dictRaw: '', cod
 function shouldEnableHostI18n(config, hostLocaleHint = null) {
   const cfg = config && typeof config === 'object' ? reconcileConfigAliases(config) : readConfig();
   const mode = cfg.hostLocalization || 'auto';
-  if (mode === 'off') return false;
+  // off 模式挂载第四通道进入反向英文还原（温和压制外部运行时 DOM 汉化，零 app.asar 修改）
+  if (mode === 'off') return true;
   if (mode === 'on') return true;
-  const lang = cfg.language || cfg.lang || 'zh-CN';
+  const lang = cfg.language || cfg.lang || 'auto';
   if (lang === 'zh-CN') return true;
   if (lang === 'auto') {
-    let sysLocale = hostLocaleHint;
-    if (!sysLocale) {
-      try {
-        const candidates = [process.env.LC_ALL, process.env.LC_MESSAGES, process.env.LANG];
-        for (let i = 0; i < candidates.length; i++) {
-          const val = String(candidates[i] || '').trim();
-          if (val && !/^(?:c|posix)(?:[.@]|$)/i.test(val)) {
-            sysLocale = val;
-            break;
-          }
-        }
-        if (!sysLocale) {
-          sysLocale = Intl.DateTimeFormat().resolvedOptions().locale || '';
-        }
-      } catch {
-        sysLocale = '';
-      }
-    }
+    const sysLocale = hostLocaleHint || detectSystemUiLocale();
     const stripped = String(sysLocale || '').trim().split(/[.@]/)[0];
     const norm = stripped.toLowerCase().replace(/_/g, '-');
     return norm === 'zh' || /^zh-(?:cn|hans|sg)(?:-|$)/.test(norm);
@@ -7656,29 +9947,35 @@ function shouldEnableHostI18n(config, hostLocaleHint = null) {
 
 function readCompiledHostI18nAssets(opts = null) {
   const rtPath = path.join(__dirname, 'vendor', 'host-i18n', 'host-i18n-runtime.js');
+  const revPath = path.join(__dirname, 'vendor', 'host-i18n', 'reverse-patterns.js');
   const dictPath = path.join(__dirname, 'vendor', 'host-i18n', 'zh-CN.json');
   if (!fs.existsSync(rtPath) || !fs.existsSync(dictPath)) {
     return { minRuntime: '', dictRaw: '', codeHash: '' };
   }
-  const sig = `${getFileSig(rtPath)}|${getFileSig(dictPath)}`;
+  const hasRev = fs.existsSync(revPath);
+  const sig = `${getFileSig(rtPath)}|${hasRev ? getFileSig(revPath) : 'norev'}|${getFileSig(dictPath)}`;
   const cachePath = resolveBundleCachePathOption(opts);
   if (!cachePath && _hostI18nCache.sig === sig && _hostI18nCache.codeHash) {
     return _hostI18nCache;
   }
   const rtBuf = fs.readFileSync(rtPath);
+  const revBuf = hasRev ? fs.readFileSync(revPath) : null;
   const dictBuf = fs.readFileSync(dictPath);
+  const fileEntries = [];
+  if (revBuf) fileEntries.push({ rel: 'vendor/host-i18n/reverse-patterns.js', content: revBuf });
+  fileEntries.push({ rel: 'vendor/host-i18n/host-i18n-runtime.js', content: rtBuf });
+  fileEntries.push({ rel: 'vendor/host-i18n/zh-CN.json', content: dictBuf });
   return resolveChannelAssetsWithDiskCache({
     channelName: 'hostI18n',
     memCache: _hostI18nCache,
     setMemCache: (v) => { _hostI18nCache = v; },
     sig,
-    fileEntries: [
-      { rel: 'vendor/host-i18n/host-i18n-runtime.js', content: rtBuf },
-      { rel: 'vendor/host-i18n/zh-CN.json', content: dictBuf },
-    ],
+    fileEntries,
     opts,
     compileFn: () => {
-      const minRuntime = minifySingleSource(rtBuf.toString('utf8'));
+      const minRev = revBuf ? minifySingleSource(revBuf.toString('utf8')) : '';
+      const minRt = minifySingleSource(rtBuf.toString('utf8'));
+      const minRuntime = minRev ? `${minRev};\n${minRt}` : minRt;
       const parsedDict = JSON.parse(dictBuf.toString('utf8'));
       const dictRaw = JSON.stringify(parsedDict).replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
       const codeHash = computeHash(`${minRuntime}:${dictRaw}`);
@@ -7707,10 +10004,121 @@ const HOST_I18N_REMOVE_EXPRESSION = `(() => {
   try { delete globalThis.__agPrismHostI18n; } catch {}
   try { delete window.__agPrismHostI18nFactory; } catch {}
   try { delete globalThis.__agPrismHostI18nFactory; } catch {}
+  try { delete window.__agPrismHostI18nReversePatterns; } catch {}
+  try { delete globalThis.__agPrismHostI18nReversePatterns; } catch {}
   return { ok: true, status: 'off' };
 })()`;
 
-// 第四通道独立注入（Host UI 简体中文按需本地化）：绝不打入静态主包，支持 4 层通用自动礼让与 100% 无损卸载
+// 主帧 Electron Isolated Context 外部汉化器（如 preload 注入版 yiheng8023/antigravity-chinese、yuexps/Antigravity-Hans）可逆协同静音表达式
+// 零 app.asar 修改、绝不修改 Map.prototype、绝不删改词典/缓存条目，退出或切回 auto/on 时 100% 无损恢复
+const ISOLATED_HOST_I18N_PAUSE_EXPRESSION = `(() => {
+  try {
+    const g = globalThis;
+    const prev = g.__agPrismIsoHostI18nState;
+    if (prev && prev.paused) {
+      return { ok: true, detected: true, paused: true, alreadyPaused: true, provider: prev.provider || null };
+    }
+    const st = {
+      paused: false,
+      provider: null,
+      agyCachePaused: false,
+      agyCacheRef: null,
+      agyOrigHasDesc: null,
+      agyOrigGetDesc: null,
+      hansSwitched: false,
+      hansPrevLang: null,
+      patchObserverPaused: false,
+      patchObserverRef: null,
+      patchObserverTarget: null,
+      patchObserverOpts: null,
+    };
+    if (
+      g.__AGY_CACHE__ &&
+      typeof g.__AGY_CACHE__.has === 'function' &&
+      typeof g.__AGY_CACHE__.get === 'function' &&
+      (g.__AGY_I18N_INITIALIZED__ || g.__AGY_I18N_DATA__)
+    ) {
+      const cache = g.__AGY_CACHE__;
+      st.agyCacheRef = cache;
+      st.agyOrigHasDesc = Object.getOwnPropertyDescriptor(cache, 'has') || null;
+      st.agyOrigGetDesc = Object.getOwnPropertyDescriptor(cache, 'get') || null;
+      Object.defineProperty(cache, 'has', { value: () => true, configurable: true, writable: true });
+      Object.defineProperty(cache, 'get', { value: () => null, configurable: true, writable: true });
+      st.agyCachePaused = true;
+      st.paused = true;
+      st.provider = 'yiheng8023';
+    }
+    if (typeof g.__antigravityZhSetLang === 'function') {
+      let stored = null;
+      try { stored = g.localStorage && g.localStorage.getItem('antigravityHansLang'); } catch {}
+      const norm = stored !== null ? String(stored).trim().toLowerCase() : '';
+      if (stored === null || (norm !== 'en' && norm !== 'en-us' && norm !== 'off' && norm !== 'false' && norm !== '0')) {
+        st.hansPrevLang = stored && String(stored).trim() ? String(stored).trim() : 'zh-CN';
+        try {
+          g.__antigravityZhSetLang('en');
+          st.hansSwitched = true;
+          st.paused = true;
+          if (!st.provider) st.provider = 'yuexps/Antigravity-Hans';
+        } catch {}
+      }
+    } else if (
+      g.__antigravityZhPatchObserver &&
+      typeof g.__antigravityZhPatchObserver.disconnect === 'function' &&
+      typeof g.__antigravityZhPatchObserver.observe === 'function'
+    ) {
+      try {
+        const obs = g.__antigravityZhPatchObserver;
+        st.patchObserverRef = obs;
+        st.patchObserverTarget = obs._target || obs.target || (typeof document !== 'undefined' && (document.documentElement || document.body)) || null;
+        st.patchObserverOpts = obs.options || { childList: true, subtree: true, characterData: true };
+        obs.disconnect();
+        st.patchObserverPaused = true;
+        st.paused = true;
+        if (!st.provider) st.provider = 'yuexps/Antigravity-Hans';
+      } catch {}
+    }
+    if (!st.paused) {
+      return { ok: true, detected: false, paused: false, alreadyPaused: false, provider: null };
+    }
+    g.__agPrismIsoHostI18nState = st;
+    return { ok: true, detected: true, paused: true, alreadyPaused: false, provider: st.provider };
+  } catch (e) {
+    return { ok: false, error: String(e && e.message ? e.message : e) };
+  }
+})()`;
+
+const ISOLATED_HOST_I18N_RESUME_EXPRESSION = `(() => {
+  try {
+    const g = globalThis;
+    const st = g.__agPrismIsoHostI18nState;
+    if (!st || !st.paused) {
+      return { ok: true, resumed: false, provider: null };
+    }
+    try { delete g.__agPrismIsoHostI18nState; } catch { g.__agPrismIsoHostI18nState = null; }
+    if (st.agyCachePaused && st.agyCacheRef) {
+      try {
+        if (st.agyOrigHasDesc) Object.defineProperty(st.agyCacheRef, 'has', st.agyOrigHasDesc);
+        else delete st.agyCacheRef.has;
+        if (st.agyOrigGetDesc) Object.defineProperty(st.agyCacheRef, 'get', st.agyOrigGetDesc);
+        else delete st.agyCacheRef.get;
+      } catch {}
+      try {
+        if (typeof g.__AGY_RUN_FULL_SCAN__ === 'function') g.__AGY_RUN_FULL_SCAN__();
+      } catch {}
+    }
+    if (st.patchObserverPaused && st.patchObserverRef && st.patchObserverTarget) {
+      try { st.patchObserverRef.observe(st.patchObserverTarget, st.patchObserverOpts); } catch {}
+    }
+    if (st.hansSwitched && typeof g.__antigravityZhSetLang === 'function') {
+      try { g.__antigravityZhSetLang(st.hansPrevLang || 'zh-CN'); } catch {}
+    }
+    return { ok: true, resumed: true, provider: st.provider || null };
+  } catch (e) {
+    return { ok: false, error: String(e && e.message ? e.message : e) };
+  }
+})()`;
+
+// 第四通道独立注入（Host UI 简体中文按需本地化 + off 态反向英文还原）：绝不打入静态主包，支持 4 层自动礼让、3 层温和压制与 100% 无损卸载
 function buildHostI18nExpression(config = null, hostLocaleHint = null, opts = null) {
   let resolvedLocaleHint = hostLocaleHint;
   let resolvedOpts = opts;
@@ -7726,7 +10134,7 @@ function buildHostI18nExpression(config = null, hostLocaleHint = null, opts = nu
   if (!minRuntime || !dictRaw) {
     return '';
   }
-  const mode = cfg.hostLocalization === 'on' ? 'on' : 'auto';
+  const mode = cfg.hostLocalization === 'on' ? 'on' : cfg.hostLocalization === 'off' ? 'off' : 'auto';
   const modeJson = serializeJsonForEval(mode);
   const hashJson = serializeJsonForEval(codeHash);
 
@@ -7798,10 +10206,8 @@ function buildHostI18nExpression(config = null, hostLocaleHint = null, opts = nu
       const liveCfg = window.__agPrism?.getState?.()?.cfg;
       if (liveCfg && typeof liveCfg === 'object') {
         if (liveCfg.hostLocalization === 'off') {
-          try { window.__agPrismHostI18n?.destroy?.(); document.documentElement?.removeAttribute?.('data-ag-prism-host-i18n'); } catch {}
-          return { ok: true, status: 'off', skippedByLiveCfg: true };
-        }
-        if (liveCfg.hostLocalization === 'on') {
+          targetMode = 'off';
+        } else if (liveCfg.hostLocalization === 'on') {
           targetMode = 'on';
         } else {
           targetMode = 'auto';
@@ -7810,9 +10216,9 @@ function buildHostI18nExpression(config = null, hostLocaleHint = null, opts = nu
             try { window.__agPrismHostI18n?.destroy?.(); document.documentElement?.removeAttribute?.('data-ag-prism-host-i18n'); } catch {}
             return { ok: true, status: 'off', skippedByLiveCfg: true };
           }
-          if (liveLang === 'auto') {
+          if (!liveLang || liveLang === 'auto') {
             const navLang = String(
-              (typeof navigator !== 'undefined' && (navigator.language || (navigator.languages && navigator.languages[0]))) || ''
+              (typeof navigator !== 'undefined' && ((navigator.languages && navigator.languages[0]) || navigator.language)) || ''
             )
               .trim()
               .split(/[.@]/)[0]
@@ -7835,11 +10241,18 @@ function buildHostI18nExpression(config = null, hostLocaleHint = null, opts = nu
       const existing = window.__agPrismHostI18n;
       if (existing && existing.__prismCodeHash === targetHash && typeof existing.getStatus === 'function') {
         const st = existing.getStatus();
-        if (st && st.mode === targetMode) {
+        const isHealthyForTarget =
+          st &&
+          st.mode === targetMode &&
+          (targetMode === 'off'
+            ? st.status === 'off-enforced' || st.status === 'off-blocked'
+            : st.status === 'active' || st.status === 'yielded');
+        if (isHealthyForTarget) {
           return { ok: true, reused: true, codeHash: targetHash, ...st };
         }
         if (typeof existing.setMode === 'function') {
           const switched = existing.setMode(targetMode);
+          try { (window.__agPrism || window.__agClaudeStyle)?.sync?.(); } catch {}
           return { ok: true, modeSwitched: true, codeHash: targetHash, ...switched };
         }
       }
@@ -7860,10 +10273,154 @@ function buildHostI18nExpression(config = null, hostLocaleHint = null, opts = nu
         inst.__prismCodeHash = targetHash;
       }
       const cur = inst && typeof inst.getStatus === 'function' ? inst.getStatus() : { status: 'active' };
+      try { (window.__agPrism || window.__agClaudeStyle)?.sync?.(); } catch {}
       return { ok: true, codeHash: targetHash, ...cur };
     };
 
     if (needDomMarkerOnReady && typeof document.addEventListener === 'function') {
+      document.addEventListener('DOMContentLoaded', () => { try { mountOrReuse(); } catch {} }, { once: true });
+      return { ok: true, status: 'deferred', codeHash: targetHash };
+    }
+    return mountOrReuse();
+  })()`;
+}
+
+let _swarmI18nCache = { sig: '', sourceHash: '', minRuntime: '', dictRaw: '', codeHash: '', cachedPaths: new Set() };
+
+function shouldEnableSwarmI18n(config, hostLocaleHint = null) {
+  const cfg = config && typeof config === 'object' ? reconcileConfigAliases(config) : readConfig();
+  const mode = cfg.hostLocalization || 'auto';
+  // 原生 Swarm 面板本身为英文：off 模式或非简体中文 auto 模式严格 0 附着 / 立即卸载还原英文
+  if (mode === 'off') return false;
+  return shouldEnableHostI18n(cfg, hostLocaleHint);
+}
+
+function readCompiledSwarmI18nAssets(opts = null) {
+  const rtPath = path.join(__dirname, 'vendor', 'host-i18n', 'swarm-i18n-runtime.js');
+  const dictPath = path.join(__dirname, 'vendor', 'host-i18n', 'swarm-zh-CN.json');
+  if (!fs.existsSync(rtPath) || !fs.existsSync(dictPath)) {
+    return { minRuntime: '', dictRaw: '', codeHash: '' };
+  }
+  const sig = `${getFileSig(rtPath)}|${getFileSig(dictPath)}`;
+  const cachePath = resolveBundleCachePathOption(opts);
+  if (!cachePath && _swarmI18nCache.sig === sig && _swarmI18nCache.codeHash) {
+    return _swarmI18nCache;
+  }
+  const rtBuf = fs.readFileSync(rtPath);
+  const dictBuf = fs.readFileSync(dictPath);
+  const fileEntries = [
+    { rel: 'vendor/host-i18n/swarm-i18n-runtime.js', content: rtBuf },
+    { rel: 'vendor/host-i18n/swarm-zh-CN.json', content: dictBuf },
+  ];
+  return resolveChannelAssetsWithDiskCache({
+    channelName: 'swarmI18n',
+    memCache: _swarmI18nCache,
+    setMemCache: (v) => { _swarmI18nCache = v; },
+    sig,
+    fileEntries,
+    opts,
+    compileFn: () => {
+      const minRuntime = minifySingleSource(rtBuf.toString('utf8'));
+      const parsedDict = JSON.parse(dictBuf.toString('utf8'));
+      const dictRaw = JSON.stringify(parsedDict).replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
+      const codeHash = computeHash(`${minRuntime}:${dictRaw}`);
+      return { minRuntime, dictRaw, codeHash };
+    },
+    toCacheEntry: (assets, sourceHash) => ({
+      sourceHash,
+      codeHash: assets.codeHash,
+      minRuntime: assets.minRuntime,
+      dictRaw: assets.dictRaw,
+      payloadSha256: sha256Text(`${assets.codeHash}\0${assets.minRuntime}\0${assets.dictRaw}`),
+      updatedAt: Date.now(),
+    }),
+    fromCacheEntry: (entry) => ({
+      minRuntime: entry.minRuntime,
+      dictRaw: entry.dictRaw,
+      codeHash: entry.codeHash,
+    }),
+  });
+}
+
+const SWARM_I18N_REMOVE_EXPRESSION = `(() => {
+  try { window.__agPrismSwarmI18n?.destroy?.(); } catch {}
+  try { document.documentElement?.removeAttribute?.('data-ag-prism-swarm-i18n'); } catch {}
+  try { delete window.__agPrismSwarmI18n; } catch {}
+  try { delete globalThis.__agPrismSwarmI18n; } catch {}
+  try { delete window.__agPrismSwarmI18nFactory; } catch {}
+  try { delete globalThis.__agPrismSwarmI18nFactory; } catch {}
+  return { ok: true, status: 'off' };
+})()`;
+
+// Issue #18 层 B：Swarm 独立侧栏 Webview (plugin://swarm--swarm_board-*) 按需纯 CDP 汉化表达式
+// 零 app.asar 修改、0 B Channel 1 增量、支持按需磁盘缓存与 100% 无损英文还原
+function buildSwarmI18nExpression(config = null, hostLocaleHint = null, opts = null) {
+  let resolvedLocaleHint = hostLocaleHint;
+  let resolvedOpts = opts;
+  if (hostLocaleHint && typeof hostLocaleHint === 'object' && !resolvedOpts) {
+    resolvedOpts = hostLocaleHint;
+    resolvedLocaleHint = null;
+  }
+  const cfg = config && typeof config === 'object' ? reconcileConfigAliases(config) : readConfig();
+  if (!shouldEnableSwarmI18n(cfg, resolvedLocaleHint)) {
+    return '';
+  }
+  const { minRuntime, dictRaw, codeHash } = readCompiledSwarmI18nAssets(resolvedOpts);
+  if (!minRuntime || !dictRaw) {
+    return '';
+  }
+  const hashJson = serializeJsonForEval(codeHash);
+
+  return `(() => {
+    try {
+      const loc = typeof window !== 'undefined' && window.location;
+      if (
+        !loc ||
+        loc.protocol !== 'plugin:' ||
+        !/^swarm--swarm_board-\\d+$/.test(String(loc.hostname || '')) ||
+        loc.port ||
+        loc.username ||
+        loc.password ||
+        String(loc.pathname || '/') !== '/'
+      ) {
+        return { ok: false, status: 'skipped-non-swarm-url' };
+      }
+    } catch {
+      return { ok: false, status: 'skipped-non-swarm-url' };
+    }
+
+    const targetHash = ${hashJson};
+    const mountOrReuse = () => {
+      const existing = window.__agPrismSwarmI18n;
+      if (existing && existing.__prismCodeHash === targetHash && typeof existing.getStatus === 'function') {
+        const st = existing.getStatus();
+        if (st && (st.status === 'active' || st.status === 'yielded')) {
+          if (st.status === 'active' && typeof existing.scan === 'function') {
+            try { existing.scan(); } catch {}
+          }
+          return { ok: true, reused: true, codeHash: targetHash, ...st };
+        }
+      }
+      try { existing?.destroy?.(); } catch {}
+
+      ${minRuntime};
+      const factory = window.__agPrismSwarmI18nFactory || globalThis.__agPrismSwarmI18nFactory;
+      if (!factory || typeof factory.mountSwarmI18n !== 'function') {
+        return { ok: false, status: 'factory-missing' };
+      }
+      const inst = factory.mountSwarmI18n({
+        root: window,
+        doc: document,
+        dict: ${dictRaw},
+      });
+      if (inst && typeof inst === 'object') {
+        inst.__prismCodeHash = targetHash;
+      }
+      const cur = inst && typeof inst.getStatus === 'function' ? inst.getStatus() : { status: 'active' };
+      return { ok: Boolean(inst && inst.ok !== false), codeHash: targetHash, ...cur };
+    };
+
+    if (typeof document !== 'undefined' && document.readyState === 'loading' && !document.body && typeof document.addEventListener === 'function') {
       document.addEventListener('DOMContentLoaded', () => { try { mountOrReuse(); } catch {} }, { once: true });
       return { ok: true, status: 'deferred', codeHash: targetHash };
     }
@@ -8597,6 +11154,903 @@ function buildWallpaperExpression(config = null, opts = null) {
   })()`;
 }
 
+const PERIODIC_PICKER_MODULE_FILES = [
+  'pbr-grain-assets.js',
+  'audio-fx.js',
+  'model-catalog.js',
+  'host-bridge.js',
+  'oled-cyber-screen.js',
+  'keyboard-3d-gl.js',
+  'bento-ui.js',
+  'periodic-picker.js',
+];
+
+let _periodicPickerCache = { sig: '', sourceHash: '', minRuntime: '', codeHash: '', cachedPaths: new Set() };
+
+function shouldEnablePeriodicPicker(config) {
+  const cfg = config && typeof config === 'object' ? reconcileConfigAliases(config) : readConfig();
+  return cfg.periodicModelPicker !== 'off' && cfg.periodicModelPicker !== false;
+}
+
+function readCompiledPeriodicPickerAssets(opts = null) {
+  const baseDir = path.join(__dirname, 'vendor', 'periodic-picker');
+  const rtPath = path.join(baseDir, 'periodic-picker.js');
+  if (!fs.existsSync(rtPath)) {
+    return { sig: '', minRuntime: '', codeHash: '' };
+  }
+  const presentModules = [];
+  const sigParts = [];
+  for (const name of PERIODIC_PICKER_MODULE_FILES) {
+    const filePath = path.join(baseDir, name);
+    if (fs.existsSync(filePath)) {
+      presentModules.push({ name, filePath, rel: `vendor/periodic-picker/${name}` });
+      sigParts.push(`${name}:${getFileSig(filePath)}`);
+    } else {
+      sigParts.push(`${name}:none`);
+    }
+  }
+  const sig = sigParts.join('|');
+  const cachePath = resolveBundleCachePathOption(opts);
+  if (!cachePath && _periodicPickerCache.sig === sig && _periodicPickerCache.codeHash) {
+    return _periodicPickerCache;
+  }
+  const fileEntries = presentModules.map((mod) => ({
+    rel: mod.rel,
+    content: fs.readFileSync(mod.filePath),
+  }));
+  const extraTag = presentModules.map((mod) => mod.name).join(',');
+  return resolveChannelAssetsWithDiskCache({
+    channelName: 'periodicPicker',
+    memCache: _periodicPickerCache,
+    setMemCache: (v) => { _periodicPickerCache = v; },
+    sig,
+    fileEntries,
+    extraTag,
+    opts,
+    compileFn: () => {
+      const parts = [];
+      for (const item of fileEntries) {
+        const minPart = minifySingleSource(item.content.toString('utf8'));
+        if (minPart) parts.push(minPart);
+      }
+      const minRuntime = parts.join(';\n');
+      const codeHash = minRuntime ? computeHash(minRuntime) : '';
+      return { minRuntime, codeHash };
+    },
+    toCacheEntry: (assets, sourceHash) => ({
+      sourceHash,
+      codeHash: assets.codeHash,
+      minRuntime: assets.minRuntime,
+      payloadSha256: sha256Text(`${assets.codeHash}\0${assets.minRuntime}`),
+      updatedAt: Date.now(),
+    }),
+    fromCacheEntry: (entry) => ({
+      minRuntime: entry.minRuntime,
+      codeHash: entry.codeHash,
+    }),
+  });
+}
+
+const PERIODIC_PICKER_REMOVE_EXPRESSION = `(() => {
+  try { window.__agPrismPeriodicPicker?.destroy?.(); } catch {}
+  try { document.documentElement?.removeAttribute?.('data-ag-prism-periodic-picker'); } catch {}
+  try { document.documentElement?.removeAttribute?.('data-ag-pp-open'); } catch {}
+  try { document.documentElement?.removeAttribute?.('data-ag-pp-holding'); } catch {}
+  try {
+    document
+      .querySelectorAll?.('#ag-prism-periodic-picker-css, #ag-prism-periodic-picker-root, .ag-pp-hold-ring, .ag-pp-mini-keycap')
+      .forEach((n) => n.remove());
+  } catch {}
+  for (const k of ['__agPrismPeriodicPicker', '__agPrismPeriodicPickerFactory', '__agPrismKeyboard3D', '__agPrismPeriodicKeyboard3D', '__agPrismOledScreen', '__agPrismGrainAssets', '__agPeriodicAudioFx', '__agPeriodicModelCatalog', '__agPeriodicHostBridge', '__agPeriodicBentoUi', '__agPeriodicPbrGrainAssets', '__agPeriodicOledScreen', '__agPeriodicKeyboard3D']) {
+    try { delete window[k]; } catch {}
+    try { delete globalThis[k]; } catch {}
+  }
+  return { ok: true, status: 'off' };
+})()`;
+
+// 第八通道独立注入（元素周期表 3D 模型选择器）：绝不打入静态主包，支持 8 模块顺序合并、.bundle-cache.json 磁盘缓存、长按呼出与 100% 对称卸载
+function buildPeriodicPickerExpression(config = null, opts = null) {
+  const cfg = config && typeof config === 'object' ? reconcileConfigAliases(config) : readConfig();
+  if (!shouldEnablePeriodicPicker(cfg)) {
+    return '';
+  }
+  const { minRuntime, codeHash } = readCompiledPeriodicPickerAssets(opts);
+  if (!minRuntime || !codeHash) {
+    return '';
+  }
+  const hashJson = serializeJsonForEval(codeHash);
+
+  return `(() => {
+    try {
+      if (window.self !== window.top) return { ok: false, status: 'skipped-subframe' };
+    } catch {
+      return { ok: false, status: 'skipped-subframe' };
+    }
+    const hasDomMarker = () => {
+      try {
+        if (
+          document.body &&
+          document.body.classList &&
+          (document.body.classList.contains('theme-standalone') || document.body.classList.contains('monaco-workbench'))
+        ) {
+          return true;
+        }
+        return Boolean(
+          typeof document.querySelector === 'function' &&
+            document.querySelector(
+              '.agy-shell, .agy-home, [data-testid="aux-pane-split"], [data-testid="conversation-view"], [data-testid="agent-input-box"], [data-testid="model-selector-trigger"], .monaco-workbench'
+            )
+        );
+      } catch {
+        return false;
+      }
+    };
+    let needDomMarkerOnReady = false;
+    let isPlainHttpLocalhost = false;
+    try {
+      const loc = typeof window !== 'undefined' && window.location;
+      const href = loc && typeof loc.href === 'string' ? loc.href : '';
+      if (href) {
+        const low = href.toLowerCase();
+        if (low.startsWith('devtools://') || low.startsWith('data:') || low.startsWith('chrome:') || low.startsWith('chrome-extension:') || low.startsWith('edge:') || low.startsWith('blob:') || low.startsWith('plugin:')) {
+          return { ok: false, status: 'skipped-non-host' };
+        }
+        if (low.startsWith('vscode-file://') || low.startsWith('app://') || low.startsWith('about:')) {
+          const ttl = String(document.title || '').trim();
+          if (/^(?:untitled|launchpad)$/i.test(ttl) || /\\/launchpad(?:\\.html)?(?:[?#]|$)/i.test(low)) {
+            return { ok: false, status: 'skipped-non-host' };
+          }
+        }
+        if (low.startsWith('http:') || low.startsWith('https:')) {
+          const m = /^(https?):\\/\\/(127\\.0\\.0\\.1|localhost|\\[::1\\])(?::\\d+)?(\\/[^?#]*)?(?:[?#]|$)/i.exec(href);
+          if (!m) return { ok: false, status: 'skipped-non-host' };
+          const pathname = (m[3] || '/').toLowerCase();
+          if (/^\\/(?:viewer(?:\\/|$)|sandbox(?:\\/|$)|stream(?:\\/|$)|api(?:\\/|$))/.test(pathname)) {
+            return { ok: false, status: 'skipped-non-host' };
+          }
+          if (!hasDomMarker()) {
+            isPlainHttpLocalhost = m[1].toLowerCase() === 'http';
+            const rs = String(document.readyState || '');
+            if (isPlainHttpLocalhost) {
+              if (rs === 'loading') needDomMarkerOnReady = true;
+              else return { ok: false, status: 'skipped-non-host' };
+            } else if (!/\\bantigravity\\b/i.test(String(document.title || ''))) {
+              if (rs === 'loading') needDomMarkerOnReady = true;
+              else return { ok: false, status: 'skipped-non-host' };
+            }
+          }
+        }
+      }
+    } catch {}
+
+    try {
+      const liveCfg = window.__agPrism?.getState?.()?.cfg;
+      if (liveCfg && typeof liveCfg === 'object' && (liveCfg.periodicModelPicker === 'off' || liveCfg.periodicModelPicker === false)) {
+        try {
+          window.__agPrismPeriodicPicker?.destroy?.();
+          document.documentElement?.removeAttribute?.('data-ag-prism-periodic-picker');
+          document.documentElement?.removeAttribute?.('data-ag-pp-open');
+          document.documentElement?.removeAttribute?.('data-ag-pp-holding');
+          document.querySelectorAll?.('#ag-prism-periodic-picker-css, #ag-prism-periodic-picker-root, .ag-pp-hold-ring, .ag-pp-mini-keycap').forEach((n) => n.remove());
+          for (const k of ['__agPrismPeriodicPicker', '__agPrismPeriodicPickerFactory', '__agPrismKeyboard3D', '__agPrismPeriodicKeyboard3D', '__agPrismOledScreen', '__agPrismGrainAssets', '__agPeriodicAudioFx', '__agPeriodicModelCatalog', '__agPeriodicHostBridge', '__agPeriodicBentoUi', '__agPeriodicPbrGrainAssets', '__agPeriodicOledScreen', '__agPeriodicKeyboard3D']) {
+            try { delete window[k]; } catch {}
+            try { delete globalThis[k]; } catch {}
+          }
+        } catch {}
+        return { ok: true, status: 'off', skippedByLiveCfg: true };
+      }
+    } catch {}
+
+    const targetHash = ${hashJson};
+    const mountOrReuse = () => {
+      if (needDomMarkerOnReady && !hasDomMarker() && (isPlainHttpLocalhost || !/\\bantigravity\\b/i.test(String(document.title || '')))) {
+        return { ok: false, status: 'skipped-non-host' };
+      }
+      const existing = window.__agPrismPeriodicPicker;
+      if (existing && existing.__prismCodeHash === targetHash) {
+        const st = typeof existing.getStatus === 'function' ? existing.getStatus() : null;
+        const domActive = !document.documentElement || document.documentElement.getAttribute('data-ag-prism-periodic-picker') === '1';
+        if ((!st || (st.status !== 'off' && st.status !== 'destroyed' && st.mode !== 'off')) && domActive) {
+          return { ok: true, reused: true, codeHash: targetHash, ...(st && typeof st === 'object' ? st : {}) };
+        }
+      }
+      try { existing?.destroy?.(); } catch {}
+
+      ${minRuntime};
+      const factory = window.__agPrismPeriodicPickerFactory || globalThis.__agPrismPeriodicPickerFactory;
+      if (!factory || typeof factory.mountPeriodicPicker !== 'function') {
+        return { ok: false, status: 'factory-missing' };
+      }
+      const inst = factory.mountPeriodicPicker({
+        root: window,
+        doc: document,
+        mode: 'on',
+      });
+      if (inst && typeof inst === 'object') {
+        inst.__prismCodeHash = targetHash;
+        if (!window.__agPrismPeriodicPicker) window.__agPrismPeriodicPicker = inst;
+      }
+      const cur = inst && typeof inst.getStatus === 'function' ? inst.getStatus() : { status: 'active' };
+      return { ok: true, codeHash: targetHash, ...(cur && typeof cur === 'object' ? cur : {}) };
+    };
+
+    if (needDomMarkerOnReady && typeof document.addEventListener === 'function') {
+      document.addEventListener('DOMContentLoaded', () => { try { mountOrReuse(); } catch {} }, { once: true });
+      return { ok: true, status: 'deferred', codeHash: targetHash };
+    }
+    return mountOrReuse();
+  })()`;
+}
+
+// ── 第九通道：设置面板 + 全量 8 语言词典 + 八方旅人 WebGL2 选角舞台按需独立注入（不占 Channel 1 体积） ──
+let _settingsChannelCache = { sig: '', sourceHash: '', minRuntime: '', codeHash: '', cachedPaths: new Set() };
+
+function readCompiledSettingsChannelAssets(opts = null) {
+  const locPath = path.join(__dirname, 'i18n-locales.js');
+  const setPath = path.join(__dirname, 'settings-panel.js');
+  if (!fs.existsSync(locPath) || !fs.existsSync(setPath)) {
+    return { sig: '', minRuntime: '', codeHash: '' };
+  }
+  const brandPath = path.join(__dirname, 'assets', 'brand-mark-svg.js');
+  const atlasPath = path.join(__dirname, 'vendor', 'clawd-mascot', 'tavern-atlas-data.js');
+  const stageGlPath = path.join(__dirname, 'vendor', 'clawd-mascot', 'octopath-stage-webgl.js');
+  const hasBrand = fs.existsSync(brandPath);
+  const hasAtlas = fs.existsSync(atlasPath);
+  const hasStageGl = fs.existsSync(stageGlPath);
+  const sig = `${getFileSig(locPath)}|${hasBrand ? getFileSig(brandPath) : '0'}|${hasAtlas ? getFileSig(atlasPath) : '0'}|${hasStageGl ? getFileSig(stageGlPath) : '0'}|${getFileSig(setPath)}`;
+  const cachePath = resolveBundleCachePathOption(opts);
+  if (!cachePath && _settingsChannelCache.sig === sig && _settingsChannelCache.codeHash) {
+    return _settingsChannelCache;
+  }
+  const locBuf = fs.readFileSync(locPath);
+  const brandBuf = hasBrand ? fs.readFileSync(brandPath) : null;
+  const atlasBuf = hasAtlas ? fs.readFileSync(atlasPath) : null;
+  const stageGlBuf = hasStageGl ? fs.readFileSync(stageGlPath) : null;
+  const setBuf = fs.readFileSync(setPath);
+  const fileEntries = [{ rel: 'i18n-locales.js', content: locBuf }];
+  if (brandBuf) fileEntries.push({ rel: 'assets/brand-mark-svg.js', content: brandBuf });
+  if (atlasBuf) fileEntries.push({ rel: 'vendor/clawd-mascot/tavern-atlas-data.js', content: atlasBuf });
+  if (stageGlBuf) fileEntries.push({ rel: 'vendor/clawd-mascot/octopath-stage-webgl.js', content: stageGlBuf });
+  fileEntries.push({ rel: 'settings-panel.js', content: setBuf });
+  return resolveChannelAssetsWithDiskCache({
+    channelName: 'settings',
+    memCache: _settingsChannelCache,
+    setMemCache: (v) => { _settingsChannelCache = v; },
+    sig,
+    fileEntries,
+    opts,
+    compileFn: () => {
+      const parts = [minifySingleSource(locBuf.toString('utf8'))];
+      if (brandBuf) parts.push(minifySingleSource(brandBuf.toString('utf8')));
+      if (atlasBuf) parts.push(atlasBuf.toString('utf8').trim());
+      if (stageGlBuf) parts.push(minifySingleSource(minifyEmbeddedGlslTemplates(stageGlBuf.toString('utf8'))));
+      parts.push(minifySingleSource(setBuf.toString('utf8')));
+      const minRuntime = parts.join(';\n');
+      const codeHash = computeHash(minRuntime);
+      return { minRuntime, codeHash };
+    },
+    toCacheEntry: (assets, sourceHash) => ({
+      sourceHash,
+      codeHash: assets.codeHash,
+      minRuntime: assets.minRuntime,
+      payloadSha256: sha256Text(`${assets.codeHash}\0${assets.minRuntime}`),
+      updatedAt: Date.now(),
+    }),
+    fromCacheEntry: (entry) => ({
+      minRuntime: entry.minRuntime,
+      codeHash: entry.codeHash,
+    }),
+  });
+}
+
+const SETTINGS_REMOVE_EXPRESSION = `(() => {
+  try {
+    const sec = document.getElementById('ag-cs-settings-sec');
+    sec?.__agMascotStageApi?.dispose?.();
+    sec?.remove?.();
+  } catch {}
+  try { delete window.__agPrismSettingsPanel; } catch {}
+  try { delete globalThis.__agPrismSettingsPanel; } catch {}
+  try { delete window.__agPrismBrandLogoSvg; } catch {}
+  try { delete globalThis.__agPrismBrandLogoSvg; } catch {}
+  try { delete window.__agOctopathStageWebGL; } catch {}
+  try { delete globalThis.__agOctopathStageWebGL; } catch {}
+  try { delete window.__agOctopathTavernAtlas; } catch {}
+  try { delete globalThis.__agOctopathTavernAtlas; } catch {}
+  return { ok: true, status: 'off' };
+})()`;
+
+function buildSettingsChannelExpression(config = null, opts = null) {
+  let resolvedOpts = opts;
+  if (config && typeof config === 'object' && ('cachePath' in config || 'noDiskCache' in config || 'deferCacheWrite' in config) && !resolvedOpts) {
+    resolvedOpts = config;
+  }
+  const { minRuntime, codeHash } = readCompiledSettingsChannelAssets(resolvedOpts);
+  if (!minRuntime || !codeHash) {
+    return '';
+  }
+  const hashJson = serializeJsonForEval(codeHash);
+  return `(() => {
+    try {
+      if (window.self !== window.top) return { ok: false, status: 'skipped-subframe' };
+    } catch {
+      return { ok: false, status: 'skipped-subframe' };
+    }
+    const targetHash = ${hashJson};
+    const existingPanel = globalThis.__agPrismSettingsPanel || window.__agPrismSettingsPanel;
+    const existingLoc = globalThis.__agCsLocales || window.__agCsLocales;
+    if (existingPanel && existingPanel.__prismCodeHash === targetHash && existingLoc && existingLoc.__isFullLocales) {
+      try { (window.__agPrism || window.__agClaudeStyle)?.sync?.(); } catch {}
+      return { ok: true, reused: true, codeHash: targetHash };
+    }
+    try {
+      const staleSec = document.getElementById?.('ag-cs-settings-sec');
+      if (staleSec) {
+        try { staleSec.querySelector?.('[data-testid="prism-wallpaper-slot"]')?.__agPrismWpUiHandle?.destroy?.(); } catch {}
+        try { staleSec.querySelector?.('[data-testid="prism-suggester-slot"]')?.__agPrismSgUiHandle?.destroy?.(); } catch {}
+        try { staleSec.__agMascotStageApi?.dispose?.(); } catch {}
+        try { staleSec.__prismThoughtUiHandle = null; } catch {}
+        staleSec.remove?.();
+      }
+    } catch {}
+    ${minRuntime};
+    try {
+      const panel = globalThis.__agPrismSettingsPanel || window.__agPrismSettingsPanel;
+      if (panel && typeof panel === 'object') {
+        panel.__prismCodeHash = targetHash;
+        window.__agPrismSettingsPanel = panel;
+      }
+      const loc = globalThis.__agCsLocales || window.__agCsLocales;
+      if (loc && typeof loc === 'object') {
+        loc.__isFullLocales = true;
+        window.__agCsLocales = loc;
+      }
+    } catch {}
+    try { (window.__agPrism || window.__agClaudeStyle)?.sync?.(); } catch {}
+    try { document.getElementById('ag-cs-settings-sec')?.__prismMountThoughtUi?.(); } catch {}
+    try { document.getElementById('ag-cs-settings-sec')?.__prismMountWp?.(); } catch {}
+    try { (document.getElementById('ag-cs-settings-sec') || document.getElementById('ag-prism-settings-sec'))?.__prismMountSg?.(); } catch {}
+    return { ok: true, codeHash: targetHash };
+  })()`;
+}
+
+// ── 第十通道：双桌宠（dual-mascot-rig.js）配置门控独立注入（mascot === 'off' 时 0 B） ────
+let _mascotChannelCache = { sig: '', sourceHash: '', minRuntime: '', codeHash: '', cachedPaths: new Set() };
+
+function shouldEnableMascot(config = null) {
+  const cfg = config && typeof config === 'object' ? reconcileConfigAliases(config) : readConfig();
+  return cfg.mascot !== 'off' && cfg.mascot !== false;
+}
+
+function readCompiledMascotAssets(opts = null) {
+  const mascotPath = path.join(__dirname, 'dual-mascot-rig.js');
+  if (!fs.existsSync(mascotPath)) {
+    return { sig: '', minRuntime: '', codeHash: '' };
+  }
+  const sig = getFileSig(mascotPath);
+  const cachePath = resolveBundleCachePathOption(opts);
+  if (!cachePath && _mascotChannelCache.sig === sig && _mascotChannelCache.codeHash) {
+    return _mascotChannelCache;
+  }
+  const buf = fs.readFileSync(mascotPath);
+  return resolveChannelAssetsWithDiskCache({
+    channelName: 'mascot',
+    memCache: _mascotChannelCache,
+    setMemCache: (v) => { _mascotChannelCache = v; },
+    sig,
+    fileEntries: [{ rel: 'dual-mascot-rig.js', content: buf }],
+    opts,
+    compileFn: () => {
+      const minRuntime = minifySingleSource(buf.toString('utf8'));
+      const codeHash = computeHash(minRuntime);
+      return { minRuntime, codeHash };
+    },
+    toCacheEntry: (assets, sourceHash) => ({
+      sourceHash,
+      codeHash: assets.codeHash,
+      minRuntime: assets.minRuntime,
+      payloadSha256: sha256Text(`${assets.codeHash}\0${assets.minRuntime}`),
+      updatedAt: Date.now(),
+    }),
+    fromCacheEntry: (entry) => ({
+      minRuntime: entry.minRuntime,
+      codeHash: entry.codeHash,
+    }),
+  });
+}
+
+const MASCOT_REMOVE_EXPRESSION = `(() => {
+  try { window.__agDualMascotRig?.dispose?.(); } catch {}
+  try { (window.__agPrism || window.__agClaudeStyle)?.sync?.(); } catch {}
+  try {
+    document.querySelectorAll?.('.ag-cs-crab, .ag-cs-dual-stage, .ag-cs-crab-stage, .ag-cs-mascot-stage, .ag-v2-mascot-stage, .ag-v2-habitat-prop').forEach((n) => {
+      try { n.__agMascotApi?.dispose?.(); } catch {}
+      n.remove?.();
+    });
+  } catch {}
+  try { document.querySelectorAll?.('[data-ag-cs-crab-anchor]').forEach((n) => n.removeAttribute?.('data-ag-cs-crab-anchor')); } catch {}
+  try { document.documentElement?.removeAttribute?.('data-ag-cs-has-crab'); } catch {}
+  try { document.documentElement?.removeAttribute?.('data-ag-cs-mascot-drag'); } catch {}
+  try { delete window.__agDualMascotRig; } catch {}
+  try { delete globalThis.__agDualMascotRig; } catch {}
+  try { delete window.__agPrismMascotArt; } catch {}
+  try { delete globalThis.__agPrismMascotArt; } catch {}
+  return { ok: true, status: 'off' };
+})()`;
+
+function buildMascotChannelExpression(config = null, opts = null) {
+  const cfg = config && typeof config === 'object' ? reconcileConfigAliases(config) : readConfig();
+  if (!shouldEnableMascot(cfg)) {
+    return '';
+  }
+  const { minRuntime, codeHash } = readCompiledMascotAssets(opts);
+  if (!minRuntime || !codeHash) {
+    return '';
+  }
+  const hashJson = serializeJsonForEval(codeHash);
+  return `(() => {
+    try {
+      if (window.self !== window.top) return { ok: false, status: 'skipped-subframe' };
+    } catch {
+      return { ok: false, status: 'skipped-subframe' };
+    }
+    try {
+      const liveCfg = window.__agPrism?.getState?.()?.cfg;
+      if (liveCfg && (liveCfg.mascot === 'off' || liveCfg.mascot === false)) {
+        try { window.__agDualMascotRig?.dispose?.(); } catch {}
+        try { (window.__agPrism || window.__agClaudeStyle)?.sync?.(); } catch {}
+        try {
+          document.querySelectorAll?.('.ag-cs-crab, .ag-cs-dual-stage, .ag-cs-crab-stage, .ag-cs-mascot-stage, .ag-v2-mascot-stage, .ag-v2-habitat-prop').forEach((n) => {
+            try { n.__agMascotApi?.dispose?.(); } catch {}
+            n.remove?.();
+          });
+        } catch {}
+        try { document.querySelectorAll?.('[data-ag-cs-crab-anchor]').forEach((n) => n.removeAttribute?.('data-ag-cs-crab-anchor')); } catch {}
+        try { document.documentElement?.removeAttribute?.('data-ag-cs-has-crab'); document.documentElement?.removeAttribute?.('data-ag-cs-mascot-drag'); } catch {}
+        try { delete window.__agDualMascotRig; delete globalThis.__agDualMascotRig; delete window.__agPrismMascotArt; delete globalThis.__agPrismMascotArt; } catch {}
+        return { ok: true, status: 'off', skippedByLiveCfg: true };
+      }
+    } catch {}
+    const targetHash = ${hashJson};
+    const existing = globalThis.__agDualMascotRig || window.__agDualMascotRig;
+    if (existing && existing.__prismCodeHash === targetHash) {
+      try { (window.__agPrism || window.__agClaudeStyle)?.sync?.(); } catch {}
+      return { ok: true, reused: true, codeHash: targetHash };
+    }
+    ${minRuntime};
+    try {
+      const mod = globalThis.__agDualMascotRig || window.__agDualMascotRig;
+      if (mod && typeof mod === 'object') {
+        mod.__prismCodeHash = targetHash;
+        window.__agDualMascotRig = mod;
+      }
+    } catch {}
+    try { (window.__agPrism || window.__agClaudeStyle)?.sync?.(); } catch {}
+    return { ok: true, codeHash: targetHash };
+  })()`;
+}
+
+// ── 第十一通道：Prompt Suggester（对话续写幽灵补全 + 8 语种 Beta 设置卡片） ────
+let _suggesterAssetsCache = { sig: '', sourceHash: '', minClient: '', minSettingsUi: '', codeHash: '', cachedPaths: new Set() };
+
+function readCompiledSuggesterAssets(opts = null) {
+  const clientPath = path.join(__dirname, 'vendor', 'prompt-suggester', 'suggester-client.js');
+  const settingsUiPath = path.join(__dirname, 'vendor', 'prompt-suggester', 'suggester-settings-ui.js');
+  if (!fs.existsSync(clientPath) || !fs.existsSync(settingsUiPath)) {
+    return { sig: '', minClient: '', minSettingsUi: '', codeHash: '' };
+  }
+  const sig = `${getFileSig(clientPath)}|${getFileSig(settingsUiPath)}`;
+  const cachePath = resolveBundleCachePathOption(opts);
+  if (!cachePath && _suggesterAssetsCache.sig === sig && _suggesterAssetsCache.codeHash) {
+    return _suggesterAssetsCache;
+  }
+  const clientBuf = fs.readFileSync(clientPath);
+  const settingsBuf = fs.readFileSync(settingsUiPath);
+  return resolveChannelAssetsWithDiskCache({
+    channelName: 'suggester',
+    memCache: _suggesterAssetsCache,
+    setMemCache: (v) => { _suggesterAssetsCache = v; },
+    sig,
+    fileEntries: [
+      { rel: 'vendor/prompt-suggester/suggester-client.js', content: clientBuf },
+      { rel: 'vendor/prompt-suggester/suggester-settings-ui.js', content: settingsBuf },
+    ],
+    opts,
+    compileFn: () => {
+      const minClient = minifySingleSource(clientBuf.toString('utf8'));
+      const minSettingsUi = minifySingleSource(settingsBuf.toString('utf8'));
+      const codeHash = computeHash(`${minClient}\n${minSettingsUi}`);
+      return { minClient, minSettingsUi, codeHash };
+    },
+    toCacheEntry: (assets, sourceHash) => ({
+      sourceHash,
+      codeHash: assets.codeHash,
+      minClient: assets.minClient,
+      minSettingsUi: assets.minSettingsUi,
+      payloadSha256: sha256Text(`${assets.codeHash}\0${assets.minClient}\0${assets.minSettingsUi}`),
+      updatedAt: Date.now(),
+    }),
+    fromCacheEntry: (entry) => ({
+      minClient: entry.minClient,
+      minSettingsUi: entry.minSettingsUi,
+      codeHash: entry.codeHash,
+    }),
+  });
+}
+
+const SUGGESTER_REMOVE_EXPRESSION = `(() => {
+  try { (window.__agPrismSuggester || globalThis.__agPrismSuggester)?.destroy?.(); } catch {}
+  try { (window.__agPrismSuggesterBridge || globalThis.__agPrismSuggesterBridge)?.dispose?.(); } catch {}
+  try { document.getElementById?.('ag-prism-suggester-css')?.remove?.(); } catch {}
+  try { document.getElementById?.('ag-prism-model-dd-css')?.remove?.(); } catch {}
+  try { document.querySelectorAll?.('[data-testid="prism-suggest-trigger"], [data-testid="prism-ghost-overlay"]')?.forEach?.((n) => n.remove()); } catch {}
+  try {
+    document.querySelectorAll?.('[data-ag-prism-ghost-active]')?.forEach?.((el) => {
+      el.removeAttribute('data-ag-prism-ghost-active');
+      el.style?.removeProperty?.('--ag-prism-ghost-min-h');
+    });
+  } catch {}
+  try {
+    const slot = document.querySelector?.('[data-testid="prism-suggester-slot"]');
+    if (slot) {
+      try { slot.__agPrismSgUiHandle?.destroy?.(); } catch {}
+      slot.__agPrismSgUiHandle = null;
+      while (slot.firstChild) slot.removeChild(slot.firstChild);
+    }
+  } catch {}
+  try { document.documentElement?.removeAttribute?.('data-ag-prism-suggester'); } catch {}
+  try { delete window.__agPrismSuggester; } catch {}
+  try { delete globalThis.__agPrismSuggester; } catch {}
+  try { delete window.__agPrismSuggesterFactory; } catch {}
+  try { delete globalThis.__agPrismSuggesterFactory; } catch {}
+  try { delete window.__agPrismSuggesterSettingsUi; } catch {}
+  try { delete globalThis.__agPrismSuggesterSettingsUi; } catch {}
+  try { delete window.__prismMountSuggesterUi; } catch {}
+  try { delete globalThis.__prismMountSuggesterUi; } catch {}
+  try { delete window.__agPrismSuggesterBridge; } catch {}
+  try { delete globalThis.__agPrismSuggesterBridge; } catch {}
+  try { delete window.__agPrismSuggesterResolve; } catch {}
+  try { delete globalThis.__agPrismSuggesterResolve; } catch {}
+  return { ok: true, status: 'off' };
+})()`;
+
+// 第十一通道独立注入（对话续写幽灵补全 + 8 语种 Beta 设置卡片）：完全独立于 Channel 1，缺文件时安全返回 ''，接入磁盘缓存并支持 codeHash 幂等复用与零泄漏热卸载
+function buildSuggesterExpression(config = null, opts = null) {
+  let resolvedOpts = opts;
+  if (
+    !resolvedOpts &&
+    config &&
+    typeof config === 'object' &&
+    ('cachePath' in config || 'noDiskCache' in config || 'deferCacheWrite' in config || 'customClientSource' in config)
+  ) {
+    resolvedOpts = config;
+  }
+  let minClient = '';
+  let minSettingsUi = '';
+  let codeHash = '';
+  if (
+    resolvedOpts &&
+    typeof resolvedOpts.customClientSource === 'string' &&
+    typeof resolvedOpts.customSettingsUiSource === 'string'
+  ) {
+    minClient = resolvedOpts.customClientSource ? minifySingleSource(resolvedOpts.customClientSource) : '';
+    minSettingsUi = resolvedOpts.customSettingsUiSource ? minifySingleSource(resolvedOpts.customSettingsUiSource) : '';
+    codeHash = minClient && minSettingsUi ? computeHash(`${minClient}\n${minSettingsUi}`) : '';
+  } else {
+    const compiled = readCompiledSuggesterAssets(resolvedOpts);
+    minClient = compiled.minClient;
+    minSettingsUi = compiled.minSettingsUi;
+    codeHash = compiled.codeHash;
+  }
+  if (!minClient || !minSettingsUi || !codeHash) {
+    return '';
+  }
+
+  const hashJson = serializeJsonForEval(codeHash);
+
+  return `(() => {
+    try {
+      if (window.self !== window.top) return { ok: false, status: 'skipped-subframe' };
+    } catch {
+      return { ok: false, status: 'skipped-subframe' };
+    }
+    const hasDomMarker = () => {
+      try {
+        if (
+          document.body &&
+          document.body.classList &&
+          (document.body.classList.contains('theme-standalone') || document.body.classList.contains('monaco-workbench'))
+        ) {
+          return true;
+        }
+        return Boolean(
+          typeof document.querySelector === 'function' &&
+            document.querySelector(
+              '.agy-shell, .agy-home, [data-testid="aux-pane-split"], [data-testid="conversation-view"], [data-testid="agent-input-box"], [data-testid="model-selector-trigger"], .monaco-workbench'
+            )
+        );
+      } catch {
+        return false;
+      }
+    };
+    let needDomMarkerOnReady = false;
+    let isPlainHttpLocalhost = false;
+    try {
+      const loc = typeof window !== 'undefined' && window.location;
+      const href = loc && typeof loc.href === 'string' ? loc.href : '';
+      if (href) {
+        const low = href.toLowerCase();
+        if (low.startsWith('devtools://') || low.startsWith('data:') || low.startsWith('chrome:') || low.startsWith('chrome-extension:') || low.startsWith('edge:') || low.startsWith('blob:') || low.startsWith('plugin:')) {
+          return { ok: false, status: 'skipped-non-host' };
+        }
+        if (low.startsWith('vscode-file://') || low.startsWith('app://') || low.startsWith('about:')) {
+          const ttl = String(document.title || '').trim();
+          if (/^(?:untitled|launchpad)$/i.test(ttl) || /\\/launchpad(?:\\.html)?(?:[?#]|$)/i.test(low)) {
+            return { ok: false, status: 'skipped-non-host' };
+          }
+        }
+        if (low.startsWith('http:') || low.startsWith('https:')) {
+          const m = /^(https?):\\/\\/(127\\.0\\.0\\.1|localhost|\\[::1\\])(?::\\d+)?(\\/[^?#]*)?(?:[?#]|$)/i.exec(href);
+          if (!m) return { ok: false, status: 'skipped-non-host' };
+          const pathname = (m[3] || '/').toLowerCase();
+          if (/^\\/(?:viewer(?:\\/|$)|sandbox(?:\\/|$)|stream(?:\\/|$)|api(?:\\/|$))/.test(pathname)) {
+            return { ok: false, status: 'skipped-non-host' };
+          }
+          if (!hasDomMarker()) {
+            isPlainHttpLocalhost = m[1].toLowerCase() === 'http';
+            const rs = String(document.readyState || '');
+            if (isPlainHttpLocalhost) {
+              if (rs === 'loading') needDomMarkerOnReady = true;
+              else return { ok: false, status: 'skipped-non-host' };
+            } else if (!/\\bantigravity\\b/i.test(String(document.title || ''))) {
+              if (rs === 'loading') needDomMarkerOnReady = true;
+              else return { ok: false, status: 'skipped-non-host' };
+            }
+          }
+        }
+      }
+    } catch {}
+
+    const mountSettingsSlot = () => {
+      try {
+        const sec = document.getElementById?.('ag-cs-settings-sec') || document.getElementById?.('ag-prism-settings-sec');
+        if (sec && typeof sec.__prismMountSg === 'function') {
+          sec.__prismMountSg();
+          return;
+        }
+        const slot = document.querySelector?.('[data-testid="prism-suggester-slot"]');
+        const fn = window.__prismMountSuggesterUi || globalThis.__prismMountSuggesterUi;
+        if (slot && typeof fn === 'function') fn(slot, {});
+      } catch {}
+    };
+
+    const cleanupSuggester = () => {
+      try { (window.__agPrismSuggester || globalThis.__agPrismSuggester)?.destroy?.(); } catch {}
+      try { (window.__agPrismSuggesterBridge || globalThis.__agPrismSuggesterBridge)?.dispose?.(); } catch {}
+      try { document.getElementById?.('ag-prism-suggester-css')?.remove?.(); } catch {}
+      try { document.getElementById?.('ag-prism-model-dd-css')?.remove?.(); } catch {}
+      try { document.querySelectorAll?.('[data-testid="prism-suggest-trigger"], [data-testid="prism-ghost-overlay"]')?.forEach?.((n) => n.remove()); } catch {}
+      try {
+        document.querySelectorAll?.('[data-ag-prism-ghost-active]')?.forEach?.((el) => {
+          el.removeAttribute('data-ag-prism-ghost-active');
+          el.style?.removeProperty?.('--ag-prism-ghost-min-h');
+        });
+      } catch {}
+      try {
+        const slot = document.querySelector?.('[data-testid="prism-suggester-slot"]');
+        if (slot) {
+          try { slot.__agPrismSgUiHandle?.destroy?.(); } catch {}
+          slot.__agPrismSgUiHandle = null;
+          while (slot.firstChild) slot.removeChild(slot.firstChild);
+        }
+      } catch {}
+      try { delete window.__agPrismSuggester; } catch {}
+      try { delete globalThis.__agPrismSuggester; } catch {}
+      try { delete window.__agPrismSuggesterFactory; } catch {}
+      try { delete globalThis.__agPrismSuggesterFactory; } catch {}
+      try { delete window.__agPrismSuggesterSettingsUi; } catch {}
+      try { delete globalThis.__agPrismSuggesterSettingsUi; } catch {}
+      try { delete window.__prismMountSuggesterUi; } catch {}
+      try { delete globalThis.__prismMountSuggesterUi; } catch {}
+      try { delete window.__agPrismSuggesterBridge; } catch {}
+      try { delete globalThis.__agPrismSuggesterBridge; } catch {}
+      try { delete window.__agPrismSuggesterResolve; } catch {}
+      try { delete globalThis.__agPrismSuggesterResolve; } catch {}
+    };
+
+    const targetHash = ${hashJson};
+    const mountOrReuse = () => {
+      if (needDomMarkerOnReady && !hasDomMarker() && (isPlainHttpLocalhost || !/\\bantigravity\\b/i.test(String(document.title || '')))) {
+        return { ok: false, status: 'skipped-non-host' };
+      }
+      const existing = window.__agPrismSuggester || globalThis.__agPrismSuggester;
+      const existingUi = window.__agPrismSuggesterSettingsUi || globalThis.__agPrismSuggesterSettingsUi;
+      if (
+        existing &&
+        !existing.getDebugState?.()?.destroyed &&
+        existing.__prismCodeHash === targetHash &&
+        existingUi &&
+        existingUi.__prismCodeHash === targetHash
+      ) {
+        try { existing.sync?.(); } catch {}
+        mountSettingsSlot();
+        return { ok: true, reused: true, codeHash: targetHash };
+      }
+
+      cleanupSuggester();
+      ;${minClient};
+      ;${minSettingsUi};
+
+      let mounted = window.__agPrismSuggester || globalThis.__agPrismSuggester;
+      const factory = window.__agPrismSuggesterFactory || globalThis.__agPrismSuggesterFactory;
+      if (!mounted && typeof factory === 'function') {
+        try {
+          mounted = factory({ window, document });
+        } catch {}
+      }
+      if (mounted && typeof mounted === 'object') {
+        mounted.__prismCodeHash = targetHash;
+        try { window.__agPrismSuggester = mounted; } catch {}
+        try { globalThis.__agPrismSuggester = mounted; } catch {}
+      }
+      const mountedUi = window.__agPrismSuggesterSettingsUi || globalThis.__agPrismSuggesterSettingsUi;
+      if (mountedUi && typeof mountedUi === 'object') {
+        mountedUi.__prismCodeHash = targetHash;
+        try { window.__agPrismSuggesterSettingsUi = mountedUi; } catch {}
+        try { globalThis.__agPrismSuggesterSettingsUi = mountedUi; } catch {}
+      }
+      try { mounted?.sync?.(); } catch {}
+      mountSettingsSlot();
+      return { ok: true, status: 'mounted', codeHash: targetHash };
+    };
+
+    if ((needDomMarkerOnReady || !document.documentElement) && typeof document.addEventListener === 'function') {
+      document.addEventListener('DOMContentLoaded', () => { try { mountOrReuse(); } catch {} }, { once: true });
+      return { ok: true, status: 'deferred', codeHash: targetHash };
+    }
+    return mountOrReuse();
+  })()`;
+}
+
+// ── 第十二通道：Studio 首页仪表盘（home-studio-panel.js）独立延迟注入（剥离 Channel 1 体积） ──
+let _homeStudioChannelCache = { sig: '', sourceHash: '', minRuntime: '', codeHash: '', cachedPaths: new Set() };
+
+function shouldEnableHomeStudio(config = null) {
+  const cfg = config && typeof config === 'object' ? reconcileConfigAliases(config) : readConfig();
+  return (cfg.homeLayout || cfg.homeMode || 'studio') === 'studio';
+}
+
+function readCompiledHomeStudioAssets(opts = null) {
+  const studioPath = path.join(__dirname, 'home-studio-panel.js');
+  if (!fs.existsSync(studioPath)) {
+    return { sig: '', minRuntime: '', codeHash: '' };
+  }
+  const sig = getFileSig(studioPath);
+  const cachePath = resolveBundleCachePathOption(opts);
+  if (!cachePath && _homeStudioChannelCache.sig === sig && _homeStudioChannelCache.codeHash) {
+    return _homeStudioChannelCache;
+  }
+  const buf = fs.readFileSync(studioPath);
+  return resolveChannelAssetsWithDiskCache({
+    channelName: 'homeStudio',
+    memCache: _homeStudioChannelCache,
+    setMemCache: (v) => { _homeStudioChannelCache = v; },
+    sig,
+    fileEntries: [{ rel: 'home-studio-panel.js', content: buf }],
+    opts,
+    compileFn: () => {
+      const minRuntime = minifySingleSource(minifyEmbeddedCssTemplate(buf.toString('utf8')));
+      const codeHash = computeHash(minRuntime);
+      return { minRuntime, codeHash };
+    },
+    toCacheEntry: (assets, sourceHash) => ({
+      sourceHash,
+      codeHash: assets.codeHash,
+      minRuntime: assets.minRuntime,
+      payloadSha256: sha256Text(`${assets.codeHash}\0${assets.minRuntime}`),
+      updatedAt: Date.now(),
+    }),
+    fromCacheEntry: (entry) => ({
+      minRuntime: entry.minRuntime,
+      codeHash: entry.codeHash,
+    }),
+  });
+}
+
+const HOME_STUDIO_REMOVE_EXPRESSION = `(() => {
+  try { (window.__agPrism || window.__agClaudeStyle)?.detachHomeStudio?.(); } catch {}
+  try { document.getElementById?.('ag-prism-studio-v101-css')?.remove?.(); } catch {}
+  try { document.querySelectorAll?.('.ag-cs-home-panel-seat, .ag-cs-home-panel')?.forEach?.((n) => n.remove()); } catch {}
+  try { document.documentElement?.removeAttribute?.('data-ag-prism-scope'); } catch {}
+  try { delete window.__agPrismHomeStudioPanel; } catch {}
+  try { delete globalThis.__agPrismHomeStudioPanel; } catch {}
+  try { delete window.__agHomeStudioPanel; } catch {}
+  try { delete globalThis.__agHomeStudioPanel; } catch {}
+  return { ok: true, status: 'off' };
+})()`;
+
+// 第十二通道独立注入（Studio 首页用量仪表盘与缓存控制器）：完全独立于 Channel 1，接入磁盘缓存，支持幂等复用、热替换旧实例与零泄漏卸载
+function buildHomeStudioChannelExpression(config = null, opts = null) {
+  let resolvedCfg = config;
+  let resolvedOpts = opts;
+  if (
+    !resolvedOpts &&
+    config &&
+    typeof config === 'object' &&
+    ('cachePath' in config || 'noDiskCache' in config || 'deferCacheWrite' in config) &&
+    !('homeLayout' in config) &&
+    !('homeMode' in config)
+  ) {
+    resolvedOpts = config;
+    resolvedCfg = null;
+  }
+  const cfg = resolvedCfg && typeof resolvedCfg === 'object' ? reconcileConfigAliases(resolvedCfg) : readConfig();
+  if (!shouldEnableHomeStudio(cfg)) {
+    return '';
+  }
+  const { minRuntime, codeHash } = readCompiledHomeStudioAssets(resolvedOpts);
+  if (!minRuntime || !codeHash) {
+    return '';
+  }
+  const hashJson = serializeJsonForEval(codeHash);
+  return `(() => {
+    try {
+      if (window.self !== window.top) return { ok: false, status: 'skipped-subframe' };
+    } catch {
+      return { ok: false, status: 'skipped-subframe' };
+    }
+    try {
+      const loc = typeof window !== 'undefined' && window.location;
+      const href = loc && typeof loc.href === 'string' ? loc.href : '';
+      if (href) {
+        const low = href.toLowerCase();
+        if (low.startsWith('devtools://') || low.startsWith('data:') || low.startsWith('chrome:') || low.startsWith('chrome-extension:') || low.startsWith('edge:') || low.startsWith('blob:') || low.startsWith('plugin:')) {
+          return { ok: false, status: 'skipped-non-host' };
+        }
+      }
+    } catch {}
+    try {
+      const liveCfg = (window.__agPrism || window.__agClaudeStyle)?.getState?.()?.cfg;
+      if (liveCfg && typeof liveCfg === 'object' && (liveCfg.homeLayout || liveCfg.homeMode || 'studio') !== 'studio') {
+        try { (window.__agPrism || window.__agClaudeStyle)?.detachHomeStudio?.(); } catch {}
+        try { document.getElementById?.('ag-prism-studio-v101-css')?.remove?.(); } catch {}
+        try { document.querySelectorAll?.('.ag-cs-home-panel-seat, .ag-cs-home-panel')?.forEach?.((n) => n.remove()); } catch {}
+        try { document.documentElement?.removeAttribute?.('data-ag-prism-scope'); } catch {}
+        try { delete window.__agPrismHomeStudioPanel; delete globalThis.__agPrismHomeStudioPanel; delete window.__agHomeStudioPanel; delete globalThis.__agHomeStudioPanel; } catch {}
+        return { ok: true, status: 'off', skippedByLiveCfg: true };
+      }
+    } catch {}
+    const targetHash = ${hashJson};
+    const existing = globalThis.__agPrismHomeStudioPanel || window.__agPrismHomeStudioPanel || globalThis.__agHomeStudioPanel || window.__agHomeStudioPanel;
+    if (existing && existing.__prismCodeHash === targetHash) {
+      try {
+        const api = window.__agPrism || window.__agClaudeStyle;
+        if (typeof api?.syncHomeStudio === 'function') api.syncHomeStudio();
+        else api?.sync?.();
+      } catch {}
+      return { ok: true, reused: true, codeHash: targetHash };
+    }
+    try { (window.__agPrism || window.__agClaudeStyle)?.detachHomeStudio?.(); } catch {}
+    ${minRuntime};
+    try {
+      const mod = globalThis.__agPrismHomeStudioPanel || window.__agPrismHomeStudioPanel || globalThis.__agHomeStudioPanel || window.__agHomeStudioPanel;
+      if (mod && typeof mod === 'object') {
+        mod.__prismCodeHash = targetHash;
+        window.__agPrismHomeStudioPanel = mod;
+        globalThis.__agPrismHomeStudioPanel = mod;
+        window.__agHomeStudioPanel = mod;
+        globalThis.__agHomeStudioPanel = mod;
+      }
+    } catch {}
+    try {
+      const api = window.__agPrism || window.__agClaudeStyle;
+      if (typeof api?.syncHomeStudio === 'function') api.syncHomeStudio();
+      else api?.sync?.();
+    } catch {}
+    return { ok: true, status: 'mounted', codeHash: targetHash };
+  })()`;
+}
+
 const REMOVE_EXPRESSION = `(() => {
   try {
     document.querySelectorAll?.('#ag-prism-wallpaper-root video')?.forEach?.((v) => {
@@ -8607,6 +12061,8 @@ const REMOVE_EXPRESSION = `(() => {
     });
   } catch (e) {}
   try { (window.__agPrismWallpaper || globalThis.__agPrismWallpaper)?.destroy?.(); } catch (e) {}
+  try { (window.__agPrismSuggester || globalThis.__agPrismSuggester)?.destroy?.(); } catch (e) {}
+  try { document.querySelector?.('[data-testid="prism-suggester-slot"]')?.__agPrismSgUiHandle?.destroy?.(); } catch (e) {}
   try { window.__agPrismInlineDiff?.destroy?.(); } catch (e) {}
   try {
     if (window.__agPrismTelemetry && typeof window.__agPrismTelemetry.destroy === 'function') {
@@ -8637,6 +12093,14 @@ const REMOVE_EXPRESSION = `(() => {
     if (window.__agPrismHostI18n && typeof window.__agPrismHostI18n.destroy === 'function') {
       window.__agPrismHostI18n.destroy();
     }
+  } catch (e) {}
+  try {
+    if (window.__agPrismPeriodicPicker && typeof window.__agPrismPeriodicPicker.destroy === 'function') {
+      window.__agPrismPeriodicPicker.destroy();
+    }
+    document
+      .querySelectorAll?.('#ag-prism-periodic-picker-css, #ag-prism-periodic-picker-root, .ag-pp-hold-ring, .ag-pp-mini-keycap')
+      .forEach((n) => n.remove());
   } catch (e) {}
   try {
     window.__agPrismContextMenu?.destroy?.();
@@ -8690,6 +12154,11 @@ const REMOVE_EXPRESSION = `(() => {
       window.__agPrismWallpaperBridge.dispose();
     }
   } catch (e) {}
+  try {
+    if (window.__agPrismSuggesterBridge && typeof window.__agPrismSuggesterBridge.dispose === 'function') {
+      window.__agPrismSuggesterBridge.dispose();
+    }
+  } catch (e) {}
   delete window.__agPrism;
   delete window.__agClaudeStyle;
   delete window.__agPrismTelemetry;
@@ -8721,9 +12190,26 @@ const REMOVE_EXPRESSION = `(() => {
   try { delete window.__prismMountWallpaperUi; } catch {}
   try { delete window.__agPrismWallpaperBridge; } catch {}
   try { delete window.__agPrismWallpaperResolve; } catch {}
+  try { delete window.__agPrismSuggester; } catch {}
+  try { delete window.__agPrismSuggesterFactory; } catch {}
+  try { delete window.__agPrismSuggesterSettingsUi; } catch {}
+  try { delete window.__prismMountSuggesterUi; } catch {}
+  try { delete window.__agPrismSuggesterBridge; } catch {}
+  try { delete window.__agPrismSuggesterResolve; } catch {}
   delete window.__agPrismBrandLogoSvg;
   delete window.__agPrismHostI18n;
   delete window.__agPrismHostI18nFactory;
+  delete window.__agPrismPeriodicPicker;
+  delete window.__agPrismPeriodicPickerFactory;
+  delete window.__agPrismKeyboard3D;
+  delete window.__agPrismPeriodicKeyboard3D;
+  delete window.__agPrismOledScreen;
+  delete window.__agPrismGrainAssets;
+  for (const k of ['__agPeriodicAudioFx', '__agPeriodicModelCatalog', '__agPeriodicHostBridge', '__agPeriodicBentoUi', '__agPeriodicPbrGrainAssets', '__agPeriodicOledScreen', '__agPeriodicKeyboard3D']) {
+    try { delete window[k]; } catch {}
+    try { delete globalThis[k]; } catch {}
+  }
+  try { document.documentElement?.removeAttribute?.('data-ag-pp-holding'); } catch {}
   delete window.__agPrismContextMenu;
   delete window.__agCsI18n;
   delete globalThis.__agSP;
@@ -8731,6 +12217,13 @@ const REMOVE_EXPRESSION = `(() => {
   delete globalThis.__agPrismBrandLogoSvg;
   delete globalThis.__agPrismHostI18n;
   delete globalThis.__agPrismHostI18nFactory;
+  delete globalThis.__agPrismHostI18nReversePatterns;
+  delete globalThis.__agPrismPeriodicPicker;
+  delete globalThis.__agPrismPeriodicPickerFactory;
+  delete globalThis.__agPrismKeyboard3D;
+  delete globalThis.__agPrismPeriodicKeyboard3D;
+  delete globalThis.__agPrismOledScreen;
+  delete globalThis.__agPrismGrainAssets;
   delete globalThis.__agPrismContextMenu;
   delete globalThis.__agPrismTelemetry;
   delete globalThis.__agPrismEffortSlider;
@@ -8743,11 +12236,20 @@ const REMOVE_EXPRESSION = `(() => {
   delete globalThis.__prismMountWallpaperUi;
   delete globalThis.__agPrismWallpaperBridge;
   delete globalThis.__agPrismWallpaperResolve;
+  delete globalThis.__agPrismSuggester;
+  delete globalThis.__agPrismSuggesterFactory;
+  delete globalThis.__agPrismSuggesterSettingsUi;
+  delete globalThis.__prismMountSuggesterUi;
+  delete globalThis.__agPrismSuggesterBridge;
+  delete globalThis.__agPrismSuggesterResolve;
   delete globalThis.__agPrismOmni;
   delete globalThis.__agPrismSidebar;
   delete globalThis.__agPrismThoughtSettingsUi;
   delete globalThis.__agPrismSettingsPanel;
+  try { delete window.__agPrismHomeStudioPanel; } catch {}
+  try { delete window.__agHomeStudioPanel; } catch {}
   delete globalThis.__agPrismHomeStudioPanel;
+  delete globalThis.__agHomeStudioPanel;
   delete globalThis.__agPrismHomeRippleHost;
   delete globalThis.__agPrismModelGlyphCrystal;
   delete globalThis.__agPrismStreamChoreography;
@@ -8760,6 +12262,7 @@ const REMOVE_EXPRESSION = `(() => {
   delete globalThis.__agCodexEffortSliderDisableAutoBoot;
   delete globalThis.__agCsUiMain;
   delete globalThis.__agDualMascotRig;
+  delete globalThis.__agPrismMascotArt;
   delete globalThis.__agCrystalPrismCore;
   delete globalThis.__agVialCore;
   delete globalThis.__agMotionEngine;
@@ -8808,11 +12311,15 @@ const REMOVE_EXPRESSION = `(() => {
       'data-ag-cs-code-font',
       'data-ag-cs-ligatures',
       'data-ag-cs-ambient',
+      'data-ag-cs-dark-aura',
+      'data-ag-cs-dark-aura-style',
       'data-ag-prism-thought-view',
       'data-ag-prism-omni',
       'data-ag-prism-link-target',
       'data-ag-prism-sidebar-studio',
       'data-ag-prism-host-i18n',
+      'data-ag-prism-periodic-picker',
+      'data-ag-pp-open',
       'data-ag-prism-mode',
       'data-ag-prism-sidebar-host-sync',
       'data-ag-prism-sidebar-space',
@@ -8825,6 +12332,7 @@ const REMOVE_EXPRESSION = `(() => {
       'data-ag-cs-mascot-drag',
       'data-ag-prism-wallpaper',
       'data-ag-prism-wallpaper-hole',
+      'data-ag-prism-suggester',
     ].forEach((attr) => root.removeAttribute(attr));
     if (root.getAttribute('data-ag-cjk') === '1') root.removeAttribute('data-ag-cjk');
     if (root.style && typeof root.style.removeProperty === 'function') {
@@ -8931,6 +12439,13 @@ const REMOVE_EXPRESSION = `(() => {
     'data-ag-diff-state',
     'data-ag-cs-inline-diff',
     'data-ag-prism-scope',
+    'data-ag-cs-crab-anchor',
+    'data-ag-sp-running',
+    'data-ag-cs-queued',
+    'data-ag-cs-conv-seat',
+    'data-ag-cs-home-sheet',
+    'data-ag-cs-input-layer',
+    'data-ag-cs-vp-wrap',
   ].forEach((attr) => {
     document.querySelectorAll('[' + attr + ']').forEach((el) => el.removeAttribute(attr));
   });
@@ -8944,6 +12459,12 @@ const REMOVE_EXPRESSION = `(() => {
   });
   document.querySelectorAll('[data-ag-cs-orch-active]').forEach((el) => el.removeAttribute('data-ag-cs-orch-active'));
   document.querySelectorAll('[data-ag-cs-auto-unfolded]').forEach((el) => el.removeAttribute('data-ag-cs-auto-unfolded'));
+  document.querySelectorAll('[data-ag-prism-ghost-active]').forEach((el) => {
+    el.removeAttribute('data-ag-prism-ghost-active');
+    if (el.style && typeof el.style.removeProperty === 'function') {
+      el.style.removeProperty('--ag-prism-ghost-min-h');
+    }
+  });
   // Only remove Prism-owned fallback nodes & styles; NEVER touch external Pulse or external Effort Slider instances!
   document.querySelectorAll('[data-ag-prism-fallback="1"]').forEach((n) => n.remove());
   if (typeof window !== 'undefined' && window && !window.__agPulseDispose && window.__agPulseInlineInstalled === true) {
@@ -8994,7 +12515,7 @@ const REMOVE_EXPRESSION = `(() => {
   const nodes = document.querySelectorAll(
     '#' + ${JSON.stringify(STYLE_ID)} +
     ', #' + ${JSON.stringify(LEGACY_STYLE_ID)} +
-    ', #ag-prism-host-alert-css, #ag-prism-settings-v101-css, #ag-prism-studio-v101-css, #ag-prism-omni-css, #ag-prism-sidebar-studio-css, #ag-prism-inline-diff-css, #ag-prism-wallpaper-root, #ag-prism-wallpaper-css, #ag-cs-settings-sec, [data-testid="prism-thought-ai-config"], [data-testid="prism-thought-general-config"], .ag-omni-dock, .ag-omni-menu, .ag-prism-omni-menu, .ag-prism-omni-pane, [data-ag-prism-omni-owned="1"], [data-ag-prism-sidebar-owned="1"], .ag-prism-sidebar-studio, .ag-prism-sidebar-rail, .ag-prism-sidebar-popover, .ag-prism-sidebar-modal, .ag-cs-home-panel, .ag-cs-home-panel-seat, .ag-cs-ripple-layer, .ag-cs-ripple-host, .ag-cs-conv-aura-host, .ag-cs-crab, .ag-cs-mascot, .ag-v2-mascot-stage, .ag-v2-habitat-prop, .ag-cs-crystal-bar, [data-testid="orchestrator-effort-bar"], .ag-cs-prism-rim-cv, .ag-cs-code-fold-btn, .ag-cs-nav-outline-popover, .ag-cs-nav-outline-trigger, .ag-cs-smooth-caret, .ag-cs-perf-backdrop, .ag-cs-ctx-menu, .ag-cs-ctx-toast'
+    ', #ag-prism-host-alert-css, #ag-prism-settings-v101-css, #ag-prism-studio-v101-css, #ag-prism-omni-css, #ag-prism-sidebar-studio-css, #ag-prism-periodic-picker-css, #ag-prism-periodic-picker-root, .ag-pp-hold-ring, .ag-pp-mini-keycap, #ag-prism-inline-diff-css, #ag-prism-wallpaper-root, #ag-prism-wallpaper-css, #ag-prism-suggester-css, #ag-prism-model-dd-css, [data-testid="prism-suggest-trigger"], [data-testid="prism-ghost-overlay"], #ag-prism-storage-guard, #ag-prism-storage-guard-css, #ag-cs-settings-sec, [data-testid="prism-thought-ai-config"], [data-testid="prism-thought-general-config"], .ag-omni-dock, .ag-omni-menu, .ag-prism-omni-menu, .ag-prism-omni-pane, [data-ag-prism-omni-owned="1"], [data-ag-prism-sidebar-owned="1"], .ag-prism-sidebar-studio, .ag-prism-sidebar-rail, .ag-prism-sidebar-popover, .ag-prism-sidebar-modal, .ag-cs-home-panel, .ag-cs-home-panel-seat, .ag-cs-ripple-layer, .ag-cs-ripple-host, .ag-cs-conv-aura-host, .ag-cs-crab, .ag-cs-dual-stage, .ag-cs-crab-stage, .ag-cs-mascot-stage, .ag-cs-mascot, .ag-v2-mascot-stage, .ag-v2-habitat-prop, .ag-cs-crystal-bar, [data-testid="orchestrator-effort-bar"], .ag-cs-prism-rim-cv, .ag-cs-code-fold-btn, .ag-cs-nav-outline-popover, .ag-cs-nav-outline-trigger, .ag-cs-smooth-caret, .ag-cs-perf-backdrop, .ag-cs-ctx-menu, .ag-cs-ctx-toast'
   );
   nodes.forEach((n) => n.remove());
   return { removed: nodes.length };
@@ -9010,6 +12531,7 @@ module.exports = {
   SIDEBAR_BINDING,
   INLINE_DIFF_BINDING,
   WALLPAPER_BINDING,
+  SUGGESTER_BINDING,
   PORT_FILE,
   PID_FILE,
   CONFIG_FILE,
@@ -9018,19 +12540,62 @@ module.exports = {
   validateConfigEntry,
   reconcileConfigAliases,
   isEligibleTarget,
+  isSwarmSidecarUrl,
+  redactSensitiveUrl,
   readPidFromLockFile,
+  parseWindowsTasklistCsv,
   inspectProcessSync,
   matchesExpectedDaemonSignature,
   isExpectedDaemonProcess,
   CDP_OPT_IN_SWITCH,
+  LNK_MAX_FILE_BYTES,
+  APP_STORAGE_MAX_BYTES,
+  assertSafeRegularFileSync,
+  parseWindowsLnkBuffer,
+  updateWindowsLnkArguments,
+  readWindowsLnkFileSync,
+  writeWindowsLnkArgumentsSync,
+  getDefaultWindowsShortcutDirs,
+  collectWindowsLnkFilesSync,
+  runWindowsShortcutAdapter,
+  runWindowsShortcutAdapterAsync,
+  resolveWindowsDetachedNodeRuntime,
+  probeLoopbackCdpVersionAsync,
+  probeLoopbackCdpVersionSync,
+  buildWindowsHostCandidatesFromTasklist,
+  getAntigravityAppStoragePath,
+  suspendAntigravityRunInBackground,
+  restoreAntigravityRunInBackground,
+  requestLoopbackCdpBrowserClose,
+  isWindowsAntigravityHostAliveSync,
+  runWindowsDetachedRelaunchTask,
+  IS_LINUX,
+  LINUX_DESKTOP_SHADOW_MARKER,
+  LINUX_GOMEMLIMIT_LINE_RE,
   hasRemoteDebuggingPortSwitch,
   appendCdpFlagToArguments,
   stripCdpFlagFromArguments,
   isAntigravityShortcutTarget,
+  isAntigravityLinuxTarget,
   isMainAntigravityProcessSignature,
+  tokenizeDesktopExec,
+  extractDesktopExecTarget,
+  patchDesktopExecLine,
+  stripDesktopExecLine,
+  readDesktopShadowMarker,
+  isManagedPrismDesktopContent,
+  patchDesktopEntryContent,
+  stripDesktopEntryContent,
+  getDefaultLinuxDesktopDirs,
+  ensureLinuxDesktopShortcutsCdpFlag,
+  restoreLinuxDesktopShortcutsCdpFlag,
+  readLinuxGoMemLimitFromEnvD,
   ensureAntigravityShortcutsCdpFlag,
   ensureAntigravityShortcutsCdpFlagAsync,
   restoreAntigravityShortcutsCdpFlag,
+  extractPosixCommandExecutable,
+  parseAppImageFromProcEnviron,
+  parsePosixPsHostCandidates,
   detectRunningAntigravityHostSync,
   detectRunningAntigravityHost,
   getRelaunchPromptStatePaths,
@@ -9040,6 +12605,7 @@ module.exports = {
   executeHostRelaunchSequence,
   normalizeMacAppBundlePath,
   MAC_DETACHED_RELAUNCH_SH,
+  LINUX_DETACHED_RELAUNCH_SH,
   spawnDetachedHostRelaunchHelper,
   RUNTIME_PARTS,
   SYNC_ROOT_FILES,
@@ -9050,6 +12616,7 @@ module.exports = {
   readCss,
   readPort,
   listPages,
+  listSwarmTargets,
   getBrowserWsUrl,
   CdpSession,
   minifyCss,
@@ -9071,8 +12638,18 @@ module.exports = {
   buildOmniClientExpression,
   buildSidebarStudioExpression,
   shouldEnableHostI18n,
+  readWindowsPreferredUiLanguage,
+  detectSystemUiLocale,
+  resolveSystemLangNode,
+  _setWindowsUiLocaleReaderForTest,
   buildHostI18nExpression,
+  buildRelaunchDialogCopy,
   HOST_I18N_REMOVE_EXPRESSION,
+  shouldEnableSwarmI18n,
+  buildSwarmI18nExpression,
+  SWARM_I18N_REMOVE_EXPRESSION,
+  ISOLATED_HOST_I18N_PAUSE_EXPRESSION,
+  ISOLATED_HOST_I18N_RESUME_EXPRESSION,
   shouldEnableThought,
   buildThoughtExpression,
   THOUGHT_REMOVE_EXPRESSION,
@@ -9080,5 +12657,37 @@ module.exports = {
   INLINE_DIFF_REMOVE_EXPRESSION,
   buildWallpaperExpression,
   WALLPAPER_REMOVE_EXPRESSION,
+  PERIODIC_PICKER_MODULE_FILES,
+  shouldEnablePeriodicPicker,
+  buildPeriodicPickerExpression,
+  PERIODIC_PICKER_REMOVE_EXPRESSION,
+  DEFERRED_ROOT_MODULES,
+  buildSettingsChannelExpression,
+  SETTINGS_REMOVE_EXPRESSION,
+  shouldEnableMascot,
+  buildMascotChannelExpression,
+  MASCOT_REMOVE_EXPRESSION,
+  buildSuggesterExpression,
+  SUGGESTER_REMOVE_EXPRESSION,
+  shouldEnableHomeStudio,
+  buildHomeStudioChannelExpression,
+  HOME_STUDIO_REMOVE_EXPRESSION,
   isSafeV2SidebarClientSource,
 };
+
+if (require.main === module) {
+  const flagIdx = process.argv.indexOf('--run-relaunch-task');
+  if (flagIdx >= 0 && process.argv[flagIdx + 1]) {
+    const taskFilePath = path.resolve(String(process.argv[flagIdx + 1]));
+    (async () => {
+      try {
+        const { resolved } = assertSafeRegularFileSync(taskFilePath, RELAUNCH_TASK_MAX_BYTES);
+        const raw = fs.readFileSync(resolved, 'utf8').replace(/^\uFEFF/, '');
+        try { fs.unlinkSync(resolved); } catch {}
+        const task = JSON.parse(raw);
+        if (!task || typeof task !== 'object' || Array.isArray(task)) return;
+        await runWindowsDetachedRelaunchTask(task);
+      } catch {}
+    })();
+  }
+}

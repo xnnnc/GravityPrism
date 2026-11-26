@@ -31,11 +31,20 @@ const {
   shouldEnableHostI18n,
   buildHostI18nExpression,
   HOST_I18N_REMOVE_EXPRESSION,
+  ISOLATED_HOST_I18N_PAUSE_EXPRESSION,
+  ISOLATED_HOST_I18N_RESUME_EXPRESSION,
   shouldEnableThought,
   buildThoughtExpression,
   THOUGHT_REMOVE_EXPRESSION,
   buildInlineDiffInjectExpression,
   INLINE_DIFF_REMOVE_EXPRESSION,
+  shouldEnablePeriodicPicker,
+  buildPeriodicPickerExpression,
+  PERIODIC_PICKER_REMOVE_EXPRESSION,
+  buildSettingsChannelExpression,
+  shouldEnableMascot,
+  buildMascotChannelExpression,
+  MASCOT_REMOVE_EXPRESSION,
 } = require('./cdp');
 
 const FALLBACK_THOUGHT_REMOVE_EXPRESSION =
@@ -57,9 +66,22 @@ function isThoughtEnabledForConfig(cfg, checker = shouldEnableThought) {
 
 const WATCH = process.argv.includes('--watch');
 const LOG_FILE = path.join(__dirname, 'watch.log');
+const BUNDLE_CACHE_PATH = path.join(__dirname, '.bundle-cache.json');
+const PERIODIC_PICKER_CACHE_OPTS = Object.freeze({ cachePath: BUNDLE_CACHE_PATH });
+
+const SECRET_TOKEN_RE =
+  /(sk-[A-Za-z0-9_\-]{6,}|AIza[A-Za-z0-9_\-]{12,}|xai-[A-Za-z0-9_\-]{8,}|ghp_[A-Za-z0-9]{12,}|github_pat_[A-Za-z0-9_]{12,}|Bearer\s+[A-Za-z0-9._\-]{8,})/gi;
+const URL_SECRET_QUERY_RE = /([?&](?:token|auth|signature|key|secret)=)[^&\s#"']+/gi;
+
+function sanitizeSecretText(text) {
+  return String(text || '')
+    .replace(/https?:\/\/[^/\s:@]+:[^/\s@]+@/gi, 'https://***@')
+    .replace(URL_SECRET_QUERY_RE, '$1<REDACTED>')
+    .replace(SECRET_TOKEN_RE, '***REDACTED***');
+}
 
 function log(...args) {
-  const line = args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ');
+  const line = sanitizeSecretText(args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' '));
   console.log(line);
   if (WATCH) {
     try {
@@ -69,17 +91,8 @@ function log(...args) {
 }
 
 function shortTitle(page) {
-  const t = page.title || page.url;
+  const t = sanitizeSecretText(page.title || page.url || '');
   return t.length > 60 ? t.slice(0, 57) + '...' : t;
-}
-
-const SECRET_TOKEN_RE =
-  /(sk-[A-Za-z0-9_\-]{6,}|AIza[A-Za-z0-9_\-]{12,}|xai-[A-Za-z0-9_\-]{8,}|ghp_[A-Za-z0-9]{12,}|github_pat_[A-Za-z0-9_]{12,}|Bearer\s+[A-Za-z0-9._\-]{8,})/gi;
-
-function sanitizeSecretText(text) {
-  return String(text || '')
-    .replace(/https?:\/\/[^/\s:@]+:[^/\s@]+@/gi, 'https://***@')
-    .replace(SECRET_TOKEN_RE, '***REDACTED***');
 }
 
 function serializeJsonForEval(val) {
@@ -110,6 +123,33 @@ function updateConfigSetting(key, value) {
   return updateConfigBatch({ [key]: value });
 }
 
+async function syncIsolatedHostI18nOnEntry(entry, shouldPause) {
+  if (!entry || !entry.session || entry.session.closed) return { pausedAny: false, newlyPaused: false };
+  if (!(entry.contextFrames instanceof Map) || !entry.mainFrameId) return { pausedAny: false, newlyPaused: false };
+  const expr = shouldPause ? ISOLATED_HOST_I18N_PAUSE_EXPRESSION : ISOLATED_HOST_I18N_RESUME_EXPRESSION;
+  if (!expr) return { pausedAny: false, newlyPaused: false };
+  if (!shouldPause && !entry.isolatedHostI18nPaused) return { pausedAny: false, newlyPaused: false };
+  let pausedAny = false;
+  let newlyPaused = false;
+  for (const [ctxId, meta] of entry.contextFrames.entries()) {
+    if (!meta || meta.frameId !== entry.mainFrameId || meta.isDefault === true || meta.type !== 'isolated') continue;
+    const res = await entry.session
+      .send('Runtime.evaluate', { contextId: ctxId, expression: expr, returnByValue: true })
+      .catch(() => null);
+    const val = res && res.result ? res.result.value : null;
+    if (shouldPause && val && val.ok && val.paused) {
+      pausedAny = true;
+      if (!val.alreadyPaused) newlyPaused = true;
+    }
+  }
+  if (shouldPause) {
+    if (pausedAny) entry.isolatedHostI18nPaused = true;
+  } else {
+    entry.isolatedHostI18nPaused = false;
+  }
+  return { pausedAny, newlyPaused };
+}
+
 function createFastConfigRefreshBroadcaster({
   attached,
   readConfig: readCfg = readConfig,
@@ -129,12 +169,32 @@ function createFastConfigRefreshBroadcaster({
     buildExpression: buildInlineDiffInjectExpression,
     removeExpression: INLINE_DIFF_REMOVE_EXPRESSION || FALLBACK_INLINE_DIFF_REMOVE_EXPRESSION,
   }),
+  shouldEnablePeriodicPicker: shouldPeriodicPicker = shouldEnablePeriodicPicker,
+  buildPeriodicPickerExpression: buildPeriodicPicker = (cfg) =>
+    buildPeriodicPickerExpression(cfg, PERIODIC_PICKER_CACHE_OPTS),
+  periodicPickerRemoveExpression = PERIODIC_PICKER_REMOVE_EXPRESSION,
+  shouldEnableMascot: shouldMascot = undefined,
+  buildMascotChannelExpression: buildMascot = undefined,
+  mascotRemoveExpression = MASCOT_REMOVE_EXPRESSION,
   getOmniServerInfo = () => null,
   getSidebarServiceReady = () => false,
   sidebarBinding = SIDEBAR_BINDING,
   ensureSidebarBinding = async () => false,
   onExpressionsUpdated = null,
 } = {}) {
+  const useDefaultMascot = buildInj === buildInjectExpression && shouldMascot === undefined && buildMascot === undefined;
+  const resolveShouldMascot =
+    typeof shouldMascot === 'function'
+      ? shouldMascot
+      : useDefaultMascot || typeof buildMascot === 'function'
+        ? shouldEnableMascot
+        : null;
+  const resolveBuildMascot =
+    typeof buildMascot === 'function'
+      ? buildMascot
+      : useDefaultMascot || typeof shouldMascot === 'function'
+        ? (cfg) => buildMascotChannelExpression(cfg, PERIODIC_PICKER_CACHE_OPTS)
+        : null;
   return async function broadcastFastConfigRefresh() {
     const perEntryAck = new Map();
     for (const entry of attached.values()) {
@@ -175,8 +235,18 @@ function createFastConfigRefreshBroadcaster({
     const inlineDiffHashMatch = inlineDiffExpr ? /const targetHash = "([^"]+)"/.exec(inlineDiffExpr) : null;
     const inlineDiffHash = inlineDiffHashMatch ? inlineDiffHashMatch[1] : inlineDiffExpr;
     const inlineDiffRemoveExpr = inlineDiffHooks.removeExpression || FALLBACK_INLINE_DIFF_REMOVE_EXPRESSION;
+    const periodicPickerEnabled = typeof shouldPeriodicPicker === 'function' ? shouldPeriodicPicker(cfgNow) : false;
+    const periodicPickerExpr =
+      periodicPickerEnabled && typeof buildPeriodicPicker === 'function'
+        ? buildPeriodicPicker(cfgNow)
+        : '';
+    const mascotEnabled = typeof resolveShouldMascot === 'function' ? Boolean(resolveShouldMascot(cfgNow)) : false;
+    const mascotExpr =
+      mascotEnabled && typeof resolveBuildMascot === 'function'
+        ? resolveBuildMascot(cfgNow)
+        : '';
     if (typeof onExpressionsUpdated === 'function') {
-      onExpressionsUpdated({ expr, omniExpr, sidebarExpr, hostI18nExpr, thoughtExpr, inlineDiffExpr });
+      onExpressionsUpdated({ expr, omniExpr, sidebarExpr, hostI18nExpr, thoughtExpr, inlineDiffExpr, periodicPickerExpr, mascotExpr });
     }
     const canFastRefresh = typeof buildRefresh === 'function';
     const baseRefreshExpr = canFastRefresh ? buildRefresh() : null;
@@ -184,6 +254,8 @@ function createFastConfigRefreshBroadcaster({
       if (!entry || entry.session.closed) continue;
       try {
         await ensureSidebarBinding(entry.session, entry, cfgNow);
+        const hostI18nOffNow = cfgNow?.hostLocalization === 'off';
+        const isoPauseRes = hostI18nOffNow ? await syncIsolatedHostI18nOnEntry(entry, true) : null;
         const entryAck = perEntryAck.get(entry) || 0;
         const refreshExpr =
           canFastRefresh && entryAck > 0
@@ -195,8 +267,14 @@ function createFastConfigRefreshBroadcaster({
             if (omniEnabled && omniExpr && !fast.skippedStale) await entry.session.evaluate(omniExpr).catch(() => {});
             if (sidebarEnabled && sidebarExpr && !fast.skippedStale) await entry.session.evaluate(sidebarExpr).catch(() => {});
             if (!fast.skippedStale) {
-              if (hostI18nExpr && hostI18nEnabled) await entry.session.evaluate(hostI18nExpr).catch(() => {});
+              let hiRes = null;
+              if (hostI18nExpr && hostI18nEnabled) hiRes = await entry.session.evaluate(hostI18nExpr).catch(() => null);
               else if (hostI18nRemoveExpression) await entry.session.evaluate(hostI18nRemoveExpression).catch(() => {});
+              if (hostI18nOffNow && isoPauseRes && isoPauseRes.newlyPaused && (!hiRes || hiRes.reused)) {
+                await entry.session.evaluate("(() => { try { window.__agPrismHostI18n?.setMode?.('off', true); (window.__agPrism || window.__agClaudeStyle)?.sync?.(); } catch {} return true; })()").catch(() => {});
+              } else if (!hostI18nOffNow && entry.isolatedHostI18nPaused) {
+                await syncIsolatedHostI18nOnEntry(entry, false);
+              }
               if (thoughtExpr && thoughtEnabled) {
                 const thRes = await entry.session.evaluate(thoughtExpr).catch(() => null);
                 if (thRes && thRes.ok) entry.thoughtMounted = true;
@@ -227,6 +305,20 @@ function createFastConfigRefreshBroadcaster({
                 entry.inlineDiffMounted = false;
                 entry.inlineDiffSkipped = false;
                 entry.lastInlineDiffHash = '';
+              }
+              if (periodicPickerExpr && periodicPickerEnabled) {
+                const ppRes = await entry.session.evaluate(periodicPickerExpr).catch(() => null);
+                if (ppRes && ppRes.ok) entry.periodicPickerMounted = true;
+              } else if (!periodicPickerEnabled && (entry.periodicPickerScriptId || entry.periodicPickerMounted)) {
+                if (periodicPickerRemoveExpression) await entry.session.evaluate(periodicPickerRemoveExpression).catch(() => {});
+                entry.periodicPickerMounted = false;
+              }
+              if (mascotExpr && mascotEnabled) {
+                const mRes = await entry.session.evaluate(mascotExpr).catch(() => null);
+                if (mRes && mRes.ok) entry.mascotMounted = true;
+              } else if (!mascotEnabled && (entry.mascotScriptId || entry.mascotMounted)) {
+                if (mascotRemoveExpression) await entry.session.evaluate(mascotRemoveExpression).catch(() => {});
+                entry.mascotMounted = false;
               }
             }
           } else {
@@ -278,6 +370,20 @@ function createFastConfigRefreshBroadcaster({
               entry.inlineDiffSkipped = false;
               entry.lastInlineDiffHash = '';
             }
+            if (periodicPickerExpr && periodicPickerEnabled) {
+              const ppRes = await entry.session.evaluate(periodicPickerExpr).catch(() => null);
+              if (ppRes && ppRes.ok) entry.periodicPickerMounted = true;
+            } else if (!periodicPickerEnabled && (entry.periodicPickerScriptId || entry.periodicPickerMounted)) {
+              if (periodicPickerRemoveExpression) await entry.session.evaluate(periodicPickerRemoveExpression).catch(() => {});
+              entry.periodicPickerMounted = false;
+            }
+            if (mascotExpr && mascotEnabled) {
+              const mRes = await entry.session.evaluate(mascotExpr).catch(() => null);
+              if (mRes && mRes.ok) entry.mascotMounted = true;
+            } else if (!mascotEnabled && (entry.mascotScriptId || entry.mascotMounted)) {
+              if (mascotRemoveExpression) await entry.session.evaluate(mascotRemoveExpression).catch(() => {});
+              entry.mascotMounted = false;
+            }
           }
         }
         if (entry.scriptId) {
@@ -326,6 +432,22 @@ function createFastConfigRefreshBroadcaster({
           entry.inlineDiffScriptId = idAdd && idAdd.identifier ? idAdd.identifier : null;
           if (entry.inlineDiffScriptId) entry.lastInlineDiffHash = inlineDiffHash;
         }
+        if (entry.periodicPickerScriptId) {
+          await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.periodicPickerScriptId }).catch(() => {});
+          entry.periodicPickerScriptId = null;
+        }
+        if (periodicPickerExpr && periodicPickerEnabled) {
+          const ppAdd = await entry.session.send('Page.addScriptToEvaluateOnNewDocument', { source: periodicPickerExpr }).catch(() => null);
+          entry.periodicPickerScriptId = ppAdd && ppAdd.identifier ? ppAdd.identifier : null;
+        }
+        if (entry.mascotScriptId) {
+          await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.mascotScriptId }).catch(() => {});
+          entry.mascotScriptId = null;
+        }
+        if (mascotExpr && mascotEnabled) {
+          const mAdd = await entry.session.send('Page.addScriptToEvaluateOnNewDocument', { source: mascotExpr }).catch(() => null);
+          entry.mascotScriptId = mAdd && mAdd.identifier ? mAdd.identifier : null;
+        }
       } catch {}
     }
   };
@@ -367,11 +489,35 @@ async function injectOnce() {
     typeof buildInlineDiffInjectExpression === 'function'
       ? buildInlineDiffInjectExpression(cfgNow)
       : '';
+  const periodicPickerEnabled =
+    typeof shouldEnablePeriodicPicker === 'function' ? shouldEnablePeriodicPicker(cfgNow) : true;
+  const periodicPickerExpr =
+    periodicPickerEnabled && typeof buildPeriodicPickerExpression === 'function'
+      ? buildPeriodicPickerExpression(cfgNow, PERIODIC_PICKER_CACHE_OPTS)
+      : '';
+  const settingsExpr =
+    typeof buildSettingsChannelExpression === 'function'
+      ? buildSettingsChannelExpression(cfgNow, PERIODIC_PICKER_CACHE_OPTS)
+      : '';
+  const mascotEnabled =
+    typeof shouldEnableMascot === 'function' ? shouldEnableMascot(cfgNow) : cfgNow?.mascot !== 'off';
+  const mascotExpr =
+    mascotEnabled && typeof buildMascotChannelExpression === 'function'
+      ? buildMascotChannelExpression(cfgNow, PERIODIC_PICKER_CACHE_OPTS)
+      : '';
   for (const page of targets) {
     let session = null;
     try {
       session = await CdpSession.connect(page.webSocketDebuggerUrl);
       const res = await session.evaluate(expr);
+      if (settingsExpr) {
+        await session.evaluate(settingsExpr).catch(() => {});
+      }
+      if (mascotExpr) {
+        await session.evaluate(mascotExpr).catch(() => {});
+      } else if (!mascotEnabled && MASCOT_REMOVE_EXPRESSION) {
+        await session.evaluate(MASCOT_REMOVE_EXPRESSION).catch(() => {});
+      }
       if (omniExpr) {
         await session.evaluate(omniExpr).catch(() => {});
       }
@@ -390,6 +536,11 @@ async function injectOnce() {
       }
       if (inlineDiffExpr) {
         await session.evaluate(inlineDiffExpr).catch(() => {});
+      }
+      if (periodicPickerExpr) {
+        await session.evaluate(periodicPickerExpr).catch(() => {});
+      } else if (!periodicPickerEnabled && PERIODIC_PICKER_REMOVE_EXPRESSION) {
+        await session.evaluate(PERIODIC_PICKER_REMOVE_EXPRESSION).catch(() => {});
       }
       log(`[✓] ${shortTitle(page)} (obsidian-prism ${res.version} · 状态: ${res.status})`);
     } catch (err) {
@@ -523,6 +674,10 @@ async function watch() {
     typeof activeBuildInlineDiffExpression === 'function'
       ? activeBuildInlineDiffExpression(initCfg)
       : '';
+  let periodicPickerExpr =
+    typeof buildPeriodicPickerExpression === 'function'
+      ? buildPeriodicPickerExpression(initCfg, PERIODIC_PICKER_CACHE_OPTS)
+      : '';
   let _lazyReadSafeInlineDiff = null;
   async function loadReadSafeInlineDiff() {
     if (typeof _lazyReadSafeInlineDiff === 'function') return _lazyReadSafeInlineDiff;
@@ -587,6 +742,12 @@ async function watch() {
       buildExpression: activeBuildInlineDiffExpression,
       removeExpression: activeInlineDiffRemoveExpression,
     }),
+    shouldEnablePeriodicPicker,
+    buildPeriodicPickerExpression: (cfg) => buildPeriodicPickerExpression(cfg, PERIODIC_PICKER_CACHE_OPTS),
+    periodicPickerRemoveExpression: PERIODIC_PICKER_REMOVE_EXPRESSION,
+    shouldEnableMascot,
+    buildMascotChannelExpression: (cfg) => buildMascotChannelExpression(cfg, PERIODIC_PICKER_CACHE_OPTS),
+    mascotRemoveExpression: MASCOT_REMOVE_EXPRESSION,
     getOmniServerInfo: () => (omniServer ? omniServer.getServerInfo() : null),
     getSidebarServiceReady: () => Boolean(sidebarService),
     sidebarBinding: SIDEBAR_BINDING,
@@ -598,6 +759,7 @@ async function watch() {
       hostI18nExpr = next.hostI18nExpr;
       thoughtExpr = next.thoughtExpr;
       inlineDiffExpr = next.inlineDiffExpr;
+      periodicPickerExpr = next.periodicPickerExpr;
     },
   });
 
@@ -615,7 +777,7 @@ async function watch() {
     const res = await entry.session.evaluate(expr);
     entry.sidebarHostVerified = Boolean(res && res.status === 'ok');
     if (res && res.status === 'skipped-non-host') {
-      for (const key of ['scriptId', 'omniScriptId', 'sidebarScriptId', 'hostI18nScriptId', 'thoughtScriptId', 'inlineDiffScriptId']) {
+      for (const key of ['scriptId', 'omniScriptId', 'sidebarScriptId', 'hostI18nScriptId', 'thoughtScriptId', 'inlineDiffScriptId', 'periodicPickerScriptId', 'mascotScriptId']) {
         if (entry[key]) {
           await entry.session
             .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry[key] })
@@ -675,6 +837,9 @@ async function watch() {
         .catch(() => {});
       entry.hostI18nScriptId = null;
     }
+    if (cfgNow?.hostLocalization === 'off') {
+      await syncIsolatedHostI18nOnEntry(entry, true);
+    }
     if (hostI18nExpr) {
       const hiAdd = await entry.session
         .send('Page.addScriptToEvaluateOnNewDocument', { source: hostI18nExpr })
@@ -683,6 +848,9 @@ async function watch() {
       await entry.session.evaluate(hostI18nExpr).catch(() => {});
     } else if (HOST_I18N_REMOVE_EXPRESSION) {
       await entry.session.evaluate(HOST_I18N_REMOVE_EXPRESSION).catch(() => {});
+    }
+    if (cfgNow?.hostLocalization !== 'off' && entry.isolatedHostI18nPaused) {
+      await syncIsolatedHostI18nOnEntry(entry, false);
     }
     const hadThought = Boolean(entry.thoughtScriptId || entry.thoughtMounted);
     if (entry.thoughtScriptId) {
@@ -749,6 +917,53 @@ async function watch() {
       entry.inlineDiffSkipped = false;
       entry.lastInlineDiffHash = '';
     }
+    const hadPeriodicPicker = Boolean(entry.periodicPickerScriptId || entry.periodicPickerMounted);
+    if (entry.periodicPickerScriptId) {
+      await entry.session
+        .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.periodicPickerScriptId })
+        .catch(() => {});
+      entry.periodicPickerScriptId = null;
+    }
+    if (periodicPickerExpr) {
+      const ppAdd = await entry.session
+        .send('Page.addScriptToEvaluateOnNewDocument', { source: periodicPickerExpr })
+        .catch(() => null);
+      if (ppAdd && ppAdd.identifier) entry.periodicPickerScriptId = ppAdd.identifier;
+      const ppEvalRes = await entry.session.evaluate(periodicPickerExpr).catch(() => null);
+      if (ppEvalRes && ppEvalRes.ok) entry.periodicPickerMounted = true;
+    } else if (
+      hadPeriodicPicker &&
+      (typeof shouldEnablePeriodicPicker !== 'function' || !shouldEnablePeriodicPicker(cfgNow)) &&
+      PERIODIC_PICKER_REMOVE_EXPRESSION
+    ) {
+      await entry.session.evaluate(PERIODIC_PICKER_REMOVE_EXPRESSION).catch(() => {});
+      entry.periodicPickerMounted = false;
+    } else if (!periodicPickerExpr) {
+      entry.periodicPickerMounted = false;
+    }
+    const hadMascot = Boolean(entry.mascotScriptId || entry.mascotMounted);
+    const mascotEnabledNow = typeof shouldEnableMascot === 'function' ? shouldEnableMascot(cfgNow) : cfgNow?.mascot !== 'off';
+    const mascotExprNow =
+      mascotEnabledNow && typeof buildMascotChannelExpression === 'function'
+        ? buildMascotChannelExpression(cfgNow, PERIODIC_PICKER_CACHE_OPTS)
+        : '';
+    if (entry.mascotScriptId) {
+      await entry.session
+        .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.mascotScriptId })
+        .catch(() => {});
+      entry.mascotScriptId = null;
+    }
+    if (mascotExprNow) {
+      const mAdd = await entry.session
+        .send('Page.addScriptToEvaluateOnNewDocument', { source: mascotExprNow })
+        .catch(() => null);
+      if (mAdd && mAdd.identifier) entry.mascotScriptId = mAdd.identifier;
+      const mEval = await entry.session.evaluate(mascotExprNow).catch(() => null);
+      if (mEval && mEval.ok) entry.mascotMounted = true;
+    } else if (!mascotEnabledNow && hadMascot && MASCOT_REMOVE_EXPRESSION) {
+      await entry.session.evaluate(MASCOT_REMOVE_EXPRESSION).catch(() => {});
+      entry.mascotMounted = false;
+    }
     return res;
   }
 
@@ -772,6 +987,10 @@ async function watch() {
         inlineDiffMounted: false,
         inlineDiffSkipped: false,
         lastInlineDiffHash: '',
+        periodicPickerScriptId: null,
+        periodicPickerMounted: false,
+        mascotScriptId: null,
+        mascotMounted: false,
         docGen: 0,
         mainFrameId: null,
         hasFrameTree: false,
@@ -962,6 +1181,17 @@ async function watch() {
         if (name !== SETTING_BINDING && name !== LEGACY_SETTING_BINDING) return;
         try {
           const parsed = JSON.parse(payload);
+          if (parsed && parsed.action === 'request-settings-panel') {
+            if (typeof buildSettingsChannelExpression === 'function') {
+              const sExpr = buildSettingsChannelExpression(null, PERIODIC_PICKER_CACHE_OPTS);
+              if (sExpr) {
+                const evalParams = { expression: sExpr, returnByValue: true };
+                if (typeof executionContextId === 'number' && executionContextId > 0) evalParams.contextId = executionContextId;
+                await entry.session.send('Runtime.evaluate', evalParams).catch(() => {});
+              }
+            }
+            return;
+          }
           let changed = false;
           if (parsed && parsed.action === 'patch-batch' && parsed.entries && typeof parsed.entries === 'object') {
             selfConfigWriteUntil = Date.now() + 650;
@@ -1007,6 +1237,8 @@ async function watch() {
           if (entry.hostI18nScriptId) await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.hostI18nScriptId });
           if (entry.thoughtScriptId) await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.thoughtScriptId });
           if (entry.inlineDiffScriptId) await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.inlineDiffScriptId });
+          if (entry.periodicPickerScriptId) await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.periodicPickerScriptId });
+          if (entry.mascotScriptId) await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.mascotScriptId });
         } catch {}
         entry.session.close();
       }
@@ -1076,6 +1308,10 @@ async function watch() {
         inlineDiffExpr =
           typeof activeBuildInlineDiffExpression === 'function'
             ? activeBuildInlineDiffExpression(freshCfg)
+            : '';
+        periodicPickerExpr =
+          typeof freshCdp.buildPeriodicPickerExpression === 'function'
+            ? freshCdp.buildPeriodicPickerExpression(freshCfg, PERIODIC_PICKER_CACHE_OPTS)
             : '';
       } catch (err) {
         log(`[!] 读取文件失败: ${err.message}`);

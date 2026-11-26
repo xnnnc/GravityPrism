@@ -43,9 +43,24 @@ jobs:
           name: macos-dmg
           path: dist/*.dmg
 
+  build-linux:
+    if: github.event.repository.private == false
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Build portable Linux tarball
+        run: node scripts/build-linux.mjs --out dist/obsidian-prism-linux-portable.tar.gz
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linux-portable
+          path: dist/obsidian-prism-linux-portable.tar.gz
+
   publish-release:
     if: github.event.repository.private == false
-    needs: [build-windows, build-macos]
+    needs: [build-windows, build-macos, build-linux]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -81,6 +96,7 @@ jobs:
           ### Standalone Installers / 独立安装包
           - **Windows (`x64`)**: `gravity-prism-installer.exe`
           - **macOS (`Universal: Apple Silicon + Intel`)**: `Obsidian-Prism-macOS-universal.dmg`
+          - **Linux (`Portable Archive`)**: `obsidian-prism-linux-portable.tar.gz`
           EOF
             printf '\n**Full Changelog**: [CHANGELOG.md](https://github.com/%s/blob/%s/CHANGELOG.md) · [Commits (%s)](https://github.com/%s/commits/%s)\n' \
               "${REPO_SLUG}" "${TAG_NAME}" "${TAG_NAME}" "${REPO_SLUG}" "${TAG_NAME}"
@@ -89,7 +105,7 @@ jobs:
         run: |
           (
             cd artifacts
-            sha256sum -- windows-installer/* macos-dmg/* | sed -E 's|^([0-9a-fA-F]{64}  ).*/|\1|' > SHA256SUMS.txt
+            sha256sum -- windows-installer/* macos-dmg/* linux-portable/* | sed -E 's|^([0-9a-fA-F]{64}  ).*/|\1|' > SHA256SUMS.txt
           )
           cat artifacts/SHA256SUMS.txt
       - name: Create or Update GitHub Release
@@ -109,6 +125,7 @@ jobs:
             gh release upload "${TAG_NAME}" \
               artifacts/windows-installer/* \
               artifacts/macos-dmg/* \
+              artifacts/linux-portable/* \
               artifacts/SHA256SUMS.txt \
               --clobber \
               --repo "${REPO_SLUG}"
@@ -124,6 +141,7 @@ jobs:
               --target "${COMMIT_SHA}" \
               artifacts/windows-installer/* \
               artifacts/macos-dmg/* \
+              artifacts/linux-portable/* \
               artifacts/SHA256SUMS.txt \
               --title "GravityPrism ${TAG_NAME}" \
               --notes-file release-notes.md \

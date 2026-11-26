@@ -6,8 +6,11 @@ const path = require('path');
 const {
   PID_FILE,
   REMOVE_EXPRESSION,
+  SWARM_I18N_REMOVE_EXPRESSION,
+  redactSensitiveUrl,
   readPort,
   listPages,
+  listSwarmTargets,
   CdpSession,
   readPidFromLockFile,
   isExpectedDaemonProcess,
@@ -27,6 +30,7 @@ const PURGE_EXACT_FILES = [
   'obsidian-prism-sidebar.json',
   'obsidian-prism-sidebar.json.lock',
   'obsidian-prism-wallpaper.json',
+  'obsidian-prism-suggester.json',
 ];
 
 function parseCliArgs(argv = process.argv.slice(2)) {
@@ -139,6 +143,31 @@ function resolveSafeTelemetryDir(hostConfigDir, geminiRoot, envTelemetryDir) {
   return defaultDir;
 }
 
+function resolveSafeAddonsDir(hostConfigDir, geminiRoot, envAddonsDir) {
+  const rawOverride = typeof envAddonsDir === 'string' ? envAddonsDir.trim() : '';
+  if (rawOverride) {
+    const candidate = path.resolve(rawOverride);
+    if (hasRedlineSegment(candidate)) return null;
+    const allowedRoots = [
+      geminiRoot,
+      path.join(os.homedir(), '.gemini'),
+      os.tmpdir(),
+    ].filter(Boolean);
+    const matchedRoot = allowedRoots.find(
+      (root) => isWithinOrEqualDir(candidate, root) && normalizeCmpPath(candidate) !== normalizeCmpPath(root)
+    );
+    if (!matchedRoot) return null;
+    const segs = candidate.split(/[\\/]+/).filter(Boolean);
+    const owned = segs.some((s) => s.toLowerCase() === 'addons' || s.toLowerCase() === 'obsidian-prism');
+    if (!owned || hasSymlinkInChain(candidate, matchedRoot)) return null;
+    return candidate;
+  }
+  if (!geminiRoot) return null;
+  const defaultDir = path.join(geminiRoot, 'antigravity', 'sidecar_data', 'obsidian-prism', 'addons');
+  if (hasRedlineSegment(defaultDir) || hasSymlinkInChain(defaultDir, geminiRoot)) return null;
+  return defaultDir;
+}
+
 function purgeUserPluginData(opts = {}) {
   // 绝对红线：严禁触碰 conversations_archive、Antigravity-Spark、prism-knowledge-space
   const purgedPaths = [];
@@ -178,6 +207,18 @@ function purgeUserPluginData(opts = {}) {
       if (!telStat.isSymbolicLink() && telStat.isDirectory()) {
         fs.rmSync(telemetryDir, { recursive: true, force: true });
         purgedPaths.push(telemetryDir);
+      }
+    } catch {}
+  }
+
+  const envAddons = opts.addonsDir !== undefined ? opts.addonsDir : process.env.AG_PRISM_ADDONS_DIR;
+  const addonsDir = resolveSafeAddonsDir(hostConfigDir, geminiRoot, envAddons);
+  if (addonsDir && fs.existsSync(addonsDir)) {
+    try {
+      const addonsStat = fs.lstatSync(addonsDir);
+      if (!addonsStat.isSymbolicLink() && addonsStat.isDirectory()) {
+        fs.rmSync(addonsDir, { recursive: true, force: true });
+        purgedPaths.push(addonsDir);
       }
     } catch {}
   }
@@ -317,9 +358,28 @@ async function main(argv = process.argv.slice(2), opts = {}) {
         const session = await CdpSession.connect(page.webSocketDebuggerUrl);
         try {
           const res = await session.evaluate(REMOVE_EXPRESSION);
-          console.log(`[✓] 已恢复原生界面: ${page.title || page.url} (清理节点 ${res?.removed ?? 0})`);
+          const safeTitle = redactSensitiveUrl(page.title || page.url || '');
+          console.log(`[✓] 已恢复原生界面: ${safeTitle} (清理节点 ${res?.removed ?? 0})`);
         } finally {
           session.close();
+        }
+      }
+    }
+    let swarmTargets = [];
+    try {
+      swarmTargets = await listSwarmTargets(port);
+    } catch {}
+    if (Array.isArray(swarmTargets) && swarmTargets.length > 0) {
+      for (const target of swarmTargets) {
+        let session = null;
+        try {
+          session = await CdpSession.connect(target.webSocketDebuggerUrl, 2000);
+          await session.evaluate(SWARM_I18N_REMOVE_EXPRESSION);
+          const safeTitle = redactSensitiveUrl(target.title || target.url || 'Swarm');
+          console.log(`[✓] 已恢复原生 Swarm 面板: ${safeTitle}`);
+        } catch {
+        } finally {
+          if (session) session.close();
         }
       }
     }
@@ -344,6 +404,7 @@ module.exports = {
   DAEMON_STOP_GRACEFUL_TIMEOUT_MS,
   DAEMON_STOP_SIGKILL_WAIT_MS,
   parseCliArgs,
+  resolveSafeAddonsDir,
   purgeUserPluginData,
   terminatePidAndWait,
   stopPidFile,

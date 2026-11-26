@@ -11,9 +11,9 @@ Koyu Grafit tema · Alt barda canlı `5h` / `7d` kota ve kompakt `c %` gösterge
 [**Türkçe**](./README.md) · [**English**](./README.en.md) · [**简体中文**](./README.zh-CN.md) · [**Değişiklik Günlüğü (CHANGELOG)**](./CHANGELOG.md)
 
 <p>
-  <img src="https://img.shields.io/badge/GravityPrism-v1.1.0-2563eb?style=flat-square" alt="GravityPrism v1.1.0" />
-  <img src="https://img.shields.io/badge/Base-Obsidian%20Prism%20v1.0.7-0f172a?style=flat-square" alt="Base Version v1.0.7" />
-  <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS-1e293b?style=flat-square" alt="Platform" />
+  <img src="https://img.shields.io/badge/GravityPrism-v1.2.0-2563eb?style=flat-square" alt="GravityPrism v1.2.0" />
+  <img src="https://img.shields.io/badge/Base-Obsidian%20Prism%20v1.0.8--beta.3-0f172a?style=flat-square" alt="Base Version v1.0.8-beta.3" />
+  <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-1e293b?style=flat-square" alt="Platform" />
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-GPL--3.0-2563eb?style=flat-square" alt="License: GPL-3.0" /></a>
   <a href="./NOTICE"><img src="https://img.shields.io/badge/Attribution-Required%20(NOTICE)-8b5cf6?style=flat-square" alt="Attribution Required" /></a>
 </p>
@@ -30,13 +30,14 @@ Koyu Grafit tema · Alt barda canlı `5h` / `7d` kota ve kompakt `c %` gösterge
 
 > **Bağımsızlık Bildirimi**
 >
+> **Obsidian Prism is an independent open-source project and is not affiliated with or endorsed by Google LLC.**
 > **GravityPrism** ([`RMvdesi/obsidian-prism`](https://github.com/RMvdesi/obsidian-prism) temel alınarak özelleştirilmiştir) bağımsız bir açık kaynak projedir; Google LLC ile herhangi bir resmi bağı, sponsorluğu veya onayı yoktur.
 
 ---
 
 ## GravityPrism Özelleştirmeleri
 
-Bu depo, [`RMvdesi/obsidian-prism`](https://github.com/RMvdesi/obsidian-prism) `v1.0.7` sürümü üzerine aşağıdaki özelleştirmeleri ekler:
+Bu depo, [`RMvdesi/obsidian-prism`](https://github.com/RMvdesi/obsidian-prism) `v1.0.8-beta.3` tabanı üzerine aşağıdaki özelleştirmeleri ekler:
 
 1. **Varsayılan İngilizce Arayüz ([`config.example.json`](./config.example.json)):**
    - Varsayılan eklenti dili `en`, zorunlu Çince arayüz çevirisi (`hostLocalization`) ise `off` olarak ayarlandı.
@@ -57,7 +58,7 @@ Bu depo, [`RMvdesi/obsidian-prism`](https://github.com/RMvdesi/obsidian-prism) `
 5. **Tüm Adımlarda Çalışan Sohbet İçi (Inline) Diff ([`vendor/inline-diff/inline-diff-client.js`](./vendor/inline-diff/inline-diff-client.js)):**
    - Yalnızca Git deposu içindeki dosyalarla sınırlı kalmak yerine, adım etiketlerindeki `diffContext` (`cascadeId`, `stepIndex`) üzerinden Antigravity'nin dahili `getCodeActionDiff` servisiyle Git dışı ve `.gemini` dahil tüm adımların satır içi diff önizlemesi açılır.
    - Eğer bir adımın diff verisi gerçekten yoksa hata kutusu göstermek yerine otomatik olarak Antigravity'nin kendi **Sidebar** diff/dosya görünümüne devreder.
-6. **7 Seçilebilir Animasyonlu Effort Slider + Canlı Ayar Önizlemesi ([`vendor/effort-slider/`](./vendor/effort-slider/upstream-client.js), [`settings-panel.js`](./settings-panel.js)):**
+6. **7 Seçilebilir Animasyonlu Effort Slider + Canlı Ayar Önizlemesi ([`vendor/effort-slider/upstream-client.js`](./vendor/effort-slider/upstream-client.js), [`settings-panel.js`](./settings-panel.js)):**
    - **Settings → Appearance → Obsidian Prism → Modules → Effort Slider Style** altında klasik kaydırıcıya ek olarak **7 animasyonlu HTML5 Canvas stili** canlı önizlemeyle seçilebilir: `Classic`, `Prism Beam`, `Ferrofluid`, `Gravity Well`, `Oscilloscope`, `Plasma Arc`, `Supernova` ve `Firefly Swarm`.
 7. **Google 4 Renkli Gemini Spark & İkiz Sohbet Kartı ([`animated-icons.js`](./animated-icons.js), [`style.css`](./style.css), [`host-workbench-enhancer.js`](./host-workbench-enhancer.js)):**
    - Composer'daki 4 renkli Gemini ikonuna `view-box` kırpmalı ipeksi SMIL renk akışı ve cam yansıması parıltısı eklendi; menü sonrası takılan tooltip düzeltildi.
@@ -105,12 +106,14 @@ git fetch upstream
 
 ---
 
-## Temel Obsidian Prism Özellikleri
+## Temel Obsidian Prism (`v1.0.8-beta.3`) Özellikleri
 
-- **4 Hazır Tema:** Koyu (*Obsidian / Koyu Grafit*, *Warm*) ve açık (*Crystal*, *Alabaster*) temalar.
+- **4 Hazır Tema & Koyu Aura Presetleri:** Koyu (*Obsidian / Koyu Grafit*, *Warm*) ve açık (*Crystal*, *Alabaster*) temalar ile `darkAura` / `darkAuraStyle` ayarları.
+- **8 Dil Desteği:** `zh-CN`, `zh-TW`, `en`, `ja`, `ko`, `es`, `fr`, `de` tam arayüz desteği.
 - **512K Bağlam (Context) Tüpü:** WebGL2 sıvı efektli bağlam göstergesi, katman kırılımı ve kota tahmini.
-- **Akıl Yürütme (Effort) Kaydırıcısı:** Model menüsünde seviye kaydırıcısı ve Orchestrator kristal barı.
-- **Omni Görüntüleyici & Çalışma Alanı:** Büyük video/PDF/CSV/SVG akışlı önizleme, uzun kod bloklarını katlama, konuşma taslağı (outline) ve sağ tık `/btw` menüsü.
+- **Akıl Yürütme (Effort) Kaydırıcısı & 3D Periyodik Tablo Seçici:** Model menüsünde seviye kaydırıcısı, Orchestrator kristal barı ve uzun basımla açılan 3D WebGL2 periyodik tablo model seçici.
+- **Omni Görüntüleyici, Split View & Çalışma Alanı:** Çoklu bölme (Split View) uyumu, büyük video/PDF/CSV/SVG akışlı önizleme, uzun kod bloklarını katlama, konuşma taslağı (outline) ve sağ tık `/btw` menüsü.
+- **Antivirüs Dostu Kurulum & Bellek Koruması:** Kaspersky/WMI/PowerShell engellerinden arındırılmış hızlı Windows kurulumu, `language_server` bellek koruması ve yerel arşiv çalışma tezgâhı.
 
 ---
 
@@ -121,3 +124,15 @@ git fetch upstream
 - Bu proje **[GNU General Public License v3.0 (`GPL-3.0-only`)](./LICENSE)** lisansı altındadır.
 - Kaynak atıf ve üçüncü parti bildirimleri [`NOTICE`](./NOTICE) ve [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md) dosyalarında korunmaktadır.
 - Diğer dillerdeki özgün belgeler: [English](./README.en.md) · [简体中文](./README.zh-CN.md).
+
+### Üçüncü Parti Açık Kaynak Atıfları (Upstream Credits)
+
+1. [0DNANCY/agy-claude-style](https://github.com/0DNANCY/agy-claude-style) (`MIT`)
+2. [ATtacK030130/antigrative-dashboard](https://github.com/ATtacK030130/antigrative-dashboard) (`MIT`)
+3. [LLYSH-HANNARI/antigravity-Codex-Claude-effort-slider](https://github.com/LLYSH-HANNARI/antigravity-Codex-Claude-effort-slider) (`MIT`)
+4. [yiheng8023/antigravity-chinese](https://github.com/yiheng8023/antigravity-chinese) (`MIT`)
+5. [Nwflower/dsh-claude-style](https://github.com/Nwflower/dsh-claude-style)
+6. [Microqian2th/dsh-codex-effort-slider](https://github.com/Microqian2th/dsh-codex-effort-slider)
+7. [mobius/dsh-performance-slider](https://github.com/mobius/dsh-performance-slider)
+8. [claudenoshujin/claude-web](https://github.com/claudenoshujin/claude-web)
+9. [wp3171216237/dsh-TUI](https://github.com/wp3171216237/dsh-TUI) (`MIT`)

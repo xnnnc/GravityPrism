@@ -14,7 +14,12 @@ async function stampInfo(file, directory = false) {
   if (s.isSymbolicLink() || !(directory ? s.isDirectory() : s.isFile())) return null;
   const token = [s.size, s.mtimeNs, s.ctimeNs, s.ino].map(String).join(':');
   const mtimeMs = Number(s.mtimeNs) / 1e6;
-  return { token, mtimeMs: Number.isFinite(mtimeMs) && mtimeMs > 0 ? mtimeMs : 0 };
+  const size = Number(s.size);
+  return {
+   token,
+   mtimeMs: Number.isFinite(mtimeMs) && mtimeMs > 0 ? mtimeMs : 0,
+   size: Number.isFinite(size) && size >= 0 ? size : 0,
+  };
  } catch (e) {
   if (e.code === 'ENOENT' || e.code === 'ENOTDIR') return null;
   throw e;
@@ -56,20 +61,21 @@ export async function discoverLocalConversations({host,home=homedir(),limit=2000
    const [id,parts]=entries[idx];
    const readSignatureWithMeta=async()=>{
     const values=[];
-    let dbMtimeMs=0,fallbackMtimeMs=0;
+    let dbMtimeMs=0,dbSize=0,fallbackMtimeMs=0;
     for(const {file,directory}of parts){
      const info=await stampInfo(file,directory);
      if(info===null)return null;
      values.push([directory?'brain':'db',info.token]);
      if(!directory){
       if(info.mtimeMs>dbMtimeMs)dbMtimeMs=info.mtimeMs;
+      if(info.size>dbSize)dbSize=info.size;
       const walInfo=await stampInfo(file+'-wal');
       values.push(['wal',walInfo?walInfo.token:null]);
      }else if(info.mtimeMs>fallbackMtimeMs){
       fallbackMtimeMs=info.mtimeMs;
      }
     }
-    return {signature:digest(JSON.stringify(values)),mtimeMs:dbMtimeMs>0?dbMtimeMs:fallbackMtimeMs,dbMtimeMs};
+    return {signature:digest(JSON.stringify(values)),mtimeMs:dbMtimeMs>0?dbMtimeMs:fallbackMtimeMs,dbMtimeMs,dbSize};
    };
    const readSignature=async()=>{
     const meta=await readSignatureWithMeta();
@@ -77,7 +83,7 @@ export async function discoverLocalConversations({host,home=homedir(),limit=2000
    };
    try{
     const meta=await readSignatureWithMeta();
-    if(meta)results[idx]={id,signature:meta.signature,mtimeMs:meta.mtimeMs,dbMtimeMs:meta.dbMtimeMs,readSignature};
+    if(meta)results[idx]={id,signature:meta.signature,mtimeMs:meta.mtimeMs,dbMtimeMs:meta.dbMtimeMs,dbSize:meta.dbSize,readSignature};
    }catch{errors++;}
   }
  };

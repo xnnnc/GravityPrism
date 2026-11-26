@@ -176,7 +176,7 @@ namespace AgyClaudeStyle
             string manifestPath = Path.Combine(baseDir, "manifest.json");
             Dictionary<string, object> raw = MiniJson.ParseObject(File.ReadAllText(manifestPath, Encoding.UTF8));
             PluginManifest m = new PluginManifest();
-            m.Version = GetString(raw, "version", "1.0.7");
+            m.Version = GetString(raw, "version", "1.0.8-beta.3");
             m.StyleId = GetString(raw, "styleId", "ag-prism-css");
             m.SettingBinding = GetString(raw, "settingBinding", "__agPrismSetting");
             m.RemoveExpression = GetString(raw, "removeExpression", "");
@@ -870,6 +870,25 @@ namespace AgyClaudeStyle
             {
                 res["contextMenu"] = ToBoolOnOff(res["contextMenu"]);
             }
+            if (res.ContainsKey("convRipple"))
+            {
+                object cr = res["convRipple"];
+                if (cr is bool)
+                {
+                    res["convRipple"] = (bool)cr ? "medium" : "off";
+                }
+                else
+                {
+                    string crs = cr as string;
+                    if (crs != null)
+                    {
+                        string lowCr = crs.Trim().ToLowerInvariant();
+                        if (lowCr == "on" || lowCr == "true") res["convRipple"] = "medium";
+                        else if (lowCr == "off" || lowCr == "false") res["convRipple"] = "off";
+                        else if (lowCr == "subtle" || lowCr == "medium" || lowCr == "full") res["convRipple"] = lowCr;
+                    }
+                }
+            }
             if (res.ContainsKey("codeLigatures"))
             {
                 object cl = res["codeLigatures"];
@@ -1397,7 +1416,7 @@ namespace AgyClaudeStyle
                         ClearReadOnlyAndHiddenAttributes(cfgPath);
                         try
                         {
-                            File.Replace(tmpPath, cfgPath, null, true);
+                            AtomicReplaceFile(tmpPath, cfgPath);
                         }
                         catch (Exception replaceEx)
                         {
@@ -1576,6 +1595,31 @@ namespace AgyClaudeStyle
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern bool CloseHandle(IntPtr hObject);
 
+        private const uint MOVEFILE_REPLACE_EXISTING = 0x00000001;
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern bool MoveFileExW(string lpExistingFileName, string lpNewFileName, uint dwFlags);
+
+        public static void AtomicReplaceFile(string sourceTempPath, string destPath)
+        {
+            if (string.IsNullOrEmpty(sourceTempPath) || string.IsNullOrEmpty(destPath))
+            {
+                throw new ArgumentException("Source or destination path is empty");
+            }
+            if (!MoveFileExW(sourceTempPath, destPath, MOVEFILE_REPLACE_EXISTING))
+            {
+                int err = Marshal.GetLastWin32Error();
+                if (err == ERROR_ACCESS_DENIED)
+                {
+                    throw new UnauthorizedAccessException("Access denied replacing file (Win32 error 5): " + destPath);
+                }
+                throw new IOException(
+                    "Failed to atomically replace file (Win32 error " + err + "): " + destPath,
+                    Marshal.GetHRForLastWin32Error()
+                );
+            }
+        }
+
         [DllImport("ntdll.dll")]
         private static extern int NtQueryInformationProcess(
             IntPtr processHandle,
@@ -1636,9 +1680,16 @@ namespace AgyClaudeStyle
                 if (status == 0)
                 {
                     UNICODE_STRING us = (UNICODE_STRING)Marshal.PtrToStructure(buf, typeof(UNICODE_STRING));
-                    if (us.Buffer != IntPtr.Zero && us.Length > 0)
+                    if (us.Buffer != IntPtr.Zero && us.Length > 0 && (us.Length % 2) == 0)
                     {
-                        return Marshal.PtrToStringUni(us.Buffer, us.Length / 2) ?? "";
+                        long bufStart = buf.ToInt64();
+                        long bufEnd = bufStart + allocSize;
+                        long strStart = us.Buffer.ToInt64();
+                        long strEnd = strStart + us.Length;
+                        if (strStart >= bufStart && strEnd <= bufEnd)
+                        {
+                            return Marshal.PtrToStringUni(us.Buffer, us.Length / 2) ?? "";
+                        }
                     }
                 }
                 else if (status == STATUS_ACCESS_DENIED || status == STATUS_PRIVILEGE_NOT_HELD)
@@ -1659,48 +1710,20 @@ namespace AgyClaudeStyle
             return "";
         }
 
-        private static string QueryProcessCommandLineViaPowerShell(int pid)
-        {
-            try
-            {
-                ProcessStartInfo psi = new ProcessStartInfo();
-                psi.FileName = "powershell.exe";
-                psi.Arguments = "-NoProfile -NonInteractive -Command \"(Get-CimInstance Win32_Process -Filter 'ProcessId = " + pid + "').CommandLine\"";
-                psi.CreateNoWindow = true;
-                psi.UseShellExecute = false;
-                psi.RedirectStandardOutput = true;
-                psi.RedirectStandardError = true;
-                using (Process p = Process.Start(psi))
-                {
-                    if (p == null) return "";
-                    Task<string> readTask = p.StandardOutput.ReadToEndAsync();
-                    if (!p.WaitForExit(7500))
-                    {
-                        try { p.Kill(); } catch { }
-                        return "";
-                    }
-                    string output = readTask.GetAwaiter().GetResult() ?? "";
-                    return output.Trim();
-                }
-            }
-            catch
-            {
-                return "";
-            }
-        }
-
         private static string QueryWindowsProcessCommandLine(int pid)
         {
             bool accessDenied;
             return QueryWindowsProcessCommandLine(pid, true, out accessDenied);
         }
 
-        public static string QueryWindowsProcessCommandLine(int pid, bool allowPowerShellFallback, out bool accessDenied)
+        public static string QueryWindowsProcessCommandLine(int pid, bool allowRetry, out bool accessDenied)
         {
             accessDenied = false;
             if (pid <= 0) return "";
-            // 快速 PEB 通道：遇 ACCESS_DENIED 或进程已退出立即返回（杜绝 PowerShell 风暴）；仅对瞬态空串重试一次
-            for (int attempt = 0; attempt < 2; attempt++)
+            // 纯 Win32 PEB 通道：遇 ACCESS_DENIED 或进程已退出立即返回；仅对瞬态空串执行有界极短退避重试（零外部进程、零 WMI）
+            int maxAttempts = 2;
+            int retryDelayMs = allowRetry ? 50 : 25;
+            for (int attempt = 0; attempt < maxAttempts; attempt++)
             {
                 bool denied;
                 bool notFound;
@@ -1717,59 +1740,35 @@ namespace AgyClaudeStyle
                 }
                 if (attempt == 0)
                 {
-                    try { Thread.Sleep(60); } catch { }
-                }
-            }
-
-            // 无窗子进程（MainWindowHandle == IntPtr.Zero）严禁回退 PowerShell，避免 16x PowerShell 风暴
-            if (!allowPowerShellFallback)
-            {
-                return "";
-            }
-
-            // CIM / PowerShell 回退，瞬态空串时做二次短退避重试
-            for (int psAttempt = 0; psAttempt < 2; psAttempt++)
-            {
-                string psCmd = QueryProcessCommandLineViaPowerShell(pid);
-                if (!string.IsNullOrEmpty(psCmd)) return psCmd;
-                if (psAttempt == 0)
-                {
-                    try
+                    if (allowRetry)
                     {
-                        using (Process checkProc = Process.GetProcessById(pid))
+                        try
                         {
-                            if (checkProc.HasExited) return "";
+                            using (Process checkProc = Process.GetProcessById(pid))
+                            {
+                                if (checkProc.HasExited) return "";
+                            }
                         }
-                        Thread.Sleep(120);
-                        bool retryDenied;
-                        bool retryNotFound;
-                        string retryFast = (QueryProcessCommandLineFast(pid, out retryDenied, out retryNotFound) ?? "").Trim();
-                        if (!string.IsNullOrEmpty(retryFast)) return retryFast;
-                        if (retryDenied)
+                        catch (Win32Exception wex)
                         {
-                            accessDenied = true;
+                            if (wex.NativeErrorCode == ERROR_ACCESS_DENIED)
+                            {
+                                accessDenied = true;
+                            }
                             return "";
                         }
-                        if (retryNotFound) return "";
-                    }
-                    catch (Win32Exception wex)
-                    {
-                        if (wex.NativeErrorCode == ERROR_ACCESS_DENIED)
+                        catch
                         {
-                            accessDenied = true;
+                            return "";
                         }
-                        return "";
                     }
-                    catch
-                    {
-                        return "";
-                    }
+                    try { Thread.Sleep(retryDelayMs); } catch { }
                 }
             }
             return "";
         }
 
-        private static bool MatchesNativeLockFilePid(int pid, string pluginDir)
+        private static bool MatchesNativeLockFilePid(int pid, string pluginDir, bool requireToken = false)
         {
             if (pid <= 0) return false;
             List<string> dirs = new List<string>();
@@ -1781,18 +1780,23 @@ namespace AgyClaudeStyle
                 try
                 {
                     string pidPath = Path.Combine(dirs[d], ".daemon.pid");
-                    if (!File.Exists(pidPath)) continue;
+                    if (!File.Exists(pidPath) || IsUnsafeReparsePoint(pidPath)) continue;
                     string raw = File.ReadAllText(pidPath, Encoding.UTF8).Trim();
                     if (string.IsNullOrEmpty(raw)) continue;
                     int plainPid;
-                    if (int.TryParse(raw, out plainPid) && plainPid == pid) return true;
+                    if (!requireToken && int.TryParse(raw, out plainPid) && plainPid == pid) return true;
                     if (raw.StartsWith("{", StringComparison.Ordinal))
                     {
                         Dictionary<string, object> obj = MiniJson.ParseObject(raw);
                         object pidVal;
                         if (obj != null && obj.TryGetValue("pid", out pidVal) && pidVal != null && Convert.ToInt32(pidVal) == pid)
                         {
-                            return true;
+                            if (!requireToken) return true;
+                            object tokVal;
+                            if (obj.TryGetValue("token", out tokVal) && tokVal is string && !string.IsNullOrEmpty(((string)tokVal).Trim()))
+                            {
+                                return true;
+                            }
                         }
                     }
                 }
@@ -1820,7 +1824,25 @@ namespace AgyClaudeStyle
                     string cmd = (QueryWindowsProcessCommandLine(proc.Id, false, out accessDenied) ?? "")
                         .Replace('\\', '/')
                         .ToLowerInvariant();
-                    if (string.IsNullOrEmpty(cmd)) return false;
+                    if (string.IsNullOrEmpty(cmd))
+                    {
+                        if (!accessDenied && MatchesNativeLockFilePid(proc.Id, pluginDir, true))
+                        {
+                            try
+                            {
+                                if (proc.MainWindowHandle == IntPtr.Zero)
+                                {
+                                    string modFile = Path.GetFileName(proc.MainModule.FileName ?? "");
+                                    if (string.Equals(modFile, "node.exe", StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        return true;
+                                    }
+                                }
+                            }
+                            catch { }
+                        }
+                        return false;
+                    }
                     if (cmd.Contains("obsidian-prism") ||
                         cmd.Contains("antigravity-prism") ||
                         cmd.Contains("agy-claude-style") ||
@@ -1843,8 +1865,30 @@ namespace AgyClaudeStyle
                 if (name.Contains("antigravity") || name.Contains("electron") || name == "agy")
                 {
                     bool matchedLock = MatchesNativeLockFilePid(proc.Id, pluginDir);
-                    string cmd = QueryWindowsProcessCommandLine(proc.Id).Replace('\\', '/').ToLowerInvariant();
-                    if (string.IsNullOrEmpty(cmd) || cmd.Contains("--type=")) return false;
+                    bool accessDenied;
+                    string cmd = (QueryWindowsProcessCommandLine(proc.Id, true, out accessDenied) ?? "").Replace('\\', '/').ToLowerInvariant();
+                    if (string.IsNullOrEmpty(cmd))
+                    {
+                        if (!accessDenied && MatchesNativeLockFilePid(proc.Id, pluginDir, true))
+                        {
+                            try
+                            {
+                                if (proc.MainWindowHandle == IntPtr.Zero)
+                                {
+                                    string modFile = Path.GetFileName(proc.MainModule.FileName ?? "");
+                                    if (string.Equals(modFile, "Antigravity.exe", StringComparison.OrdinalIgnoreCase) ||
+                                        string.Equals(modFile, "electron.exe", StringComparison.OrdinalIgnoreCase) ||
+                                        string.Equals(modFile, "agy.exe", StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        return true;
+                                    }
+                                }
+                            }
+                            catch { }
+                        }
+                        return false;
+                    }
+                    if (cmd.Contains("--type=")) return false;
                     bool hasPrismOwner = cmd.Contains("obsidian-prism") || cmd.Contains("antigravity-prism") || cmd.Contains("agy-claude-style");
                     if (!hasPrismOwner && !string.IsNullOrEmpty(pluginDir))
                     {
@@ -2222,7 +2266,6 @@ namespace AgyClaudeStyle
 
         private static string TryFindAntigravityExeFromShortcuts()
         {
-            object shell = null;
             try
             {
                 List<string> dirs = GetShortcutCandidateDirs(null, null);
@@ -2233,18 +2276,13 @@ namespace AgyClaudeStyle
                     CollectLnkFilesBounded(dirs[i], 0, lnks);
                 }
                 if (lnks.Count == 0) return null;
-                Type shellType = Type.GetTypeFromProgID("WScript.Shell");
-                if (shellType == null) return null;
-                shell = Activator.CreateInstance(shellType);
                 for (int i = 0; i < lnks.Count; i++)
                 {
-                    object lnk = null;
                     try
                     {
-                        lnk = shellType.InvokeMember("CreateShortcut", BindingFlags.InvokeMethod, null, shell, new object[] { lnks[i] });
-                        if (lnk == null) continue;
-                        string target = (lnk.GetType().InvokeMember("TargetPath", BindingFlags.GetProperty, null, lnk, null) as string) ?? "";
-                        string trimmed = target.Trim().Trim('"');
+                        WindowsLnkInfo info = WindowsLnkCodec.ReadFile(lnks[i]);
+                        if (info == null) continue;
+                        string trimmed = (info.TargetPath ?? "").Trim().Trim('"');
                         if (!string.IsNullOrEmpty(trimmed) &&
                             string.Equals(Path.GetFileName(trimmed), "Antigravity.exe", StringComparison.OrdinalIgnoreCase) &&
                             File.Exists(trimmed))
@@ -2253,23 +2291,9 @@ namespace AgyClaudeStyle
                         }
                     }
                     catch { }
-                    finally
-                    {
-                        if (lnk != null && Marshal.IsComObject(lnk))
-                        {
-                            try { Marshal.FinalReleaseComObject(lnk); } catch { }
-                        }
-                    }
                 }
             }
             catch { }
-            finally
-            {
-                if (shell != null && Marshal.IsComObject(shell))
-                {
-                    try { Marshal.FinalReleaseComObject(shell); } catch { }
-                }
-            }
             return null;
         }
 
@@ -2732,41 +2756,25 @@ namespace AgyClaudeStyle
             List<string> recorded = ReadPatchedShortcutsRecord(stateDir);
             List<string> localSkipped = skippedPaths ?? new List<string>();
             int patchedCount = 0;
-            object shell = null;
             try
             {
-                Type shellType = Type.GetTypeFromProgID("WScript.Shell");
-                if (shellType == null)
-                {
-                    if (log != null)
-                    {
-                        log(InstallerI18n.Tr(
-                            "[!] 系统未注册 WScript.Shell COM 组件，已跳过快捷方式参数修补（不影响核心插件部署）",
-                            "[!] WScript.Shell COM component is not registered; skipped shortcut patching (core plugin deployment unaffected)"
-                        ));
-                    }
-                    return 0;
-                }
-                shell = Activator.CreateInstance(shellType);
                 for (int i = 0; i < lnkFiles.Count; i++)
                 {
                     string lnkPath = lnkFiles[i];
                     if (IsUnsafeReparsePoint(lnkPath)) continue;
-                    object lnk = null;
                     bool matchedAntigravity = false;
                     try
                     {
-                        lnk = shellType.InvokeMember("CreateShortcut", BindingFlags.InvokeMethod, null, shell, new object[] { lnkPath });
-                        if (lnk == null) continue;
-                        Type lnkType = lnk.GetType();
-                        string target = (lnkType.InvokeMember("TargetPath", BindingFlags.GetProperty, null, lnk, null) as string) ?? "";
+                        WindowsLnkInfo info = WindowsLnkCodec.ReadFile(lnkPath);
+                        if (info == null) continue;
+                        string target = info.TargetPath ?? "";
                         string fileName = Path.GetFileName(target.Trim().Trim('"'));
                         if (!string.Equals(fileName, "Antigravity.exe", StringComparison.OrdinalIgnoreCase))
                         {
                             continue;
                         }
                         matchedAntigravity = true;
-                        string origArgs = (lnkType.InvokeMember("Arguments", BindingFlags.GetProperty, null, lnk, null) as string) ?? "";
+                        string origArgs = info.Arguments ?? "";
                         if (origArgs.IndexOf("--remote-debugging-port", StringComparison.OrdinalIgnoreCase) >= 0)
                         {
                             alreadySetCount++;
@@ -2775,10 +2783,9 @@ namespace AgyClaudeStyle
                         string nextArgs = string.IsNullOrEmpty(origArgs.Trim())
                             ? CdpOptInFlag
                             : (origArgs.TrimEnd() + " " + CdpOptInFlag);
-                        // 仅对非符号链接的普通 .lnk 文件尝试清理只读属性后再保存；若位于系统受保护目录无权限则记录告警继续
+                        // 仅对非符号链接的普通 .lnk 文件尝试清理只读属性后再以纯 MS-SHLLINK 写回；若位于受保护目录无权限或被锁定则记录告警继续
                         ClearReadOnlyAndHiddenAttributes(lnkPath);
-                        lnkType.InvokeMember("Arguments", BindingFlags.SetProperty, null, lnk, new object[] { nextArgs });
-                        lnkType.InvokeMember("Save", BindingFlags.InvokeMethod, null, lnk, null);
+                        WindowsLnkCodec.WriteArguments(lnkPath, nextArgs);
                         recorded.Add(lnkPath);
                         patchedCount++;
                     }
@@ -2789,13 +2796,6 @@ namespace AgyClaudeStyle
                         {
                             skippedCount++;
                             localSkipped.Add(lnkPath);
-                        }
-                    }
-                    finally
-                    {
-                        if (lnk != null && Marshal.IsComObject(lnk))
-                        {
-                            try { Marshal.FinalReleaseComObject(lnk); } catch { }
                         }
                     }
                 }
@@ -2809,13 +2809,6 @@ namespace AgyClaudeStyle
                         "[!] Shortcut scan warning (non-fatal, skipped): {0}",
                         ex.Message
                     ));
-                }
-            }
-            finally
-            {
-                if (shell != null && Marshal.IsComObject(shell))
-                {
-                    try { Marshal.FinalReleaseComObject(shell); } catch { }
                 }
             }
 
@@ -2885,60 +2878,37 @@ namespace AgyClaudeStyle
             }
 
             int restoredCount = 0;
-            object shell = null;
             if (candidateLnks.Count > 0)
             {
                 try
                 {
-                    Type shellType = Type.GetTypeFromProgID("WScript.Shell");
-                    if (shellType != null)
+                    foreach (string lnkPath in candidateLnks)
                     {
-                        shell = Activator.CreateInstance(shellType);
-                        foreach (string lnkPath in candidateLnks)
+                        if (string.IsNullOrEmpty(lnkPath) || !File.Exists(lnkPath) || IsUnsafeReparsePoint(lnkPath)) continue;
+                        try
                         {
-                            if (string.IsNullOrEmpty(lnkPath) || !File.Exists(lnkPath)) continue;
-                            object lnk = null;
-                            try
+                            WindowsLnkInfo info = WindowsLnkCodec.ReadFile(lnkPath);
+                            if (info == null) continue;
+                            string target = info.TargetPath ?? "";
+                            string fileName = Path.GetFileName(target.Trim().Trim('"'));
+                            if (!string.Equals(fileName, "Antigravity.exe", StringComparison.OrdinalIgnoreCase))
                             {
-                                lnk = shellType.InvokeMember("CreateShortcut", BindingFlags.InvokeMethod, null, shell, new object[] { lnkPath });
-                                if (lnk == null) continue;
-                                Type lnkType = lnk.GetType();
-                                string target = (lnkType.InvokeMember("TargetPath", BindingFlags.GetProperty, null, lnk, null) as string) ?? "";
-                                string fileName = Path.GetFileName(target.Trim().Trim('"'));
-                                if (!string.Equals(fileName, "Antigravity.exe", StringComparison.OrdinalIgnoreCase))
-                                {
-                                    continue;
-                                }
-                                string origArgs = (lnkType.InvokeMember("Arguments", BindingFlags.GetProperty, null, lnk, null) as string) ?? "";
-                                if (origArgs.IndexOf(CdpOptInFlag, StringComparison.OrdinalIgnoreCase) < 0)
-                                {
-                                    continue;
-                                }
-                                string restoredArgs = StripOptInFlagFromArguments(origArgs);
-                                ClearReadOnlyAndHiddenAttributes(lnkPath);
-                                lnkType.InvokeMember("Arguments", BindingFlags.SetProperty, null, lnk, new object[] { restoredArgs });
-                                lnkType.InvokeMember("Save", BindingFlags.InvokeMethod, null, lnk, null);
-                                restoredCount++;
+                                continue;
                             }
-                            catch { }
-                            finally
+                            string origArgs = info.Arguments ?? "";
+                            if (origArgs.IndexOf(CdpOptInFlag, StringComparison.OrdinalIgnoreCase) < 0)
                             {
-                                if (lnk != null && Marshal.IsComObject(lnk))
-                                {
-                                    try { Marshal.FinalReleaseComObject(lnk); } catch { }
-                                }
+                                continue;
                             }
+                            string restoredArgs = StripOptInFlagFromArguments(origArgs);
+                            ClearReadOnlyAndHiddenAttributes(lnkPath);
+                            WindowsLnkCodec.WriteArguments(lnkPath, restoredArgs);
+                            restoredCount++;
                         }
+                        catch { }
                     }
                 }
                 catch { }
-                finally
-                {
-                    if (shell != null && Marshal.IsComObject(shell))
-                    {
-                        try { Marshal.FinalReleaseComObject(shell); } catch { }
-                    }
-                }
             }
 
             for (int s = 0; s < stateCandidates.Length; s++)
@@ -3083,6 +3053,22 @@ namespace AgyClaudeStyle
                     finally
                     {
                         try { p.Dispose(); } catch { }
+                    }
+                }
+                if (candidate == null && windowFallbackCandidate != null)
+                {
+                    int? livePort = ReadPort(null);
+                    if (livePort.HasValue && livePort.Value > 0)
+                    {
+                        try
+                        {
+                            ActivePortProbeResult probe = ProbeActivePortAsync(livePort.Value, false, 0).GetAwaiter().GetResult();
+                            if (probe != null && !probe.IsStalePort)
+                            {
+                                return null;
+                            }
+                        }
+                        catch { }
                     }
                 }
                 return candidate ?? windowFallbackCandidate;
@@ -3412,7 +3398,7 @@ namespace AgyClaudeStyle
             sb.Append("    } else {\n");
             sb.Append("      try { window.__agPrismSidebar?.sync?.(effectiveCfg, window.__agPrismSidebarMeta || null); } catch {}\n");
             sb.Append("    }\n");
-            sb.Append("    try { if (effectiveCfg.hostLocalization === 'off' || (effectiveCfg.hostLocalization !== 'on' && effectiveCfg.language && effectiveCfg.language !== 'zh-CN' && effectiveCfg.language !== 'auto')) window.__agPrismHostI18n?.destroy?.(); } catch {}\n");
+            sb.Append("    try { const hiMode = effectiveCfg.hostLocalization; const hiLang = effectiveCfg.language; const navL = String((typeof navigator !== 'undefined' && ((navigator.languages && navigator.languages[0]) || navigator.language)) || '').trim(); if (hiMode === 'off') window.__agPrismHostI18n?.setMode?.('off'); else if (hiMode === 'on') window.__agPrismHostI18n?.setMode?.('on'); else if ((hiLang && hiLang !== 'zh-CN' && hiLang !== 'auto') || ((!hiLang || hiLang === 'auto') && navL && !/^zh(?:$|-(?:cn|hans|sg)(?:-|$))/i.test(navL))) window.__agPrismHostI18n?.destroy?.(); else window.__agPrismHostI18n?.setMode?.('auto'); } catch {}\n");
             sb.Append("    if (document.documentElement) {\n");
             sb.Append("      if (effectiveCfg && effectiveCfg.thoughtTranslate && effectiveCfg.thoughtTranslate !== 'off') document.documentElement.setAttribute('data-ag-prism-thought-view', effectiveCfg.thoughtView === 'bilingual' ? 'bilingual' : 'immersive');\n");
             sb.Append("      else document.documentElement.removeAttribute('data-ag-prism-thought-view');\n");
@@ -4073,6 +4059,760 @@ namespace AgyClaudeStyle
             object v;
             if (d.TryGetValue(k, out v) && v is string) return (string)v;
             return null;
+        }
+    }
+
+    public class WindowsLnkInfo
+    {
+        public uint Flags;
+        public bool IsUnicode;
+        public bool HasArguments;
+        public string TargetPath;
+        public string Arguments;
+        public string Name;
+        public string RelativePath;
+        public string WorkingDir;
+        public string IconLocation;
+        public int StringDataStart;
+        public int ArgsStart;
+        public int ArgsEnd;
+        public int ExtraDataStart;
+    }
+
+    /// <summary>
+    /// 纯 C# MS-SHLLINK (.lnk) 二进制读写器与原生标准 ShellLink COM 创建器。
+    /// 读写已有快捷方式全程零 COM、零子进程，逐字节无损保留 Header/IDList/LinkInfo/ExtraData；
+    /// 新建快捷方式使用 Explorer 标准 CLSID_ShellLink (IShellLinkW + IPersistFile)。
+    /// </summary>
+    public static class WindowsLnkCodec
+    {
+        public const int HeaderSize = 0x4C;
+        public const int MaxFileBytes = 1024 * 1024;
+
+        private const uint FlagHasIdList = 0x00000001u;
+        private const uint FlagHasLinkInfo = 0x00000002u;
+        private const uint FlagHasName = 0x00000004u;
+        private const uint FlagHasRelativePath = 0x00000008u;
+        private const uint FlagHasWorkingDir = 0x00000010u;
+        private const uint FlagHasArguments = 0x00000020u;
+        private const uint FlagHasIconLocation = 0x00000040u;
+        private const uint FlagIsUnicode = 0x00000080u;
+
+        private static readonly byte[] LnkClsid = new byte[]
+        {
+            0x01, 0x14, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46
+        };
+
+        [ComImport]
+        [Guid("00021401-0000-0000-C000-000000000046")]
+        private class ShellLinkCoClass
+        {
+        }
+
+        [ComImport]
+        [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        [Guid("000214F9-0000-0000-C000-000000000046")]
+        private interface IShellLinkW
+        {
+            void GetPath([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszFile, int cchMaxPath, IntPtr pfd, uint fFlags);
+            void GetIDList(out IntPtr ppidl);
+            void SetIDList(IntPtr pidl);
+            void GetDescription([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszName, int cchMaxName);
+            void SetDescription([MarshalAs(UnmanagedType.LPWStr)] string pszName);
+            void GetWorkingDirectory([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszDir, int cchMaxPath);
+            void SetWorkingDirectory([MarshalAs(UnmanagedType.LPWStr)] string pszDir);
+            void GetArguments([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszArgs, int cchMaxPath);
+            void SetArguments([MarshalAs(UnmanagedType.LPWStr)] string pszArgs);
+            void GetHotkey(out short pwHotkey);
+            void SetHotkey(short wHotkey);
+            void GetShowCmd(out int piShowCmd);
+            void SetShowCmd(int iShowCmd);
+            void GetIconLocation([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszIconPath, int cchIconPath, out int piIcon);
+            void SetIconLocation([MarshalAs(UnmanagedType.LPWStr)] string pszIconPath, int iIcon);
+            void SetRelativePath([MarshalAs(UnmanagedType.LPWStr)] string pszPathRel, uint dwReserved);
+            void Resolve(IntPtr hwnd, uint fFlags);
+            void SetPath([MarshalAs(UnmanagedType.LPWStr)] string pszFile);
+        }
+
+        private static ushort ReadUInt16LE(byte[] buf, int offset)
+        {
+            return (ushort)(buf[offset] | (buf[offset + 1] << 8));
+        }
+
+        private static uint ReadUInt32LE(byte[] buf, int offset)
+        {
+            return (uint)(buf[offset]
+                | (buf[offset + 1] << 8)
+                | (buf[offset + 2] << 16)
+                | (buf[offset + 3] << 24));
+        }
+
+        private static void WriteUInt16LE(byte[] buf, int offset, ushort val)
+        {
+            buf[offset] = (byte)(val & 0xFF);
+            buf[offset + 1] = (byte)((val >> 8) & 0xFF);
+        }
+
+        private static void WriteUInt32LE(byte[] buf, int offset, uint val)
+        {
+            buf[offset] = (byte)(val & 0xFF);
+            buf[offset + 1] = (byte)((val >> 8) & 0xFF);
+            buf[offset + 2] = (byte)((val >> 16) & 0xFF);
+            buf[offset + 3] = (byte)((val >> 24) & 0xFF);
+        }
+
+        private static bool HasNonAscii(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return false;
+            for (int i = 0; i < text.Length; i++)
+            {
+                if (text[i] > 0x7F) return true;
+            }
+            return false;
+        }
+
+        private static string ReadNullTerminatedAnsi(byte[] buf, int start, int limit)
+        {
+            if (start < 0 || start >= limit || limit > buf.Length) return "";
+            int end = start;
+            while (end < limit && buf[end] != 0) end++;
+            if (end <= start) return "";
+            return Encoding.Default.GetString(buf, start, end - start);
+        }
+
+        private static string ReadNullTerminatedUtf16LE(byte[] buf, int start, int limit)
+        {
+            if (start < 0 || start + 1 >= limit || limit > buf.Length) return "";
+            int end = start;
+            while (end + 1 < limit && (buf[end] != 0 || buf[end + 1] != 0)) end += 2;
+            if (end <= start) return "";
+            return Encoding.Unicode.GetString(buf, start, end - start);
+        }
+
+        private static string JoinPathParts(string basePart, string suffix)
+        {
+            string b = basePart ?? "";
+            string s = suffix ?? "";
+            if (b.Length == 0) return s;
+            if (s.Length == 0) return b;
+            if (b.EndsWith("\\", StringComparison.Ordinal) ||
+                b.EndsWith("/", StringComparison.Ordinal) ||
+                s.StartsWith("\\", StringComparison.Ordinal) ||
+                s.StartsWith("/", StringComparison.Ordinal))
+            {
+                return b + s;
+            }
+            return b + "\\" + s;
+        }
+
+        private static string ResolveRelativeTarget(string lnkPath, string relativePath)
+        {
+            if (string.IsNullOrEmpty(relativePath)) return "";
+            if (string.IsNullOrEmpty(lnkPath)) return relativePath;
+            try
+            {
+                string dir = Path.GetDirectoryName(lnkPath);
+                if (!string.IsNullOrEmpty(dir))
+                {
+                    return Path.GetFullPath(Path.Combine(dir, relativePath));
+                }
+            }
+            catch { }
+            return relativePath;
+        }
+
+        private static string ExtractTargetFromLinkInfo(byte[] buf, int baseOff, int liLen)
+        {
+            if (liLen < 0x1C || baseOff + liLen > buf.Length) return "";
+            uint liSizeU = ReadUInt32LE(buf, baseOff);
+            uint liHeaderSizeU = ReadUInt32LE(buf, baseOff + 4);
+            uint liFlags = ReadUInt32LE(buf, baseOff + 8);
+            if (liSizeU < 0x1Cu || liHeaderSizeU < 0x1Cu || liSizeU > (uint)liLen) return "";
+            int liSize = (int)liSizeU;
+            int liHeaderSize = (int)liHeaderSizeU;
+            int liEnd = baseOff + liSize;
+
+            bool hasUniOffsets = liHeaderSize >= 0x24 && liSize >= 0x24;
+            uint commonSuffixOffU = ReadUInt32LE(buf, baseOff + 24);
+            string commonSuffix = "";
+            if (hasUniOffsets)
+            {
+                uint commonSuffixUniOffU = ReadUInt32LE(buf, baseOff + 32);
+                if (commonSuffixUniOffU >= (uint)liHeaderSize && commonSuffixUniOffU < (uint)liSize)
+                {
+                    commonSuffix = ReadNullTerminatedUtf16LE(buf, baseOff + (int)commonSuffixUniOffU, liEnd);
+                }
+            }
+            if (commonSuffix.Length == 0 && commonSuffixOffU >= (uint)liHeaderSize && commonSuffixOffU < (uint)liSize)
+            {
+                commonSuffix = ReadNullTerminatedAnsi(buf, baseOff + (int)commonSuffixOffU, liEnd);
+            }
+
+            if ((liFlags & 0x01u) != 0)
+            {
+                string localBase = "";
+                if (hasUniOffsets)
+                {
+                    uint localBaseUniOffU = ReadUInt32LE(buf, baseOff + 28);
+                    if (localBaseUniOffU >= (uint)liHeaderSize && localBaseUniOffU < (uint)liSize)
+                    {
+                        localBase = ReadNullTerminatedUtf16LE(buf, baseOff + (int)localBaseUniOffU, liEnd);
+                    }
+                }
+                if (localBase.Length == 0)
+                {
+                    uint localBaseOffU = ReadUInt32LE(buf, baseOff + 16);
+                    if (localBaseOffU >= (uint)liHeaderSize && localBaseOffU < (uint)liSize)
+                    {
+                        localBase = ReadNullTerminatedAnsi(buf, baseOff + (int)localBaseOffU, liEnd);
+                    }
+                }
+                if (localBase.Length > 0) return JoinPathParts(localBase, commonSuffix);
+            }
+
+            if ((liFlags & 0x02u) != 0)
+            {
+                uint cnrlOffU = ReadUInt32LE(buf, baseOff + 20);
+                if (cnrlOffU >= (uint)liHeaderSize && cnrlOffU + 20u <= (uint)liSize)
+                {
+                    int cnrlAbs = baseOff + (int)cnrlOffU;
+                    uint cnrlSizeU = ReadUInt32LE(buf, cnrlAbs);
+                    if (cnrlSizeU >= 20u && cnrlOffU + cnrlSizeU <= (uint)liSize)
+                    {
+                        int cnrlEnd = cnrlAbs + (int)cnrlSizeU;
+                        uint netNameOffU = ReadUInt32LE(buf, cnrlAbs + 8);
+                        string netName = "";
+                        if (netNameOffU > 0x14u && cnrlAbs + 24 <= cnrlEnd)
+                        {
+                            uint netNameUniOffU = ReadUInt32LE(buf, cnrlAbs + 20);
+                            if (netNameUniOffU > 0u && netNameUniOffU < cnrlSizeU)
+                            {
+                                netName = ReadNullTerminatedUtf16LE(buf, cnrlAbs + (int)netNameUniOffU, cnrlEnd);
+                            }
+                        }
+                        if (netName.Length == 0 && netNameOffU >= 20u && netNameOffU < cnrlSizeU)
+                        {
+                            netName = ReadNullTerminatedAnsi(buf, cnrlAbs + (int)netNameOffU, cnrlEnd);
+                        }
+                        if (netName.Length > 0) return JoinPathParts(netName, commonSuffix);
+                    }
+                }
+            }
+            return "";
+        }
+
+        private static string ExtractTargetFromExtraData(byte[] buf, int startOff, int endOff)
+        {
+            if (startOff < 0 || endOff > buf.Length || endOff - startOff < 4) return "";
+            int off = startOff;
+            while (off + 4 <= endOff)
+            {
+                uint blockSizeU = ReadUInt32LE(buf, off);
+                if (blockSizeU < 4u) break;
+                if (blockSizeU > (uint)(endOff - off)) break;
+                int blockSize = (int)blockSizeU;
+                if (blockSize >= 8)
+                {
+                    uint sig = ReadUInt32LE(buf, off + 4);
+                    // EnvironmentVariableDataBlock (MS-SHLLINK 2.5.4)
+                    if (sig == 0xA0000001u && blockSize >= 0x0314)
+                    {
+                        string uni = ReadNullTerminatedUtf16LE(buf, off + 268, off + 268 + 520);
+                        if (uni.Length > 0) return Environment.ExpandEnvironmentVariables(uni);
+                        string ansi = ReadNullTerminatedAnsi(buf, off + 8, off + 8 + 260);
+                        if (ansi.Length > 0) return Environment.ExpandEnvironmentVariables(ansi);
+                    }
+                }
+                off += blockSize;
+            }
+            return "";
+        }
+
+        private static bool IsDriveSpec(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return false;
+            if (s.Length != 2 && s.Length != 3) return false;
+            char c0 = s[0];
+            bool isAlpha = (c0 >= 'A' && c0 <= 'Z') || (c0 >= 'a' && c0 <= 'z');
+            if (!isAlpha || s[1] != ':') return false;
+            return s.Length == 2 || s[2] == '\\';
+        }
+
+        private static string ExtractTargetFromIdList(byte[] buf, int startOff, int len)
+        {
+            if (len < 4 || startOff < 0 || startOff + len > buf.Length) return "";
+            int endOff = startOff + len;
+            int off = startOff;
+            string drive = "";
+            List<string> segments = new List<string>();
+            while (off + 2 <= endOff)
+            {
+                ushort itemSize = ReadUInt16LE(buf, off);
+                if (itemSize == 0) break;
+                if (itemSize < 3 || off + itemSize > endOff) break;
+                int itemEnd = off + itemSize;
+                byte type = buf[off + 2];
+                if (type >= 0x20 && type <= 0x2F && itemSize >= 6)
+                {
+                    string drv = ReadNullTerminatedAnsi(buf, off + 3, itemEnd).Trim();
+                    if (IsDriveSpec(drv))
+                    {
+                        drive = drv.EndsWith("\\", StringComparison.Ordinal) ? drv : (drv + "\\");
+                    }
+                }
+                else if (type >= 0x30 && type <= 0x3F && itemSize >= 16)
+                {
+                    string name = "";
+                    if (itemSize >= 20)
+                    {
+                        ushort extOff = ReadUInt16LE(buf, itemEnd - 2);
+                        if (extOff >= 14 && extOff + 10 <= itemSize - 2)
+                        {
+                            int extAbs = off + extOff;
+                            ushort extSize = ReadUInt16LE(buf, extAbs);
+                            ushort extVer = ReadUInt16LE(buf, extAbs + 2);
+                            uint extSig = ReadUInt32LE(buf, extAbs + 4);
+                            if (extSig == 0xBEEF0004u && extSize >= 16 && extOff + extSize <= itemSize)
+                            {
+                                int nameOff = 0;
+                                if (extVer == 3) nameOff = extAbs + 20;
+                                else if (extVer == 7) nameOff = extAbs + 38;
+                                else if (extVer == 8) nameOff = extAbs + 42;
+                                else if (extVer >= 9) nameOff = extAbs + 46;
+                                if (nameOff > 0 && nameOff + 2 <= extAbs + extSize)
+                                {
+                                    name = ReadNullTerminatedUtf16LE(buf, nameOff, extAbs + extSize);
+                                }
+                            }
+                        }
+                    }
+                    if (name.Length == 0)
+                    {
+                        if ((type & 0x04) != 0)
+                        {
+                            name = ReadNullTerminatedUtf16LE(buf, off + 14, itemEnd);
+                        }
+                        else
+                        {
+                            name = ReadNullTerminatedAnsi(buf, off + 14, itemEnd);
+                        }
+                    }
+                    if (name.Length > 0) segments.Add(name);
+                }
+                off += itemSize;
+            }
+            if (drive.Length == 0 || segments.Count == 0) return "";
+            return drive + string.Join("\\", segments.ToArray());
+        }
+
+        public static WindowsLnkInfo ParseBuffer(byte[] buf, string lnkPath = "")
+        {
+            if (buf == null || buf.Length < HeaderSize)
+            {
+                throw new InvalidDataException("Invalid .lnk file: shorter than 76-byte ShellLinkHeader");
+            }
+            if (buf.Length > MaxFileBytes)
+            {
+                throw new InvalidDataException("Invalid .lnk file: exceeds max allowed size");
+            }
+            uint headerSize = ReadUInt32LE(buf, 0);
+            if (headerSize != (uint)HeaderSize)
+            {
+                throw new InvalidDataException("Invalid .lnk HeaderSize: 0x" + headerSize.ToString("X"));
+            }
+            for (int i = 0; i < LnkClsid.Length; i++)
+            {
+                if (buf[4 + i] != LnkClsid[i])
+                {
+                    throw new InvalidDataException("Invalid .lnk LinkCLSID");
+                }
+            }
+
+            uint flags = ReadUInt32LE(buf, 20);
+            bool isUnicode = (flags & FlagIsUnicode) != 0;
+            int offset = HeaderSize;
+
+            int idListPayloadStart = -1;
+            int idListPayloadLen = 0;
+            if ((flags & FlagHasIdList) != 0)
+            {
+                if (offset + 2 > buf.Length) throw new InvalidDataException("Truncated LinkTargetIDList size");
+                ushort idListSize = ReadUInt16LE(buf, offset);
+                if (offset + 2 + idListSize > buf.Length) throw new InvalidDataException("Truncated LinkTargetIDList payload");
+                idListPayloadStart = offset + 2;
+                idListPayloadLen = idListSize;
+                offset += 2 + idListSize;
+            }
+
+            int linkInfoStart = -1;
+            int linkInfoLen = 0;
+            if ((flags & FlagHasLinkInfo) != 0)
+            {
+                if (offset + 4 > buf.Length) throw new InvalidDataException("Truncated LinkInfo size");
+                uint liSizeU = ReadUInt32LE(buf, offset);
+                if (liSizeU < 0x1Cu || liSizeU > (uint)(buf.Length - offset))
+                {
+                    throw new InvalidDataException("Invalid or truncated LinkInfo");
+                }
+                linkInfoStart = offset;
+                linkInfoLen = (int)liSizeU;
+                offset += linkInfoLen;
+            }
+
+            int stringDataStart = offset;
+            uint[] stringBits = new uint[]
+            {
+                FlagHasName,
+                FlagHasRelativePath,
+                FlagHasWorkingDir,
+                FlagHasArguments,
+                FlagHasIconLocation
+            };
+            string[] stringValues = new string[5];
+            int argsStart = -1;
+            int argsEnd = -1;
+
+            for (int s = 0; s < stringBits.Length; s++)
+            {
+                bool present = (flags & stringBits[s]) != 0;
+                if (s == 3 && !present)
+                {
+                    argsStart = offset;
+                    argsEnd = offset;
+                }
+                if (!present) continue;
+                if (offset + 2 > buf.Length) throw new InvalidDataException("Truncated StringData count");
+                ushort countChars = ReadUInt16LE(buf, offset);
+                int byteLen = isUnicode ? (countChars * 2) : countChars;
+                if (offset + 2 + byteLen > buf.Length) throw new InvalidDataException("Truncated StringData payload");
+                int fieldStart = offset;
+                string rawStr = isUnicode
+                    ? Encoding.Unicode.GetString(buf, offset + 2, byteLen)
+                    : Encoding.Default.GetString(buf, offset + 2, byteLen);
+                offset += 2 + byteLen;
+                stringValues[s] = rawStr;
+                if (s == 3)
+                {
+                    argsStart = fieldStart;
+                    argsEnd = offset;
+                }
+            }
+
+            int extraDataStart = offset;
+
+            string targetPath = linkInfoStart >= 0 ? ExtractTargetFromLinkInfo(buf, linkInfoStart, linkInfoLen) : "";
+            if (targetPath.Length == 0)
+            {
+                targetPath = ExtractTargetFromExtraData(buf, extraDataStart, buf.Length);
+            }
+            if (targetPath.Length == 0 && !string.IsNullOrEmpty(stringValues[1]))
+            {
+                targetPath = ResolveRelativeTarget(lnkPath, stringValues[1]);
+            }
+            if (targetPath.Length == 0 && idListPayloadStart >= 0)
+            {
+                targetPath = ExtractTargetFromIdList(buf, idListPayloadStart, idListPayloadLen);
+            }
+            if (targetPath.Length > 0 && HasNonAscii(targetPath) && linkInfoStart >= 0 && linkInfoLen >= 8 && ReadUInt32LE(buf, linkInfoStart + 4) < 0x24u)
+            {
+                string unicodeFallback = ExtractTargetFromExtraData(buf, extraDataStart, buf.Length);
+                if (unicodeFallback.Length == 0 && isUnicode && !string.IsNullOrEmpty(stringValues[1]) && !string.IsNullOrEmpty(lnkPath))
+                {
+                    unicodeFallback = ResolveRelativeTarget(lnkPath, stringValues[1]);
+                }
+                if (unicodeFallback.Length == 0 && idListPayloadStart >= 0)
+                {
+                    unicodeFallback = ExtractTargetFromIdList(buf, idListPayloadStart, idListPayloadLen);
+                }
+                if (unicodeFallback.Length > 0) targetPath = unicodeFallback;
+            }
+
+            WindowsLnkInfo info = new WindowsLnkInfo();
+            info.Flags = flags;
+            info.IsUnicode = isUnicode;
+            info.HasArguments = (flags & FlagHasArguments) != 0;
+            info.TargetPath = targetPath ?? "";
+            info.Name = stringValues[0];
+            info.RelativePath = stringValues[1];
+            info.WorkingDir = stringValues[2];
+            info.Arguments = stringValues[3] ?? "";
+            info.IconLocation = stringValues[4];
+            info.StringDataStart = stringDataStart;
+            info.ArgsStart = argsStart;
+            info.ArgsEnd = argsEnd;
+            info.ExtraDataStart = extraDataStart;
+            return info;
+        }
+
+        private static byte[] EncodeStringDataField(string text, bool isUnicode)
+        {
+            string s = text ?? "";
+            if (isUnicode)
+            {
+                if (s.Length > 0xFFFF)
+                {
+                    throw new InvalidOperationException("StringData field exceeds 65535 UTF-16 code units");
+                }
+                byte[] payload = Encoding.Unicode.GetBytes(s);
+                byte[] res = new byte[2 + payload.Length];
+                WriteUInt16LE(res, 0, (ushort)s.Length);
+                Buffer.BlockCopy(payload, 0, res, 2, payload.Length);
+                return res;
+            }
+            byte[] ansiPayload = Encoding.ASCII.GetBytes(s);
+            if (ansiPayload.Length > 0xFFFF)
+            {
+                throw new InvalidOperationException("StringData field exceeds 65535 ANSI bytes");
+            }
+            byte[] ansiRes = new byte[2 + ansiPayload.Length];
+            WriteUInt16LE(ansiRes, 0, (ushort)ansiPayload.Length);
+            Buffer.BlockCopy(ansiPayload, 0, ansiRes, 2, ansiPayload.Length);
+            return ansiRes;
+        }
+
+        public static byte[] UpdateArguments(byte[] buf, string nextArguments)
+        {
+            WindowsLnkInfo parsed = ParseBuffer(buf);
+            string nextStr = nextArguments ?? "";
+            bool wantHasArgs = nextStr.Length > 0;
+            bool needUnicodeUpgrade = !parsed.IsUnicode && wantHasArgs && HasNonAscii(nextStr);
+
+            if (!needUnicodeUpgrade)
+            {
+                uint nextFlags = wantHasArgs
+                    ? (parsed.Flags | FlagHasArguments)
+                    : (parsed.Flags & ~FlagHasArguments);
+                byte[] argChunk = wantHasArgs ? EncodeStringDataField(nextStr, parsed.IsUnicode) : new byte[0];
+                int prefixLen = parsed.ArgsStart;
+                int suffixLen = buf.Length - parsed.ArgsEnd;
+                byte[] output = new byte[prefixLen + argChunk.Length + suffixLen];
+                Buffer.BlockCopy(buf, 0, output, 0, prefixLen);
+                WriteUInt32LE(output, 20, nextFlags);
+                if (argChunk.Length > 0)
+                {
+                    Buffer.BlockCopy(argChunk, 0, output, prefixLen, argChunk.Length);
+                }
+                if (suffixLen > 0)
+                {
+                    Buffer.BlockCopy(buf, parsed.ArgsEnd, output, prefixLen + argChunk.Length, suffixLen);
+                }
+                return output;
+            }
+
+            // ANSI .lnk 写入非 ASCII 参数时升格 IsUnicode 并无损转码已有 StringData，其余字节原样保留
+            uint upgradedFlags = parsed.Flags | FlagIsUnicode | FlagHasArguments;
+            List<byte[]> chunks = new List<byte[]>();
+            byte[] beforeStrings = new byte[parsed.StringDataStart];
+            Buffer.BlockCopy(buf, 0, beforeStrings, 0, parsed.StringDataStart);
+            WriteUInt32LE(beforeStrings, 20, upgradedFlags);
+            chunks.Add(beforeStrings);
+            if ((parsed.Flags & FlagHasName) != 0) chunks.Add(EncodeStringDataField(parsed.Name ?? "", true));
+            if ((parsed.Flags & FlagHasRelativePath) != 0) chunks.Add(EncodeStringDataField(parsed.RelativePath ?? "", true));
+            if ((parsed.Flags & FlagHasWorkingDir) != 0) chunks.Add(EncodeStringDataField(parsed.WorkingDir ?? "", true));
+            chunks.Add(EncodeStringDataField(nextStr, true));
+            if ((parsed.Flags & FlagHasIconLocation) != 0) chunks.Add(EncodeStringDataField(parsed.IconLocation ?? "", true));
+            int extraLen = buf.Length - parsed.ExtraDataStart;
+            if (extraLen > 0)
+            {
+                byte[] extra = new byte[extraLen];
+                Buffer.BlockCopy(buf, parsed.ExtraDataStart, extra, 0, extraLen);
+                chunks.Add(extra);
+            }
+
+            int totalLen = 0;
+            for (int i = 0; i < chunks.Count; i++) totalLen += chunks[i].Length;
+            byte[] merged = new byte[totalLen];
+            int cursor = 0;
+            for (int i = 0; i < chunks.Count; i++)
+            {
+                Buffer.BlockCopy(chunks[i], 0, merged, cursor, chunks[i].Length);
+                cursor += chunks[i].Length;
+            }
+            return merged;
+        }
+
+        private static byte[] ReadRawLnkBytesSafely(string lnkPath, out string resolvedPath)
+        {
+            if (string.IsNullOrEmpty(lnkPath)) throw new ArgumentException("Empty .lnk path");
+            resolvedPath = Path.GetFullPath(lnkPath);
+            string parentDir = Path.GetDirectoryName(resolvedPath);
+            if (string.IsNullOrEmpty(parentDir) || CdpHelper.IsUnsafeReparsePoint(parentDir))
+            {
+                throw new InvalidOperationException("Refusing unsafe reparse point parent directory");
+            }
+            if (CdpHelper.IsUnsafeReparsePoint(resolvedPath))
+            {
+                throw new InvalidOperationException("Refusing unsafe reparse point .lnk file");
+            }
+            FileInfo fi = new FileInfo(resolvedPath);
+            if (!fi.Exists) throw new FileNotFoundException("Shortcut file not found", resolvedPath);
+            if (fi.Length > MaxFileBytes)
+            {
+                throw new InvalidDataException("Refusing oversized .lnk file");
+            }
+            using (FileStream fs = new FileStream(resolvedPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+            {
+                if (fs.Length > MaxFileBytes)
+                {
+                    throw new InvalidDataException("Refusing oversized .lnk file");
+                }
+                int len = (int)fs.Length;
+                byte[] bytes = new byte[len];
+                int readTotal = 0;
+                while (readTotal < len)
+                {
+                    int n = fs.Read(bytes, readTotal, len - readTotal);
+                    if (n <= 0) break;
+                    readTotal += n;
+                }
+                if (readTotal != len)
+                {
+                    byte[] trimmed = new byte[readTotal];
+                    Buffer.BlockCopy(bytes, 0, trimmed, 0, readTotal);
+                    return trimmed;
+                }
+                return bytes;
+            }
+        }
+
+        public static WindowsLnkInfo ReadFile(string lnkPath)
+        {
+            string resolvedPath;
+            byte[] bytes = ReadRawLnkBytesSafely(lnkPath, out resolvedPath);
+            return ParseBuffer(bytes, resolvedPath);
+        }
+
+        private static bool BytesEqual(byte[] a, byte[] b)
+        {
+            if (a == null || b == null || a.Length != b.Length) return false;
+            for (int i = 0; i < a.Length; i++)
+            {
+                if (a[i] != b[i]) return false;
+            }
+            return true;
+        }
+
+        public static void WriteArguments(string lnkPath, string nextArguments)
+        {
+            string resolvedPath;
+            byte[] origBytes = ReadRawLnkBytesSafely(lnkPath, out resolvedPath);
+            byte[] updatedBytes = UpdateArguments(origBytes, nextArguments);
+            if (BytesEqual(origBytes, updatedBytes)) return;
+
+            string dir = Path.GetDirectoryName(resolvedPath);
+            string tmpPath = Path.Combine(
+                dir,
+                "." + Path.GetFileName(resolvedPath) + "." + Process.GetCurrentProcess().Id + "." + Guid.NewGuid().ToString("N") + ".tmp"
+            );
+            try
+            {
+                using (FileStream fs = new FileStream(tmpPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                {
+                    fs.Write(updatedBytes, 0, updatedBytes.Length);
+                    fs.Flush(true);
+                }
+                if (CdpHelper.IsUnsafeReparsePoint(resolvedPath))
+                {
+                    throw new InvalidOperationException("Refusing unsafe reparse point .lnk file");
+                }
+                CdpHelper.ClearReadOnlyAndHiddenAttributes(resolvedPath);
+                CdpHelper.AtomicReplaceFile(tmpPath, resolvedPath);
+            }
+            finally
+            {
+                try
+                {
+                    if (File.Exists(tmpPath)) File.Delete(tmpPath);
+                }
+                catch { }
+            }
+        }
+
+        private static void SaveNewShortcutOnCurrentThread(
+            string fullLnkPath,
+            string targetPath,
+            string arguments,
+            string workingDir,
+            string description
+        )
+        {
+            object comObj = null;
+            try
+            {
+                comObj = new ShellLinkCoClass();
+                IShellLinkW link = (IShellLinkW)comObj;
+                if (!string.IsNullOrEmpty(targetPath)) link.SetPath(targetPath);
+                if (!string.IsNullOrEmpty(arguments)) link.SetArguments(arguments);
+                if (!string.IsNullOrEmpty(workingDir)) link.SetWorkingDirectory(workingDir);
+                if (!string.IsNullOrEmpty(description)) link.SetDescription(description);
+                System.Runtime.InteropServices.ComTypes.IPersistFile persist =
+                    (System.Runtime.InteropServices.ComTypes.IPersistFile)comObj;
+                persist.Save(fullLnkPath, true);
+            }
+            finally
+            {
+                if (comObj != null && Marshal.IsComObject(comObj))
+                {
+                    try { Marshal.FinalReleaseComObject(comObj); } catch { }
+                }
+            }
+        }
+
+        public static void SaveNewShortcut(
+            string lnkPath,
+            string targetPath,
+            string arguments,
+            string workingDir,
+            string description
+        )
+        {
+            if (string.IsNullOrEmpty(lnkPath)) throw new ArgumentException("Empty shortcut path");
+            string fullLnkPath = Path.GetFullPath(lnkPath);
+            string parentDir = Path.GetDirectoryName(fullLnkPath);
+            if (string.IsNullOrEmpty(parentDir) || CdpHelper.IsUnsafeReparsePoint(parentDir))
+            {
+                throw new InvalidOperationException("Refusing unsafe reparse point parent directory");
+            }
+            if (CdpHelper.IsUnsafeReparsePoint(fullLnkPath))
+            {
+                throw new InvalidOperationException("Refusing unsafe reparse point shortcut target");
+            }
+            if (!Directory.Exists(parentDir))
+            {
+                Directory.CreateDirectory(parentDir);
+            }
+            if (File.Exists(fullLnkPath))
+            {
+                CdpHelper.ClearReadOnlyAndHiddenAttributes(fullLnkPath);
+            }
+
+            if (Thread.CurrentThread.GetApartmentState() == ApartmentState.STA)
+            {
+                SaveNewShortcutOnCurrentThread(fullLnkPath, targetPath, arguments, workingDir, description);
+                return;
+            }
+
+            Exception threadEx = null;
+            Thread staThread = new Thread(() =>
+            {
+                try
+                {
+                    SaveNewShortcutOnCurrentThread(fullLnkPath, targetPath, arguments, workingDir, description);
+                }
+                catch (Exception ex)
+                {
+                    threadEx = ex;
+                }
+            });
+            staThread.SetApartmentState(ApartmentState.STA);
+            staThread.IsBackground = true;
+            staThread.Start();
+            staThread.Join();
+            if (threadEx != null)
+            {
+                throw new InvalidOperationException("Failed to save Windows shortcut: " + threadEx.Message, threadEx);
+            }
         }
     }
 }

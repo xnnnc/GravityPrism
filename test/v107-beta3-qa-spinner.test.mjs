@@ -673,19 +673,27 @@ test('Red-Team P0 #1A: display:contents wrappers (0x0 rect & checkVisibility=fal
     const res = vm.runInNewContext(cdp.buildInjectExpression(cdp.DEFAULT_CONFIG), sandbox);
     assert.equal(res.status, 'ok');
 
-    // Queued card inside .contents is detected (lower clearance), while display:none .contents stays ignored
-    assert.equal(queuedOuter.getAttribute('data-ag-cs-queued'), '1');
+    // Normal visible queued card docks crab on its roof with zero gap (data-ag-cs-queued cleared),
+    // display:none .contents stays ignored, and takeoverWrap receives clearance cleanly
+    assert.equal(queuedOuter.getAttribute('data-ag-cs-queued'), null);
+    assert.equal(queuedCard.getAttribute('data-ag-cs-crab-anchor'), 'queued');
+    assert.equal(card.getAttribute('data-ag-cs-crab-anchor'), null);
     assert.equal(hiddenContents.hasAttribute('data-ag-cs-queued'), false);
+    assert.equal(hiddenContents.hasAttribute('data-ag-cs-crab-anchor'), false);
+    assert.equal(tkContents.hasAttribute('data-ag-cs-takeover'), false, 'display:contents wrapper must never receive margin-bottom clearance');
+    assert.equal(takeoverWrap.getAttribute('data-ag-cs-takeover'), '1');
     // Takeover card inside .contents is NOT misclassified as hidden -> html[data-ag-cs-takeover-open="1"] is set
     assert.equal(html.getAttribute('data-ag-cs-takeover-open'), '1');
 
-    // Removing queuedCard hands clearance cleanly to takeoverWrap (not the .contents intermediate node)
+    // Removing queuedCard hands crab anchor back to composer card while keeping takeoverWrap clearance
     const mainMo = observers.find((o) => Array.isArray(o.opts?.attributeFilter) && o.opts.attributeFilter.includes('hidden'));
     assert.ok(mainMo, 'Main MutationObserver must include hidden in attributeFilter');
     queuedCard.remove();
     mainMo.cb([{ type: 'childList', target: queuedContents, addedNodes: [], removedNodes: [queuedCard] }]);
     flushRaf();
     assert.equal(queuedOuter.hasAttribute('data-ag-cs-queued'), false);
+    assert.equal(queuedCard.hasAttribute('data-ag-cs-crab-anchor'), false);
+    assert.equal(card.getAttribute('data-ag-cs-crab-anchor'), 'composer');
     assert.equal(tkContents.hasAttribute('data-ag-cs-takeover'), false, 'display:contents wrapper must never receive margin-bottom clearance');
     assert.equal(takeoverWrap.getAttribute('data-ag-cs-takeover'), '1');
     assert.equal(html.getAttribute('data-ag-cs-takeover-open'), '1');
@@ -884,7 +892,7 @@ test('Red-Team P1 #3: syncCrabClearance performs zero layout reads after clearan
       if (tracking) events.push({ op: 'R', kind, el });
     },
     onWrite(kind, el, detail) {
-      if (tracking && (detail === 'data-ag-cs-queued' || detail === 'data-ag-cs-takeover' || detail === 'data-ag-cs-takeover-open' || detail === 'data-ag-cs-menu-open' || detail === 'margin-bottom')) {
+      if (tracking && (detail === 'data-ag-cs-queued' || detail === 'data-ag-cs-crab-anchor' || detail === 'data-ag-cs-takeover' || detail === 'data-ag-cs-takeover-open' || detail === 'data-ag-cs-menu-open' || detail === 'margin-bottom')) {
         events.push({ op: 'W', kind, el, detail });
       }
     },
@@ -924,13 +932,25 @@ test('Red-Team P1 #3: syncCrabClearance performs zero layout reads after clearan
     const mainMo = observers.find((o) => Array.isArray(o.opts?.attributeFilter) && o.opts.attributeFilter.includes('hidden'));
     assert.ok(mainMo);
 
-    // Toggle queuedNode off so syncComposers performs real clearance writes in a normal incremental MO frame
+    assert.equal(queuedNode.getAttribute('data-ag-cs-queued'), null);
+    assert.equal(queuedNode.getAttribute('data-ag-cs-crab-anchor'), 'queued');
+    assert.equal(takeoverWrap.getAttribute('data-ag-cs-takeover'), '1');
+
+    // Toggle queuedNode & takeoverCard off so syncComposers performs real docking/clearance DOM writes in a normal incremental MO frame
     queuedNode.classList.add('hidden');
+    takeoverCard.classList.add('hidden');
     events.length = 0;
     tracking = true;
-    mainMo.cb([{ type: 'attributes', target: queuedNode, attributeName: 'class' }]);
+    mainMo.cb([
+      { type: 'attributes', target: queuedNode, attributeName: 'class' },
+      { type: 'attributes', target: takeoverCard, attributeName: 'class' },
+    ]);
     flushRaf();
     tracking = false;
+
+    assert.equal(queuedNode.getAttribute('data-ag-cs-crab-anchor'), null);
+    assert.equal(card.getAttribute('data-ag-cs-crab-anchor'), 'composer');
+    assert.equal(takeoverWrap.hasAttribute('data-ag-cs-takeover'), false);
 
     const firstWriteIdx = events.findIndex((e) => e.op === 'W');
     assert.ok(firstWriteIdx >= 0, 'Expected clearance DOM writes during incremental sync');

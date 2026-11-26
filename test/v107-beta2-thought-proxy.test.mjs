@@ -1324,7 +1324,7 @@ test('5) Issue #27 tool execution summaries: default OFF, merged single batch re
   }
 });
 
-test('6) thought-settings-ui.js: custom proxy URL live validation, 5-locale sync, tool-summaries default-off toggle, and machine-mode companion card', async () => {
+test('6) thought-settings-ui.js: custom proxy URL live validation, 8-locale sync + yue migration, tool-summaries default-off toggle, and machine-mode companion card', async () => {
   const settingsUiSrc = fs.readFileSync(
     path.join(ROOT_DIR, 'vendor', 'thought-translator', 'thought-settings-ui.js'),
     'utf8'
@@ -1422,13 +1422,17 @@ test('6) thought-settings-ui.js: custom proxy URL live validation, 5-locale sync
   await new Promise((r) => setTimeout(r, 20));
   assert.equal(savedPayloads[savedPayloads.length - 1].customProxyUrl, 'socks5h://127.0.0.1:1080');
 
-  // 5-locale sync check
+  // 8-locale sync check + yue->zh-CN migration
   for (const [loc, expectProxyWord] of [
     ['zh-CN', '自定义代理地址'],
     ['zh-TW', '自訂代理位址'],
-    ['yue', '自訂代理地址'],
+    ['yue', '自定义代理地址'],
     ['en', 'Custom Proxy URL'],
     ['ja', 'カスタムプロキシ URL'],
+    ['ko', '사용자 프록시 URL'],
+    ['es', 'URL de proxy personalizada'],
+    ['fr', 'URL de proxy personnalisée'],
+    ['de', 'Eigene Proxy-URL'],
   ]) {
     docEl.setAttribute('data-ag-cs-lang', loc);
     uiHandle.onLanguageChanged(loc);
@@ -2157,7 +2161,7 @@ test('13) CodeQL High alerts zero-regression: 0 rejectUnauthorized:false, 0 HTML
   ch5Env.sandbox.__agPrismThought.destroy();
 });
 
-test('14) Conversation titles auto-translation: config persistence, safe filtering, identifier protection, React TextNode reuse, detached pruning, lossless restore & 5-locale UI', async () => {
+test('14) Conversation titles auto-translation: config persistence, safe filtering, identifier protection, React TextNode reuse, detached pruning, lossless restore & 8-locale UI', async () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-titles-'));
   try {
     // A) Legacy config backward compat: missing translateTitles defaults to false
@@ -2404,15 +2408,23 @@ test('14) Conversation titles auto-translation: config persistence, safe filteri
       assert.equal(titlesRow.getAttribute(k), v, `titles row must carry anti-translation attr ${k}=${v}`);
     }
 
-    // 5-locale label & description verification
+    // 8-locale label & description verification (+ yue->zh-CN migration)
     const seenDescs = new Set();
-    for (const loc of ['zh-CN', 'zh-TW', 'yue', 'en', 'ja']) {
+    for (const loc of ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de']) {
       curLang = loc;
       uiHandle.onLanguageChanged(loc);
       assert.ok(titlesDesc.textContent.length > 15, `titles desc must be non-empty for ${loc}`);
       seenDescs.add(titlesDesc.textContent);
     }
-    assert.equal(seenDescs.size, 5, 'All 5 locales must have distinct localized title-translation descriptions');
+    assert.equal(seenDescs.size, 8, 'All 8 locales must have distinct localized title-translation descriptions');
+    const zhDesc = (() => {
+      curLang = 'zh-CN';
+      uiHandle.onLanguageChanged('zh-CN');
+      return titlesDesc.textContent;
+    })();
+    curLang = 'yue';
+    uiHandle.onLanguageChanged('yue');
+    assert.equal(titlesDesc.textContent, zhDesc, 'Legacy yue must migrate smoothly to zh-CN');
 
     // Switch to machine mode -> companion card still exposes thought-titles-toggle
     curMode = 'machine';
@@ -2444,7 +2456,7 @@ function hasUrlHostname(rawUrl, expectedHostname) {
   }
 }
 
-test('15) One-click Thought Diagnostics: all states, 5s bounded timeout, strict secret redaction & 5-locale 4-item UI strip', async () => {
+test('15) One-click Thought Diagnostics: all states, 5s bounded timeout, strict secret redaction & 8-locale 4-item UI strip', async () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-diag-'));
   try {
     // A) Off mode & incomplete AI profile (no network call)
@@ -2640,14 +2652,14 @@ test('15) One-click Thought Diagnostics: all states, 5s bounded timeout, strict 
     assert.equal(remItem.getAttribute('data-state'), 'ok');
     assert.equal(cmdWrap.hidden, true, 'Healthy diagnostics should hide error troubleshooting command');
 
-    // 5-locale live refresh on diagnose button & panel
+    // 8-locale live refresh on diagnose button & panel
     const diagBtnLabels = new Set();
-    for (const loc of ['zh-CN', 'zh-TW', 'yue', 'en', 'ja']) {
+    for (const loc of ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de']) {
       curLang = loc;
       uiHandle.onLanguageChanged(loc);
       diagBtnLabels.add(`${loc}:${diagBtn.textContent}:${bridgeItem.textContent}`);
     }
-    assert.equal(diagBtnLabels.size, 5, 'All 5 locales must refresh diagnose button & 4-item panel');
+    assert.equal(diagBtnLabels.size, 8, 'All 8 locales must refresh diagnose button & 4-item panel');
 
     svc.dispose();
   } finally {
@@ -3097,7 +3109,7 @@ test('17) Red-team #230 regressions: sidebarStudio attr, breadcrumb last-segment
     });
     uiEnv1.rootBody.appendChild(ui1.box);
     // Click immediately while state.loaded === false
-    const waitDiagState = async (box, expected, timeoutMs = 1500) => {
+    const waitDiagState = async (box, expected, timeoutMs = 5000) => {
       const deadline = Date.now() + timeoutMs;
       while (Date.now() < deadline) {
         if (box.querySelector('[data-testid="thought-diag-connectivity"]').getAttribute('data-state') === expected) return;

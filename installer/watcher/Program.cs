@@ -185,7 +185,7 @@ namespace AgyClaudeStyle.Watcher
                 "  --dir <目录>          指定守护资源目录\r\n" +
                 "  --plugin-dir <目录>   指定原生插件目录\r\n" +
                 "  --cdp-port <端口>     指定 CDP 调试端口\r\n" +
-                "  --no-native-daemon    禁用自动拉起原生 Sidecar Daemon\r\n" +
+                "  --no-native-daemon    禁用自动拉起本地守护服务\r\n" +
                 "  --no-relaunch-prompt  禁用裸启重开提示弹窗\r\n" +
                 "  --lang <zh|en>        指定界面/日志语言（覆盖 AG_PRISM_LANG 与系统语言）\r\n" +
                 "  --out <文件>          将结果输出到指定文件\r\n" +
@@ -199,7 +199,7 @@ namespace AgyClaudeStyle.Watcher
                 "  --dir <dir>           Specify watcher directory\r\n" +
                 "  --plugin-dir <dir>    Specify native plugin directory\r\n" +
                 "  --cdp-port <port>     Specify CDP debug port\r\n" +
-                "  --no-native-daemon    Do not auto-start native Sidecar Daemon\r\n" +
+                "  --no-native-daemon    Do not auto-start local background daemon\r\n" +
                 "  --no-relaunch-prompt  Disable bare-launch relaunch prompt\r\n" +
                 "  --lang <zh|en>        Set UI/log language (overrides AG_PRISM_LANG and OS locale)\r\n" +
                 "  --out <file>          Write result to the specified file\r\n" +
@@ -1138,6 +1138,8 @@ namespace AgyClaudeStyle.Watcher
                 int? consecutiveProbePort = null;
                 HashSet<string> promptedHostKeysInProcess = new HashSet<string>(StringComparer.Ordinal);
                 bool yieldingToDaemon = false;
+                bool hadLiveHost = false;
+                int exitArchiveInFlight = 0;
                 long lastDaemonBootTick = 0L;
                 long lastShortcutCheckTick = 0L;
                 string defaultWatcherDir = GetDefaultWatcherInstallDir();
@@ -1197,6 +1199,17 @@ namespace AgyClaudeStyle.Watcher
                             }
                             if (nativeAlive)
                             {
+                                if (!hadLiveHost && previewRawPort.HasValue)
+                                {
+                                    try
+                                    {
+                                        if (await CdpHelper.IsPortAliveAsync(previewRawPort.Value, 600).ConfigureAwait(false))
+                                        {
+                                            hadLiveHost = true;
+                                        }
+                                    }
+                                    catch { }
+                                }
                                 try
                                 {
                                     string pCfg = Path.Combine(_pluginDir, "config.json");
@@ -1229,8 +1242,8 @@ namespace AgyClaudeStyle.Watcher
                                     {
                                         yieldingToDaemon = true;
                                         Log(InstallerI18n.Tr(
-                                            "[~] 检测到原生 Sidecar Daemon 运行中，Watcher 进入热备避让态",
-                                            "[~] Native Sidecar Daemon detected; Watcher entering standby mode"
+                                            "[~] 检测到本地守护服务运行中，Watcher 进入热备避让态",
+                                            "[~] Local background daemon detected; Watcher entering standby mode"
                                         ));
                                     }
                                 }
@@ -1241,8 +1254,8 @@ namespace AgyClaudeStyle.Watcher
                             {
                                 yieldingToDaemon = false;
                                 Log(InstallerI18n.Tr(
-                                    "[+] 原生 Sidecar Daemon 已离线，Watcher 接管实时注入",
-                                    "[+] Native Sidecar Daemon offline; Watcher taking over live injection"
+                                    "[+] 本地守护服务已离线，Watcher 接管实时注入",
+                                    "[+] Local background daemon offline; Watcher taking over live injection"
                                 ));
                             }
 
@@ -1308,6 +1321,20 @@ namespace AgyClaudeStyle.Watcher
                                                          !portProbe.IsStalePort &&
                                                          portProbe.RawPort.HasValue &&
                                                          hasActiveAttached;
+                            if (!livePort.HasValue && !isTransientProbeGrace && hadLiveHost)
+                            {
+                                hadLiveHost = false;
+                                if (!overridePort.HasValue &&
+                                    IsAutoArchiveOnExitAllowed() &&
+                                    IsAutoArchiveOnExitEnabled() &&
+                                    Interlocked.CompareExchange(ref exitArchiveInFlight, 1, 0) == 0)
+                                {
+                                    StartAutoArchiveOnExitFallback(overridePort, exitEvent, () =>
+                                    {
+                                        Interlocked.Exchange(ref exitArchiveInFlight, 0);
+                                    });
+                                }
+                            }
                             if (!livePort.HasValue && !overridePort.HasValue && !isTransientProbeGrace)
                             {
                                 string noPromptEnv1 = Environment.GetEnvironmentVariable("PRISM_NO_RELAUNCH_PROMPT");
@@ -1374,6 +1401,7 @@ namespace AgyClaudeStyle.Watcher
                             }
                             if (livePort.HasValue && portProbe.Pages != null)
                             {
+                                hadLiveHost = true;
                                 List<CdpPageInfo> pages = portProbe.Pages;
                                 if (!lastPort.HasValue || lastPort.Value != livePort.Value)
                                 {
@@ -1438,6 +1466,377 @@ namespace AgyClaudeStyle.Watcher
                 }
             }
             return 0;
+        }
+
+        private static bool WaitExitSafe(ManualResetEventSlim exitEvent, int milliseconds)
+        {
+            if (exitEvent == null) return true;
+            try
+            {
+                if (exitEvent.IsSet) return true;
+                return exitEvent.Wait(milliseconds);
+            }
+            catch
+            {
+                return true;
+            }
+        }
+
+        private static bool IsAutoArchiveOnExitAllowed()
+        {
+            string nodeEnv = Environment.GetEnvironmentVariable("NODE_ENV");
+            string nodeTestCtx = Environment.GetEnvironmentVariable("NODE_TEST_CONTEXT");
+            string noAutoEnv = Environment.GetEnvironmentVariable("AG_PRISM_NO_AUTO_ARCHIVE_ON_EXIT");
+            return !string.Equals(nodeEnv, "test", StringComparison.OrdinalIgnoreCase) &&
+                   string.IsNullOrEmpty(nodeTestCtx) &&
+                   !string.Equals(noAutoEnv, "1", StringComparison.Ordinal) &&
+                   !CdpHelper.IsTestSandboxEnvironment(_baseDir);
+        }
+
+        private static bool IsAutoArchiveOnExitEnabled()
+        {
+            List<string> dirs = new List<string>();
+            if (!string.IsNullOrEmpty(_pluginDir)) dirs.Add(_pluginDir);
+            if (!string.IsNullOrEmpty(_baseDir) && !string.Equals(_baseDir, _pluginDir, StringComparison.OrdinalIgnoreCase))
+            {
+                dirs.Add(_baseDir);
+            }
+            for (int i = 0; i < dirs.Count; i++)
+            {
+                try
+                {
+                    string cfgPath = Path.Combine(dirs[i], "config.json");
+                    if (!File.Exists(cfgPath) || CdpHelper.IsUnsafeReparsePoint(cfgPath)) continue;
+                    string raw = File.ReadAllText(cfgPath, Encoding.UTF8).TrimStart('\uFEFF').Trim();
+                    if (string.IsNullOrEmpty(raw)) continue;
+                    Dictionary<string, object> parsed = MiniJson.ParseObject(raw);
+                    if (parsed == null) continue;
+                    object val;
+                    if (parsed.TryGetValue("autoArchiveOnExit", out val))
+                    {
+                        if (val is bool) return (bool)val;
+                        string s = val as string;
+                        if (!string.IsNullOrEmpty(s))
+                        {
+                            return string.Equals(s.Trim(), "true", StringComparison.OrdinalIgnoreCase) ||
+                                   string.Equals(s.Trim(), "on", StringComparison.OrdinalIgnoreCase);
+                        }
+                        return false;
+                    }
+                    continue;
+                }
+                catch { }
+            }
+            return false;
+        }
+
+        private static string ResolveConversationArchiveScriptPath()
+        {
+            List<string> dirs = new List<string>();
+            if (!string.IsNullOrEmpty(_pluginDir)) dirs.Add(_pluginDir);
+            if (!string.IsNullOrEmpty(_baseDir) && !string.Equals(_baseDir, _pluginDir, StringComparison.OrdinalIgnoreCase))
+            {
+                dirs.Add(_baseDir);
+            }
+            for (int i = 0; i < dirs.Count; i++)
+            {
+                try
+                {
+                    string scriptPath = Path.Combine(dirs[i], Path.Combine("sidecars", Path.Combine("daemon", "conversation-archive.mjs")));
+                    if (File.Exists(scriptPath) && !CdpHelper.IsUnsafeReparsePoint(scriptPath))
+                    {
+                        return scriptPath;
+                    }
+                }
+                catch { }
+            }
+            return null;
+        }
+
+        private static bool IsAntigravityOrLanguageServerRunning()
+        {
+            try
+            {
+                int selfPid = Process.GetCurrentProcess().Id;
+                Process[] procs = Process.GetProcesses();
+                bool found = false;
+                for (int i = 0; i < procs.Length; i++)
+                {
+                    Process p = procs[i];
+                    try
+                    {
+                        if (!found && p.Id != selfPid)
+                        {
+                            string name = (p.ProcessName ?? "").ToLowerInvariant();
+                            if (name == "antigravity" || name == "agy" || name.StartsWith("language_server", StringComparison.Ordinal))
+                            {
+                                found = true;
+                            }
+                        }
+                    }
+                    catch { }
+                    finally
+                    {
+                        try { p.Dispose(); } catch { }
+                    }
+                }
+                return found;
+            }
+            catch
+            {
+                // 任何进程枚举异常一律 fail-closed，绝不冒险移动文件
+                return true;
+            }
+        }
+
+        private static bool IsProcessIdAlive(int pid)
+        {
+            if (pid <= 0) return false;
+            try
+            {
+                using (Process p = Process.GetProcessById(pid))
+                {
+                    return !p.HasExited;
+                }
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool TryParseIsoUtc(object rawObj, out DateTime utcTime)
+        {
+            utcTime = DateTime.MinValue;
+            string s = rawObj as string;
+            if (string.IsNullOrEmpty(s)) return false;
+            DateTime parsed;
+            if (!DateTime.TryParse(
+                    s,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.RoundtripKind,
+                    out parsed))
+            {
+                return false;
+            }
+            utcTime = parsed.Kind == DateTimeKind.Utc ? parsed : parsed.ToUniversalTime();
+            return true;
+        }
+
+        private static int ReadPositiveIntField(Dictionary<string, object> obj, string key)
+        {
+            object raw;
+            if (obj == null || !obj.TryGetValue(key, out raw) || raw == null) return 0;
+            if (raw is int) return (int)raw > 0 ? (int)raw : 0;
+            if (raw is long)
+            {
+                long lv = (long)raw;
+                return lv > 0L && lv <= int.MaxValue ? (int)lv : 0;
+            }
+            if (raw is double)
+            {
+                double dv = (double)raw;
+                return !double.IsNaN(dv) && !double.IsInfinity(dv) && dv > 0.0 && dv <= int.MaxValue ? (int)dv : 0;
+            }
+            return 0;
+        }
+
+        private static bool HasActiveArchiveLockOrRecentRestore()
+        {
+            try
+            {
+                string home = Environment.GetEnvironmentVariable("USERPROFILE");
+                if (string.IsNullOrEmpty(home)) home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile) ?? "";
+                if (string.IsNullOrEmpty(home)) return false;
+                string archiveDir = Path.Combine(home, Path.Combine(".gemini", Path.Combine("antigravity", "conversations_archive")));
+                if (!Directory.Exists(archiveDir)) return false;
+                // 归档目录若为不安全重解析点/符号链接，一律 fail-closed 拦截
+                if (CdpHelper.IsUnsafeReparsePoint(archiveDir)) return true;
+
+                string lockPath = Path.Combine(archiveDir, ".archive.lock");
+                if (File.Exists(lockPath))
+                {
+                    if (CdpHelper.IsUnsafeReparsePoint(lockPath)) return true;
+                    DateTime mtime = File.GetLastWriteTimeUtc(lockPath);
+                    if ((DateTime.UtcNow - mtime).TotalSeconds < 300.0)
+                    {
+                        return true;
+                    }
+                }
+
+                // 协调正在静置/等待退出的脱离归档或还原任务（消除 4s vs 5.5s 抢跑竞态）；
+                // 若记录的 auto-exit-archive PID 已随宿主 Job Object 一起死亡，则不让步，立即由 Watcher 接棒兜底
+                string activePath = Path.Combine(archiveDir, ".archive-task-active.json");
+                if (File.Exists(activePath))
+                {
+                    if (CdpHelper.IsUnsafeReparsePoint(activePath)) return true;
+                    try
+                    {
+                        string activeRaw = File.ReadAllText(activePath, Encoding.UTF8).TrimStart('\uFEFF').Trim();
+                        Dictionary<string, object> activeObj = MiniJson.ParseObject(activeRaw);
+                        if (activeObj != null)
+                        {
+                            DateTime startedUtc;
+                            object startObj;
+                            if (!activeObj.TryGetValue("startedAt", out startObj) || !TryParseIsoUtc(startObj, out startedUtc))
+                            {
+                                startedUtc = File.GetLastWriteTimeUtc(activePath);
+                            }
+                            double ageSec = (DateTime.UtcNow - startedUtc).TotalSeconds;
+                            if (ageSec >= -10.0 && ageSec < 180.0)
+                            {
+                                int taskPid = ReadPositiveIntField(activeObj, "pid");
+                                if (taskPid > 0 && IsProcessIdAlive(taskPid))
+                                {
+                                    return true;
+                                }
+                                object activeActObj;
+                                string activeAct = activeObj.TryGetValue("action", out activeActObj) ? (activeActObj as string) : null;
+                                if ((string.Equals(activeAct, "restore-and-restart", StringComparison.Ordinal) ||
+                                     string.Equals(activeAct, "restore", StringComparison.Ordinal)) &&
+                                    ageSec < 30.0)
+                                {
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+                    catch { }
+                }
+
+                string resPath = Path.Combine(archiveDir, ".last-archive-result.json");
+                if (File.Exists(resPath))
+                {
+                    if (CdpHelper.IsUnsafeReparsePoint(resPath)) return true;
+                    string raw = File.ReadAllText(resPath, Encoding.UTF8).TrimStart('\uFEFF').Trim();
+                    Dictionary<string, object> parsed = MiniJson.ParseObject(raw);
+                    object actObj;
+                    object tsObj;
+                    if (parsed != null &&
+                        parsed.TryGetValue("action", out actObj) &&
+                        ((parsed.TryGetValue("recordedAt", out tsObj) && tsObj is string) ||
+                         (parsed.TryGetValue("updatedAt", out tsObj) && tsObj is string)))
+                    {
+                        DateTime parsedTsUtc;
+                        if (TryParseIsoUtc(tsObj, out parsedTsUtc))
+                        {
+                            double ageSec = Math.Abs((DateTime.UtcNow - parsedTsUtc).TotalSeconds);
+                            if (ageSec < 90.0)
+                            {
+                                string act = actObj as string;
+                                if (string.Equals(act, "restore-and-restart", StringComparison.Ordinal) ||
+                                    string.Equals(act, "restore", StringComparison.Ordinal))
+                                {
+                                    return true;
+                                }
+                                object okObj;
+                                bool isOk = parsed.TryGetValue("ok", out okObj) && (okObj is bool) && (bool)okObj;
+                                if (isOk &&
+                                    (string.Equals(act, "archive-and-restart", StringComparison.Ordinal) ||
+                                     string.Equals(act, "auto-exit-archive", StringComparison.Ordinal) ||
+                                     string.Equals(act, "archive", StringComparison.Ordinal)))
+                                {
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            catch { }
+            return false;
+        }
+
+        private static void StartAutoArchiveOnExitFallback(int? overridePort, ManualResetEventSlim exitEvent, Action onComplete)
+        {
+            Task.Run(async () =>
+            {
+                try
+                {
+                    await RunAutoArchiveOnExitFallbackAsync(overridePort, exitEvent).ConfigureAwait(false);
+                }
+                catch { }
+                finally
+                {
+                    if (onComplete != null)
+                    {
+                        try { onComplete(); } catch { }
+                    }
+                }
+            });
+        }
+
+        private static async Task RunAutoArchiveOnExitFallbackAsync(int? overridePort, ManualResetEventSlim exitEvent)
+        {
+            // 1) 等待 Antigravity 与 language_server 均彻底退出（绝不强杀宿主）
+            for (int waitIdx = 0; waitIdx < 15; waitIdx++)
+            {
+                if (!IsAntigravityOrLanguageServerRunning()) break;
+                if (WaitExitSafe(exitEvent, 1000)) return;
+                if (!string.IsNullOrEmpty(_pluginDir) && CdpHelper.IsNativeDaemonAlive(_pluginDir)) return;
+                int? pWait = CdpHelper.ReadPort(overridePort);
+                if (pWait.HasValue && await CdpHelper.IsPortAliveAsync(pWait.Value, 500).ConfigureAwait(false)) return;
+            }
+            if (IsAntigravityOrLanguageServerRunning()) return;
+
+            // 2) 静置 4 秒等待 SQLite WAL/SHM 完全释放
+            if (WaitExitSafe(exitEvent, 4000)) return;
+
+            // 3) 二次 fail-closed 确认：配置仍开启、无活跃 CDP 端口、原生 Daemon 未运行、宿主与 language_server 均未运行、无互斥锁/刚还原记录
+            if (!IsAutoArchiveOnExitEnabled()) return;
+            if (!string.IsNullOrEmpty(_pluginDir) && CdpHelper.IsNativeDaemonAlive(_pluginDir)) return;
+            int? portRecheck = CdpHelper.ReadPort(overridePort);
+            if (portRecheck.HasValue && await CdpHelper.IsPortAliveAsync(portRecheck.Value, 600).ConfigureAwait(false)) return;
+            if (IsAntigravityOrLanguageServerRunning()) return;
+            if (HasActiveArchiveLockOrRecentRestore()) return;
+
+            string scriptPath = ResolveConversationArchiveScriptPath();
+            if (string.IsNullOrEmpty(scriptPath)) return;
+
+            string runtimeExe = CdpHelper.FindFallbackNodeExecutable();
+            bool useElectronAsNode = false;
+            if (string.IsNullOrEmpty(runtimeExe))
+            {
+                runtimeExe = CdpHelper.FindAntigravityExecutable(null);
+                useElectronAsNode = !string.IsNullOrEmpty(runtimeExe);
+            }
+            if (string.IsNullOrEmpty(runtimeExe) || !File.Exists(runtimeExe)) return;
+
+            try
+            {
+                ProcessStartInfo psi = new ProcessStartInfo();
+                psi.FileName = runtimeExe;
+                psi.Arguments = "\"" + scriptPath + "\" --archive --subagent-hours=2";
+                psi.WorkingDirectory = Path.GetDirectoryName(scriptPath);
+                psi.UseShellExecute = false;
+                psi.CreateNoWindow = true;
+                psi.WindowStyle = ProcessWindowStyle.Hidden;
+                if (useElectronAsNode)
+                {
+                    psi.EnvironmentVariables["ELECTRON_RUN_AS_NODE"] = "1";
+                }
+                using (Process proc = Process.Start(psi))
+                {
+                    if (proc == null) return;
+                    bool exited = proc.WaitForExit(60000);
+                    if (exited)
+                    {
+                        Log(InstallerI18n.TrFormat(
+                            "[storage-guard] Watcher 退出兜底自动归档已执行 (exitCode={0})",
+                            "[storage-guard] Watcher auto-archive on exit finished (exitCode={0})",
+                            proc.ExitCode
+                        ));
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log(InstallerI18n.TrFormat(
+                    "[storage-guard] Watcher 退出兜底自动归档异常: {0}",
+                    "[storage-guard] Watcher auto-archive on exit error: {0}",
+                    ex.Message
+                ));
+            }
         }
     }
 }

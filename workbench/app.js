@@ -1309,7 +1309,7 @@
         <div class="ag-v2-settings-card" data-testid="workbench-about-preview" style="margin-top:12px;">
           <div class="ag-v2-set-row">
             <div>
-              <div class="ag-v2-set-title">关于、Git 更新与开源致谢 · Obsidian Prism v1.0.7</div>
+              <div class="ag-v2-set-title">关于、Git 更新与开源致谢 · Obsidian Prism v1.0.8-beta.3</div>
               <div class="ag-v2-set-desc">GPL-3.0 · 致谢 0DNANCY/agy-claude-style、ATtacK030130/antigrative-dashboard、LLYSH-HANNARI/antigravity-Codex-Claude-effort-slider、Nwflower/dsh-claude-style、Microqian2th/dsh-codex-effort-slider、mobius/dsh-performance-slider、claudenoshujin/claude-web (Mascot Pile &amp; Micro-Ecology Interaction Inspiration)</div>
             </div>
             <span class="ag-v2-ready-badge">GPL-3.0 · 7 CREDITS</span>
@@ -2383,7 +2383,7 @@
         canvas.width = Math.max(1, Math.round(columns * RIPPLE.cellWidth));
         canvas.height = Math.max(1, Math.round(rows * RIPPLE.cellHeight));
         if (glow) glow.resize(rect.width, rect.height, Math.min(window.devicePixelRatio || 1, 1.5));
-        if (field) field.dispose();
+        if (field) field.dispose(true);
         waves = createWaveField(columns, rows);
         field = createGlyphField(canvas, columns, rows, waves);
         waves.disturb(Math.floor(columns * 0.24), Math.floor(rows * 0.34));

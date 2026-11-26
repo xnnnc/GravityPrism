@@ -978,8 +978,8 @@ test('style.css covers all 6 Wave-2 config hooks, eliminates double borders & en
   );
 });
 
-// ── Test 6: #153 Cantonese (`yue`) Live Refresh, Warm-Light Sidecar Parity, Mid-History Turn Math & Group-Card Yield ─
-test('Host enhancer supports Cantonese (yue) + live language switch, aligns warm-light sidecar to prism-alabaster, resolves mid-history turn numbers, and yields to host group-card', () => {
+// ── Test 6: #153 8-Language Live Refresh + yue->zh-CN Migration, Warm-Light Sidecar Parity, Mid-History Turn Math & Group-Card Yield ─
+test('Host enhancer supports 8 languages + yue->zh-CN migration + live switch, aligns warm-light sidecar to prism-alabaster, resolves mid-history turn numbers, and yields to host group-card', () => {
   const env = createMockEnv();
   let curLang = 'yue';
 
@@ -1058,21 +1058,31 @@ test('Host enhancer supports Cantonese (yue) + live language switch, aligns warm
 
   const foldBtn = hdr.querySelector('.ag-cs-code-fold-btn');
   assert.ok(foldBtn);
-  assert.equal(foldBtn.textContent, '摺埋 (52行)', 'Cantonese (yue) must use Cantonese label instead of English fallback');
+  assert.equal(foldBtn.textContent, '折叠 (52行)', 'Legacy yue must migrate smoothly to zh-CN label instead of English fallback');
 
-  // Open outline -> verify Cantonese texts and mid-history turn numbers (#27, #28, #29)
+  // Open outline -> verify migrated zh-CN texts and mid-history turn numbers (#27, #28, #29)
   navRail.dispatchEvent({ type: 'pointerenter', target: navRail });
   const pop = env.doc.querySelector('.ag-cs-nav-outline-popover');
   assert.ok(pop && !pop.hidden);
-  assert.equal(pop.querySelector('.ag-cs-nav-fold-steps-btn')?.textContent, '收埋步驟');
+  assert.equal(pop.querySelector('.ag-cs-nav-fold-steps-btn')?.textContent, '收起步骤');
   const turnNums = pop.querySelectorAll('.ag-cs-nav-outline-item').map((n) => n.getAttribute('data-turn-num'));
   assert.deepEqual(turnNums, ['27', '28', '29'], 'Mid-history virtualized slice must anchor to active turn dot #28');
 
-  // Switch language to English dynamically -> sync()/onThemeChange(false) refreshes fold button & open outline immediately
-  curLang = 'en';
-  ctl.onThemeChange(false);
-  assert.equal(foldBtn.textContent, 'Fold (52L)');
-  assert.equal(pop.querySelector('.ag-cs-nav-fold-steps-btn')?.textContent, 'Fold Steps');
+  // Switch across all 8 languages dynamically -> sync()/onThemeChange(false) refreshes fold button & open outline immediately
+  for (const [nextLang, expFold, expFoldSteps] of [
+    ['zh-TW', '摺疊 (52行)', '收起步驟'],
+    ['ja', '折りたたむ (52行)', '手順を畳む'],
+    ['ko', '접기 (52줄)', '단계 접기'],
+    ['es', 'Contraer (52L)', 'Contraer pasos'],
+    ['fr', 'Replier (52L)', 'Replier étapes'],
+    ['de', 'Einklappen (52Z)', 'Schritte einklappen'],
+    ['en', 'Fold (52L)', 'Fold Steps'],
+  ]) {
+    curLang = nextLang;
+    ctl.onThemeChange(false);
+    assert.equal(foldBtn.textContent, expFold, `foldBtn mismatch for ${nextLang}`);
+    assert.equal(pop.querySelector('.ag-cs-nav-fold-steps-btn')?.textContent, expFoldSteps, `foldSteps mismatch for ${nextLang}`);
+  }
 
   // Hovering a group chapter dot or presence of host native group-card yields cleanly without overlapping
   navRail.dispatchEvent({ type: 'pointerover', target: grpBtn });

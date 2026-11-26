@@ -6,6 +6,7 @@ import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 
 import {
+  WORKBENCH_I18N,
   detectWorkbenchKind,
   parseDelimitedTable,
   parseJsonLinesTable,
@@ -1409,4 +1410,199 @@ test('WO-MAIN-001C: omni-client pre-paints dark overlay against white flash & wo
   assert.equal(env.htmlEl.style.getPropertyValue('--wb-panel'), '#151519');
   assert.equal(env.htmlEl.style.getPropertyValue('--wb-elevated'), '#1c1c22');
   assert.equal(env.htmlEl.style.getPropertyValue('--wb-font-sans'), "'Google Sans', sans-serif");
+});
+
+test('Battle 3: strict HTML sandbox="allow-scripts", srcdoc CSP meta, /sandbox-init fail-closed, SVG light/dark checker & XSS strip, and full 8+1 locales (0 CJK in non-CJK)', async () => {
+  // 1. HTML iframe sandbox MUST strictly equal 'allow-scripts' + referrerpolicy='no-referrer' + sandbox badge
+  const htmlFilePage = renderWorkbenchHtml({
+    baseUrl: 'http://127.0.0.1:43199',
+    token: 'tok-b3-html',
+    path: '/workspace/demo.html',
+    lang: 'en',
+  });
+  const htmlEnv = bootRenderedWorkbenchInVm(htmlFilePage, {
+    onFetch: async (url) => {
+      if (url.includes('/meta')) {
+        return {
+          ok: true,
+          async json() {
+            return { ok: true, name: 'demo.html', size: 128, mime: 'text/html', textSlice: '<h1>Demo</h1><script>1+1</script>' };
+          },
+        };
+      }
+      if (url.includes('/sandbox-init')) {
+        return {
+          ok: true,
+          async json() {
+            return { ok: true, url: '/sandbox/subtok99/m1/demo.html' };
+          },
+        };
+      }
+      return null;
+    },
+  });
+  await htmlEnv.settle();
+
+  const htmlFrame = htmlEnv.stageEl.querySelector('.wb-sandbox-frame');
+  assert.ok(htmlFrame);
+  assert.equal(htmlFrame.getAttribute('sandbox'), 'allow-scripts', 'HTML iframe sandbox must strictly equal allow-scripts');
+  assert.equal(htmlFrame.getAttribute('referrerpolicy'), 'no-referrer', 'HTML iframe must set referrerpolicy="no-referrer"');
+  for (const forbidden of ['allow-same-origin', 'allow-top-navigation', 'allow-popups', 'allow-forms', 'allow-modals']) {
+    assert.equal(htmlFrame.getAttribute('sandbox').includes(forbidden), false, `HTML sandbox must never contain ${forbidden}`);
+  }
+  const htmlBadge = htmlEnv.toolsEl.querySelector('.wb-sandbox-badge');
+  assert.ok(htmlBadge, 'HTML toolbar must show sandbox isolation badge');
+  assert.equal(htmlBadge.textContent, 'Sandbox Isolated');
+
+  // 2. HTML srcdoc mode injects connect-src 'none'; form-action 'none' CSP meta while keeping raw source unmodified
+  const rawHtml = '<!doctype html><html><body><div id="a">hi</div><script>window.x=1;</script></body></html>';
+  const srcdocPage = renderWorkbenchHtml({
+    kind: 'html',
+    lang: 'zh-CN',
+    rawContent: rawHtml,
+  });
+  const srcdocEnv = bootRenderedWorkbenchInVm(srcdocPage);
+  await srcdocEnv.settle();
+  const srcdocFrame = srcdocEnv.stageEl.querySelector('.wb-sandbox-frame');
+  assert.ok(srcdocFrame);
+  assert.equal(srcdocFrame.getAttribute('sandbox'), 'allow-scripts');
+  assert.equal(srcdocFrame.getAttribute('referrerpolicy'), 'no-referrer');
+  assert.ok(
+    String(srcdocFrame.srcdoc || '').includes('<meta http-equiv="Content-Security-Policy" content="connect-src \'none\'; form-action \'none\'">'),
+    'srcdoc must inject strict connect-src/form-action CSP meta'
+  );
+  assert.ok(String(srcdocFrame.srcdoc || '').includes('<script>window.x=1;</script>'), 'srcdoc must preserve inline script animations');
+  const srcdocSourcePane = srcdocEnv.stageEl.querySelector('.wb-source-pane');
+  assert.equal(srcdocSourcePane.textContent, rawHtml, 'Source view must preserve original HTML unmodified');
+
+  // 3. /sandbox-init failure must NEVER downgrade to /stream
+  const failFetches = [];
+  const failPage = renderWorkbenchHtml({
+    baseUrl: 'http://127.0.0.1:43199',
+    token: 'tok-fail',
+    path: '/workspace/broken.html',
+    lang: 'en',
+  });
+  const failEnv = bootRenderedWorkbenchInVm(failPage, {
+    onFetch: async (url) => {
+      failFetches.push(url);
+      if (url.includes('/meta')) {
+        return { ok: true, async json() { return { ok: true, name: 'broken.html', size: 32, mime: 'text/html' }; } };
+      }
+      if (url.includes('/sandbox-init')) {
+        return { ok: false, status: 500, async json() { return { ok: false, error: 'mount failed' }; } };
+      }
+      return null;
+    },
+  });
+  await failEnv.settle();
+  assert.equal(failFetches.some((u) => u.includes('/stream')), false, '/sandbox-init failure must never fall back to /stream');
+  assert.ok(failEnv.stageEl.querySelector('.wb-empty'), '/sandbox-init failure must render .wb-empty error box');
+
+  // 4. SVG file stage: XSS stripping + light/dark transparent checkerboard switching + Fit/1:1/+/- zoom + sandbox badge
+  let svgMetaCalls = 0;
+  const svgPage = renderWorkbenchHtml({
+    baseUrl: 'http://127.0.0.1:43199',
+    token: 'tok-svg',
+    path: '/assets/logo.svg',
+    lang: 'zh-CN',
+  });
+  const svgEnv = bootRenderedWorkbenchInVm(svgPage, {
+    onFetch: async (url) => {
+      if (url.includes('/meta')) {
+        svgMetaCalls += 1;
+        return {
+          ok: true,
+          async json() {
+            return {
+              ok: true,
+              name: 'logo.svg',
+              size: 256,
+              mime: 'image/svg+xml',
+              textSlice:
+                '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 80" onload="xss()">' +
+                '<script>alert(1)</script><foreignObject><div>evil</div></foreignObject>' +
+                '<rect width="120" height="80" fill="#669DF6"/></svg>',
+            };
+          },
+        };
+      }
+      return null;
+    },
+  });
+  await svgEnv.settle();
+  svgEnv.flushRaf(2);
+
+  const svgViewport = svgEnv.stageEl.querySelector('.wb-panzoom-viewport');
+  const svgLayer = svgEnv.stageEl.querySelector('.wb-panzoom-layer');
+  assert.ok(svgViewport && svgLayer);
+  assert.equal(svgViewport.getAttribute('data-backdrop'), 'checker');
+  assert.ok(!/<script|onload|foreignObject/i.test(svgLayer.innerHTML), 'SVG DOM must strip script/onload/foreignObject');
+  assert.ok(svgLayer.innerHTML.includes('<rect'), 'Safe SVG geometry must remain');
+  const svgBadge = svgEnv.toolsEl.querySelector('.wb-sandbox-badge');
+  assert.ok(svgBadge);
+  assert.equal(svgBadge.textContent, '沙盒隔离');
+
+  const svgBtns = svgEnv.toolsEl.querySelectorAll('button');
+  for (const bgId of ['checker-light', 'checker-dark', 'dark', 'light', 'checker']) {
+    const btn = svgBtns.find((b) => b.getAttribute('data-bg-id') === bgId);
+    assert.ok(btn, `SVG toolbar must include backdrop button data-bg-id="${bgId}"`);
+    btn.click();
+    assert.equal(svgViewport.getAttribute('data-backdrop'), bgId);
+  }
+
+  const tfBeforeZoom = svgLayer.style.transform;
+  svgBtns.find((b) => b.textContent === '+').click();
+  assert.notEqual(svgLayer.style.transform, tfBeforeZoom, '+ zoom button must update transform');
+  const tfAfterZoomIn = svgLayer.style.transform;
+  svgBtns.find((b) => b.textContent === '−').click();
+  assert.notEqual(svgLayer.style.transform, tfAfterZoomIn, '− zoom button must update transform');
+  svgBtns.find((b) => b.textContent === '1:1').click();
+  assert.match(svgEnv.toolsEl.textContent, /100%/);
+  svgBtns.find((b) => b.textContent === '适应窗口').click();
+
+  // Visible-state reload message refreshes once; hidden-state skips refresh
+  const callsBeforeReload = svgMetaCalls;
+  svgEnv.doc.visibilityState = 'hidden';
+  svgEnv.win.postMessageToSelf({ type: 'ag-prism-workbench-reload', path: '/assets/logo.svg' });
+  await svgEnv.settle();
+  assert.equal(svgMetaCalls, callsBeforeReload, 'Hidden document must ignore reload message');
+  svgEnv.doc.visibilityState = 'visible';
+  svgEnv.win.postMessageToSelf({ type: 'ag-prism-workbench-reload', path: '/assets/logo.svg' });
+  await svgEnv.settle();
+  assert.equal(svgMetaCalls, callsBeforeReload + 1, 'Visible document must reload on parent reload message');
+
+  // 5. Full 8+1 locales coverage & strict 0 CJK in non-CJK locales (en/ko/es/fr/de)
+  const cjkRe = /[\u3400-\u9FFF\uF900-\uFAFF]/;
+  const localeCols = ['zh-CN', 'zh-TW', 'yue', 'en', 'ja', 'ko', 'es', 'fr', 'de'];
+  for (const [key, row] of Object.entries(WORKBENCH_I18N)) {
+    assert.equal(row.length, localeCols.length, `WORKBENCH_I18N.${key} must provide all 9 locale columns`);
+    for (let i = 0; i < localeCols.length; i++) {
+      assert.ok(typeof row[i] === 'string' && row[i].length > 0, `WORKBENCH_I18N.${key}[${localeCols[i]}] must be non-empty`);
+      if (['en', 'ko', 'es', 'fr', 'de'].includes(localeCols[i])) {
+        assert.equal(cjkRe.test(row[i]), false, `WORKBENCH_I18N.${key}[${localeCols[i]}] must contain 0 CJK chars: ${row[i]}`);
+      }
+    }
+  }
+
+  for (const [lang, expectedBadge, expectedLightChecker] of [
+    ['ko', '샌드박스 격리', '밝은 체커'],
+    ['es', 'Aislado en sandbox', 'Damero claro'],
+    ['fr', 'Isolé en sandbox', 'Damier clair'],
+    ['de', 'Sandbox-isoliert', 'Helles Raster'],
+  ]) {
+    const p = renderWorkbenchHtml({
+      kind: 'svg',
+      lang,
+      rawContent: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/></svg>',
+    });
+    assert.ok(p.includes(`<html lang="${lang}"`), `renderWorkbenchHtml must emit lang="${lang}"`);
+    const e = bootRenderedWorkbenchInVm(p);
+    await e.settle();
+    assert.equal(e.toolsEl.querySelector('.wb-sandbox-badge')?.textContent, expectedBadge);
+    assert.ok(
+      e.toolsEl.querySelectorAll('button').some((b) => b.textContent === expectedLightChecker),
+      `${lang} toolbar must render localized light checkerboard label`
+    );
+  }
 });

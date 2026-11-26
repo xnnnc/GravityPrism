@@ -7,6 +7,7 @@ const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const ALLOWED_METHODS = new Set([
   'Probe',
   'PeekContextState',
+  'CheckHostIdleState',
   'GetUserStatus',
   'RetrieveUserQuotaSummary',
   'GetAllCascadeTrajectories',
@@ -245,6 +246,27 @@ export function normalizeRendererQuotaSummary(raw) {
 
 export function normalizeRendererSummaries(raw) {
   const out = {};
+  const visibleMainIds = Array.isArray(raw?.visibleMainIds)
+    ? Array.from(raw.visibleMainIds, (x) => String(x || '').trim().toLowerCase()).filter((x) => GUID_RE.test(x))
+    : null;
+  const discoveredSubagentIds = [];
+  if (Array.isArray(raw?.discoveredSubagentIds)) {
+    const seenSub = new Set();
+    for (const item of raw.discoveredSubagentIds) {
+      const rawId = typeof item === 'string' ? item : item?.id || item?.cascadeId || '';
+      const id = String(rawId || '').trim().toLowerCase();
+      if (!GUID_RE.test(id) || seenSub.has(id)) continue;
+      seenSub.add(id);
+      const rawPid = typeof item === 'object' && item ? item.parentId || item.parentConversationId || '' : '';
+      const pid = String(rawPid || '').trim().toLowerCase();
+      discoveredSubagentIds.push(GUID_RE.test(pid) && pid !== id ? { id, parentId: pid } : { id });
+      if (discoveredSubagentIds.length >= 512) break;
+    }
+  }
+  const extraFields = {
+    ...(visibleMainIds && visibleMainIds.length ? { visibleMainIds } : {}),
+    ...(discoveredSubagentIds.length ? { discoveredSubagentIds } : {}),
+  };
   if (raw && typeof raw.trajectorySummaries === 'object' && !Array.isArray(raw.trajectorySummaries)) {
     for (const [id, sum] of Object.entries(raw.trajectorySummaries)) {
       if (!GUID_RE.test(id) || !sum || typeof sum !== 'object') continue;
@@ -257,12 +279,20 @@ export function normalizeRendererSummaries(raw) {
         ...(Number.isSafeInteger(stepCount) && stepCount > 0 ? { stepCount } : {}),
         ...(modIso ? { lastModifiedTime: modIso } : {}),
         ...(createdIso ? { createdTime: createdIso } : {}),
-        ...(typeof sum.status === 'string' ? { status: sum.status } : {}),
+        ...(typeof sum.status === 'string' || typeof sum.status === 'number' ? { status: sum.status } : {}),
         ...(Array.isArray(sum.workspaces) ? { workspaces: sum.workspaces } : {}),
+        ...(sum.subagent === true ? { subagent: true } : {}),
+        ...(sum.isSubagent === true ? { isSubagent: true } : {}),
+        ...(typeof sum.parentConversationId === 'string' && sum.parentConversationId ? { parentConversationId: sum.parentConversationId } : {}),
+        ...(typeof sum.parentId === 'string' && sum.parentId ? { parentId: sum.parentId } : {}),
+        ...(typeof sum.parentCascadeId === 'string' && sum.parentCascadeId ? { parentCascadeId: sum.parentCascadeId } : {}),
+        ...(typeof sum.rootConversationId === 'string' && sum.rootConversationId ? { rootConversationId: sum.rootConversationId } : {}),
+        ...(typeof sum.swarmId === 'string' && sum.swarmId ? { swarmId: sum.swarmId } : {}),
+        ...(typeof sum.subagentName === 'string' && sum.subagentName ? { subagentName: sum.subagentName } : {}),
         ...(sum.trajectoryMetadata && typeof sum.trajectoryMetadata === 'object' ? { trajectoryMetadata: sum.trajectoryMetadata } : {}),
       };
     }
-    return { trajectorySummaries: out };
+    return { trajectorySummaries: out, ...extraFields };
   }
   const results = Array.isArray(raw?.results) ? raw.results : [];
   for (const item of results) {
@@ -277,7 +307,7 @@ export function normalizeRendererSummaries(raw) {
       ...(ws ? { workspaces: [{ workspaceFolderAbsoluteUri: ws }] } : {}),
     };
   }
-  return { trajectorySummaries: out };
+  return { trajectorySummaries: out, ...extraFields };
 }
 
 export function normalizeRendererTrajectory(raw, cascadeId, modelLabelMap = null) {
@@ -496,6 +526,18 @@ export function buildRendererRpcExpression(method, body = {}) {
     safeParams.cascadeId = cid;
   } else if (method === 'RetrieveUserQuotaSummary') {
     safeParams.forceRefresh = Boolean(body?.forceRefresh);
+  } else if (method === 'GetAllCascadeTrajectories') {
+    const rawMax = Number(body?.maxEntries);
+    if (Number.isInteger(rawMax) && rawMax >= 1 && rawMax <= 4096) {
+      safeParams.maxEntries = rawMax;
+    }
+    if (body?.includeVisibleMainIds === true) {
+      safeParams.includeVisibleMainIds = true;
+    }
+    if (body?.signalsOnly === true) {
+      safeParams.signalsOnly = true;
+      safeParams.includeVisibleMainIds = true;
+    }
   }
   const argLiteral = serializeJsonForEval(safeParams);
   return `(async (params) => {
@@ -770,6 +812,86 @@ export function buildRendererRpcExpression(method, body = {}) {
         return null;
       }
     };
+    if (params.method === 'CheckHostIdleState') {
+      const isRunningStatus = (st) => {
+        const n = typeof st === 'bigint' ? Number(st) : st;
+        if (n === 2 || n === 'CASCADE_RUN_STATUS_2') return true;
+        return /RUNNING|IN_PROGRESS|GENERATING|ACTIVE/i.test(String(n || ''));
+      };
+      let runningCount = 0;
+      let reason = 'idle';
+      try {
+        const sums = findReduxSummaries();
+        if (sums && typeof sums === 'object') {
+          for (const k of Object.keys(sums)) {
+            if (!guidRe.test(k)) continue;
+            const v = sums[k];
+            if (v && isRunningStatus(v.status)) {
+              runningCount += 1;
+              reason = 'redux-running';
+            }
+          }
+        }
+      } catch {}
+      try {
+        const mgr = findAgentMgr();
+        if (mgr && typeof mgr.getAgentStates === 'function') {
+          const states = mgr.getAgentStates();
+          const vals = states instanceof Map ? [...states.values()] : states && typeof states === 'object' ? Object.values(states) : [];
+          for (let i = 0; i < vals.length; i += 1) {
+            const st = vals[i] && typeof vals[i].getState === 'function' ? vals[i].getState() : vals[i];
+            if (st && isRunningStatus(st.status)) {
+              runningCount += 1;
+              if (reason === 'idle') reason = 'agent-mgr-running';
+            }
+          }
+        }
+      } catch {}
+      let domBusy = false;
+      try {
+        if (typeof document !== 'undefined' && document) {
+          const busySel = [
+            '[data-ag-sub-running="1"]',
+            '.ag-cs-conv-aura-host[data-state="thinking"]',
+            '.ag-cs-conv-aura-host[data-state="streaming"]',
+            '.ag-cs-conv-aura-host[data-state="swarm"]',
+            '[data-testid="running-row"]',
+            '[data-testid="background-task-row"]',
+            '[data-testid="input-cancel-button"]',
+            '[data-testid="stop-button"]',
+            '[data-testid="agent-loading"]',
+            '[data-testid="thinking-collapsible-trigger"][data-op-thought-state="streaming"]',
+            '[data-testid="agent-input-box"] [data-testid="cancel-button"]',
+            '[data-testid="stop-generation-button"]',
+          ].join(',');
+          const isVis = (el) => {
+            if (!el) return false;
+            if (el.hidden === true) return false;
+            try {
+              if (typeof el.closest === 'function' && el.closest('[hidden]')) return false;
+              if (el.style && (el.style.display === 'none' || el.style.visibility === 'hidden')) return false;
+              if (typeof getComputedStyle === 'function') {
+                const cs = getComputedStyle(el);
+                if (cs && (cs.display === 'none' || cs.visibility === 'hidden')) return false;
+              }
+            } catch {}
+            return true;
+          };
+          const nodes = typeof document.querySelectorAll === 'function'
+            ? document.querySelectorAll(busySel)
+            : (typeof document.querySelector === 'function' && document.querySelector(busySel) ? [document.querySelector(busySel)] : []);
+          const list = nodes && nodes.length ? nodes : (typeof document.querySelector === 'function' && document.querySelector(busySel) ? [document.querySelector(busySel)] : []);
+          for (let i = 0; i < list.length; i += 1) {
+            if (isVis(list[i])) {
+              domBusy = true;
+              if (reason === 'idle') reason = 'dom-busy';
+              break;
+            }
+          }
+        }
+      } catch {}
+      return { ok: true, data: { idle: runningCount === 0 && !domBusy, runningCount, domBusy, reason } };
+    }
     if (params.method === 'PeekContextState') {
       const live = readLiveAgentState(params.cascadeId);
       const sums = findReduxSummaries();
@@ -792,6 +914,192 @@ export function buildRendererRpcExpression(method, body = {}) {
           ...(live && live.status !== undefined ? { status: live.status } : sumStatus !== undefined ? { status: sumStatus } : {}),
           ...(live && live.contextWindowUsage ? { contextWindowUsage: live.contextWindowUsage } : {}),
           ...(live && live.compactedAtStepIndices ? { compactedAtStepIndices: live.compactedAtStepIndices } : {}),
+        },
+      };
+    }
+    const collectVisibleMainIds = () => {
+      if (!params.includeVisibleMainIds) return [];
+      const seen = new Set();
+      const guidScanRe = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/ig;
+      const addFrom = (txt) => {
+        if (typeof txt !== 'string' || txt.length < 36) return;
+        const ms = txt.match(guidScanRe);
+        if (ms) {
+          for (let j = 0; j < ms.length && seen.size < 512; j += 1) seen.add(ms[j].toLowerCase());
+        }
+      };
+      try {
+        if (typeof location !== 'undefined' && location && typeof location.href === 'string') addFrom(location.href);
+        if (typeof document !== 'undefined' && document && typeof document.querySelectorAll === 'function') {
+          // 严格限定仅采集侧栏主对话行，排除子代理子树（避免主对话内子代理卡片 UUID 混入 protectedMainIds 导致永久漏归档）
+          const subTreeSel = '[data-testid="subagent-node"], [data-testid="subagent-tab-conversation"], [data-ag-sub-running]';
+          const rows = document.querySelectorAll('[data-testid="conversation-row-sidebar"], nav [data-cascade-id], aside [data-cascade-id]');
+          for (let i = 0; i < rows.length && i < 400 && seen.size < 512; i += 1) {
+            const el = rows[i];
+            if (!el || typeof el.getAttribute !== 'function') continue;
+            try {
+              if (typeof el.closest === 'function' && el.closest(subTreeSel)) continue;
+            } catch {}
+            for (const attr of ['data-cascade-id', 'data-conversation-id', 'data-id', 'href', 'id']) {
+              addFrom(el.getAttribute(attr));
+            }
+            try {
+              const fk = Object.keys(el).find((k) => k.startsWith('__reactFiber$'));
+              for (let f = fk && el[fk], d = 0; f && d < 6; f = f.return, d += 1) {
+                const p = f.memoizedProps;
+                if (!p || typeof p !== 'object') continue;
+                for (const pk of ['cascadeId', 'conversationId', 'trajectoryId', 'id']) {
+                  if (typeof p[pk] === 'string' && guidRe.test(p[pk])) seen.add(p[pk].toLowerCase());
+                }
+              }
+            } catch {}
+          }
+        }
+      } catch {}
+      return [...seen];
+    };
+    const collectVisibleSubagentIds = (mainIds) => {
+      if (!params.includeVisibleMainIds) return [];
+      const excludedParentIds = new Set(Array.isArray(mainIds) ? mainIds : []);
+      const found = new Map();
+      const guidScanRe = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/ig;
+      const markExcludedParent = (rawPid) => {
+        const pid = String(rawPid || '').trim().toLowerCase();
+        if (guidRe.test(pid)) {
+          excludedParentIds.add(pid);
+          found.delete(pid);
+        }
+      };
+      const addSub = (rawId, rawParentId) => {
+        const id = String(rawId || '').trim().toLowerCase();
+        const pid = String(rawParentId || '').trim().toLowerCase();
+        if (guidRe.test(pid)) markExcludedParent(pid);
+        if (!guidRe.test(id) || excludedParentIds.has(id) || (guidRe.test(pid) && id === pid) || found.size >= 512) return;
+        const safePid = guidRe.test(pid) && pid !== id ? pid : '';
+        const prev = found.get(id);
+        if (!prev) found.set(id, safePid ? { id, parentId: safePid } : { id });
+        else if (safePid && !prev.parentId) prev.parentId = safePid;
+      };
+      const addFromText = (txt, parentId) => {
+        if (typeof txt !== 'string' || txt.length < 36) return;
+        const ms = txt.match(guidScanRe);
+        if (ms) {
+          for (let j = 0; j < ms.length && found.size < 512; j += 1) addSub(ms[j], parentId);
+        }
+      };
+      // 1) 当前对话页内已渲染的子代理卡片/标签节点（零 RPC，绝不唤醒沉睡 .db）
+      try {
+        if (typeof document !== 'undefined' && document && typeof document.querySelectorAll === 'function') {
+          const subRoots = document.querySelectorAll('[data-testid="subagent-node"], [data-testid="subagent-tab-conversation"], [data-ag-sub-running]');
+          for (let i = 0; i < subRoots.length && i < 400 && found.size < 512; i += 1) {
+            const el = subRoots[i];
+            if (!el || typeof el.getAttribute !== 'function') continue;
+            const parentHint = el.getAttribute('data-parent-id') || el.getAttribute('data-parent-conversation-id') || '';
+            markExcludedParent(parentHint);
+            const scanTargets = [el];
+            try {
+              if (typeof el.querySelectorAll === 'function') {
+                const inner = el.querySelectorAll('[data-cascade-id], [data-conversation-id], [data-subagent-id], a[href]');
+                for (let k = 0; k < inner.length && k < 16; k += 1) scanTargets.push(inner[k]);
+              }
+            } catch {}
+            for (let t = 0; t < scanTargets.length; t += 1) {
+              const node = scanTargets[t];
+              if (!node || typeof node.getAttribute !== 'function') continue;
+              for (const attr of ['data-cascade-id', 'data-conversation-id', 'data-subagent-id', 'data-id', 'href', 'id']) {
+                addFromText(node.getAttribute(attr), parentHint);
+              }
+            }
+            try {
+              const fk = Object.keys(el).find((k) => k.startsWith('__reactFiber$'));
+              for (let f = fk && el[fk], d = 0; f && d < 6; f = f.return, d += 1) {
+                const p = f.memoizedProps;
+                if (!p || typeof p !== 'object') continue;
+                const pId = p.parentConversationId || p.parentCascadeId || p.parentId || parentHint;
+                markExcludedParent(pId);
+                // 仅在卡片自身 Fiber(d===0)接受通用 cascadeId/conversationId，祖先层严禁把父主对话容器 ID 误当子代理
+                const childKeys = d === 0
+                  ? ['subagentId', 'childConversationId', 'cascadeId', 'conversationId', 'trajectoryId']
+                  : ['subagentId', 'childConversationId'];
+                for (const pk of childKeys) {
+                  if (typeof p[pk] === 'string' && guidRe.test(p[pk])) addSub(p[pk], pId);
+                }
+              }
+            } catch {}
+          }
+        }
+      } catch {}
+      // 2) 当前活跃会话 AgentManager 纯内存状态中的委托子代理（零 GetCascadeTrajectory RPC）
+      try {
+        const mgr = findAgentMgr();
+        if (mgr && typeof mgr.getAgentStates === 'function') {
+          const states = mgr.getAgentStates();
+          const isMapLike = states instanceof Map || Boolean(states && typeof states.entries === 'function' && typeof states.get === 'function');
+          const entries = isMapLike
+            ? [...states.entries()]
+            : states && typeof states === 'object'
+              ? Object.entries(states)
+              : [];
+          for (let i = 0; i < entries.length && found.size < 512; i += 1) {
+            const [rawKey, rawProv] = entries[i];
+            const st = rawProv && typeof rawProv.getState === 'function' ? rawProv.getState() : rawProv;
+            if (!st || typeof st !== 'object') continue;
+            const selfId = guidRe.test(String(st.cascadeId || ''))
+              ? String(st.cascadeId).toLowerCase()
+              : guidRe.test(String(rawKey || ''))
+                ? String(rawKey).toLowerCase()
+                : '';
+            const tm = st.trajectoryMetadata && typeof st.trajectoryMetadata === 'object' ? st.trajectoryMetadata : null;
+            const explicitParent = String(
+              st.parentConversationId || st.parentCascadeId || (tm && (tm.parentConversationId || tm.parentCascadeId)) || ''
+            ).trim().toLowerCase();
+            if (st.isSubagent === true || (tm && tm.isSubagent === true) || (guidRe.test(explicitParent) && explicitParent !== selfId)) {
+              if (selfId) addSub(selfId, explicitParent);
+            }
+            const parentId = selfId;
+            for (const listKey of ['delegatedConversations', 'subagentConversationIds', 'childConversationIds']) {
+              const list = st[listKey];
+              if (!Array.isArray(list) || list.length === 0) continue;
+              markExcludedParent(parentId);
+              for (let j = 0; j < list.length && found.size < 512; j += 1) {
+                const entry = list[j];
+                addSub(typeof entry === 'string' ? entry : (entry && (entry.id || entry.cascadeId || entry.conversationId)), parentId);
+              }
+            }
+            const steps = (st.trajectorySlice && Array.isArray(st.trajectorySlice.steps) && st.trajectorySlice.steps) ||
+              (Array.isArray(st.steps) ? st.steps : null);
+            if (steps) {
+              for (let j = 0; j < steps.length && found.size < 512; j += 1) {
+                const step = steps[j];
+                const sc = step && step.step && step.step.case;
+                const inv = sc === 'invokeSubagent'
+                  ? (step.step && step.step.value)
+                  : (step && step.invokeSubagent);
+                if (!inv || typeof inv !== 'object') continue;
+                markExcludedParent(parentId);
+                if (typeof inv.conversationId === 'string') addSub(inv.conversationId, parentId);
+                if (Array.isArray(inv.results)) {
+                  for (let r = 0; r < inv.results.length && found.size < 512; r += 1) {
+                    const resItem = inv.results[r];
+                    if (resItem && typeof resItem.conversationId === 'string') addSub(resItem.conversationId, parentId);
+                  }
+                }
+              }
+            }
+          }
+        }
+      } catch {}
+      return [...found.values()];
+    };
+    if (params.method === 'GetAllCascadeTrajectories' && params.signalsOnly) {
+      const visibleMainIds = collectVisibleMainIds();
+      const discoveredSubagentIds = collectVisibleSubagentIds(visibleMainIds);
+      return {
+        ok: true,
+        data: {
+          trajectorySummaries: {},
+          ...(visibleMainIds.length ? { visibleMainIds } : {}),
+          ...(discoveredSubagentIds.length ? { discoveredSubagentIds } : {}),
         },
       };
     }
@@ -880,25 +1188,43 @@ export function buildRendererRpcExpression(method, body = {}) {
           return '';
         };
         const scopeHint = readScopeHint();
-        const projectSummaryEntry = (v) => ({
-          summary: typeof v.summary === 'string' && v.summary ? v.summary : undefined,
-          stepCount: numVal(v.stepCount !== undefined ? v.stepCount : v.numTotalSteps),
-          lastModifiedTime: ts(v.lastModifiedTime),
-          createdTime: ts(v.createdTime),
-          status: typeof v.status === 'bigint' ? Number(v.status) : v.status,
-          workspaces: Array.isArray(v.workspaces) ? v.workspaces.slice(0, 4).map((w) => ({ workspaceFolderAbsoluteUri: w && w.workspaceFolderAbsoluteUri })) : undefined,
-          trajectoryMetadata: v.trajectoryMetadata ? {
-            parentConversationId: v.trajectoryMetadata.parentConversationId,
-            rootConversationId: v.trajectoryMetadata.rootConversationId,
-            nestingDepth: numVal(v.trajectoryMetadata.nestingDepth),
-          } : undefined,
-        });
+        const maxEntries = Number.isInteger(params.maxEntries) && params.maxEntries >= 1 && params.maxEntries <= 4096 ? params.maxEntries : 1024;
+        const visibleMainIds = collectVisibleMainIds();
+        const discoveredSubagentIds = collectVisibleSubagentIds(visibleMainIds);
+        const projectSummaryEntry = (v) => {
+          const tm = v.trajectoryMetadata && typeof v.trajectoryMetadata === 'object' ? v.trajectoryMetadata : null;
+          return {
+            summary: typeof v.summary === 'string' && v.summary ? v.summary : undefined,
+            stepCount: numVal(v.stepCount !== undefined ? v.stepCount : v.numTotalSteps),
+            lastModifiedTime: ts(v.lastModifiedTime),
+            createdTime: ts(v.createdTime),
+            status: typeof v.status === 'bigint' ? Number(v.status) : v.status,
+            workspaces: Array.isArray(v.workspaces) ? v.workspaces.slice(0, 4).map((w) => ({ workspaceFolderAbsoluteUri: w && w.workspaceFolderAbsoluteUri })) : undefined,
+            ...(v.subagent === true ? { subagent: true } : {}),
+            ...(v.isSubagent === true ? { isSubagent: true } : {}),
+            ...(typeof v.parentConversationId === 'string' && v.parentConversationId ? { parentConversationId: v.parentConversationId } : {}),
+            ...(typeof v.parentId === 'string' && v.parentId ? { parentId: v.parentId } : {}),
+            ...(typeof v.parentCascadeId === 'string' && v.parentCascadeId ? { parentCascadeId: v.parentCascadeId } : {}),
+            ...(typeof v.rootConversationId === 'string' && v.rootConversationId ? { rootConversationId: v.rootConversationId } : {}),
+            ...(typeof v.swarmId === 'string' && v.swarmId ? { swarmId: v.swarmId } : {}),
+            ...(typeof v.subagentName === 'string' && v.subagentName ? { subagentName: v.subagentName } : {}),
+            trajectoryMetadata: tm ? {
+              parentConversationId: tm.parentConversationId,
+              parentCascadeId: tm.parentCascadeId,
+              rootConversationId: tm.rootConversationId,
+              nestingDepth: numVal(tm.nestingDepth),
+              ...(tm.isSubagent === true ? { isSubagent: true } : {}),
+              ...(typeof tm.subagentName === 'string' && tm.subagentName ? { subagentName: tm.subagentName } : {}),
+              ...(typeof tm.swarmId === 'string' && tm.swarmId ? { swarmId: tm.swarmId } : {}),
+            } : undefined,
+          };
+        };
         const projectSummariesMap = (sums) => {
           const out = Object.create(null);
           const keys = Object.keys(sums)
             .filter((k) => guidRe.test(k) && sums[k] && typeof sums[k] === 'object')
             .sort((a, b) => tsSec(sums[b] && sums[b].lastModifiedTime) - tsSec(sums[a] && sums[a].lastModifiedTime))
-            .slice(0, 1024);
+            .slice(0, maxEntries);
           for (let i = 0; i < keys.length; i += 1) {
             const k = keys[i];
             const v = sums[k];
@@ -906,10 +1232,16 @@ export function buildRendererRpcExpression(method, body = {}) {
           }
           return out;
         };
+        const withExtra = (payload) => ({
+          ...payload,
+          ...(scopeHint ? { scopeHint } : {}),
+          ...(visibleMainIds.length ? { visibleMainIds } : {}),
+          ...(discoveredSubagentIds.length ? { discoveredSubagentIds } : {}),
+        });
         if (typeof activeLs.getAllCascadeTrajectories === 'function') {
           const r = await activeLs.getAllCascadeTrajectories({ excludeSubtrajectories: false });
           const out = projectSummariesMap((r && r.trajectorySummaries) || {});
-          return { ok: true, data: scopeHint ? { trajectorySummaries: out, scopeHint } : { trajectorySummaries: out } };
+          return { ok: true, data: withExtra({ trajectorySummaries: out }) };
         }
         const reduxSums = findReduxSummaries();
         if (reduxSums && typeof reduxSums === 'object' && Object.keys(reduxSums).length > 0) {
@@ -959,22 +1291,21 @@ export function buildRendererRpcExpression(method, body = {}) {
           }
           const topKeys = Object.keys(merged)
             .sort((a, b) => (sortSecs[b] || 0) - (sortSecs[a] || 0))
-            .slice(0, 1024);
+            .slice(0, maxEntries);
           const out = Object.create(null);
           for (let i = 0; i < topKeys.length; i += 1) {
             out[topKeys[i]] = merged[topKeys[i]];
           }
-          return { ok: true, data: scopeHint ? { trajectorySummaries: out, scopeHint } : { trajectorySummaries: out } };
+          return { ok: true, data: withExtra({ trajectorySummaries: out }) };
         }
         if (typeof activeLs.searchConversations === 'function') {
           const r = await activeLs.searchConversations({ query: '' });
           const rawList = Array.isArray(r && r.results) ? r.results.slice() : [];
           rawList.sort((a, b) => tsSec(b && b.lastModifiedTime) - tsSec(a && a.lastModifiedTime));
-          const list = rawList.slice(0, 1024);
+          const list = rawList.slice(0, maxEntries);
           return {
             ok: true,
-            data: {
-              ...(scopeHint ? { scopeHint } : {}),
+            data: withExtra({
               results: list.map((it) => ({
                 cascadeId: it && it.cascadeId,
                 title: it && it.title,
@@ -982,8 +1313,11 @@ export function buildRendererRpcExpression(method, body = {}) {
                 archived: Boolean(it && it.archived),
                 lastModifiedTime: ts(it && it.lastModifiedTime),
               })),
-            },
+            }),
           };
+        }
+        if (params.includeVisibleMainIds && (visibleMainIds.length > 0 || discoveredSubagentIds.length > 0)) {
+          return { ok: true, data: withExtra({ trajectorySummaries: {} }) };
         }
         return { ok: false, error: 'renderer_summaries_unavailable' };
       }

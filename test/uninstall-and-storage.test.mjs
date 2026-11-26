@@ -724,6 +724,9 @@ test('Windows Program.cs and macOS main.swift source contracts support --purge-d
   assert.ok(cs.includes('obsidian-prism-usage-rollup-cache.json'));
   assert.ok(cs.includes('obsidian-prism-sidebar.json'));
   assert.ok(cs.includes('telemetry'));
+  assert.ok(cs.includes('IsAllowedAddonsOverrideDir'));
+  assert.ok(cs.includes('AG_PRISM_ADDONS_DIR'));
+  assert.ok(cs.includes('"addons"'));
   assert.ok(cs.includes('ScheduleSelfDeleteIfNeeded'));
 
   const swift = fs.readFileSync(path.join(ROOT, 'installer', 'macos', 'Setup', 'main.swift'), 'utf8');
@@ -735,6 +738,9 @@ test('Windows Program.cs and macOS main.swift source contracts support --purge-d
   assert.ok(swift.includes('restoreUserConfigBackupIfNeeded'));
   assert.ok(swift.includes('purgeUserPluginData'));
   assert.ok(swift.includes('isAllowedTelemetryOverrideDir'));
+  assert.ok(swift.includes('isAllowedAddonsOverrideDir'));
+  assert.ok(swift.includes('AG_PRISM_ADDONS_DIR'));
+  assert.ok(swift.includes('sidecar_data/obsidian-prism/addons'));
   assert.ok(swift.includes('obsidian-prism-thought.json'));
   assert.ok(swift.includes('obsidian-prism-usage-rollup-cache.json'));
   assert.ok(swift.includes('obsidian-prism-sidebar.json'));
@@ -906,6 +912,109 @@ test('tools/install-plugin.cjs P1-5: waits for slow-exiting daemon to finish flu
         process.kill(c.pid, 'SIGKILL');
       } catch {}
     }
+    fs.rmSync(rootTmp, { recursive: true, force: true });
+  }
+});
+
+test('remove.js and tools/install-plugin.cjs preserve addons/ on default uninstall, purge addons/ on --purge-data, and refuse symlink/hijacked addons/', async () => {
+  const removeTool = require('../remove.js');
+  const rootTmp = mkTempDir('prism-u-addons-');
+  const prevAddonsEnv = process.env.AG_PRISM_ADDONS_DIR;
+  try {
+    const geminiDir = path.join(rootTmp, '.gemini');
+    const hostConfigDir = path.join(geminiDir, 'config');
+    const targetDir = path.join(hostConfigDir, 'plugins', 'obsidian-prism');
+    const addonsDir = path.join(geminiDir, 'antigravity', 'sidecar_data', 'obsidian-prism', 'addons');
+    const demoAddonDir = path.join(addonsDir, 'demo-ext');
+    const outsideVictim = path.join(rootTmp, 'outside-victim');
+    const evilWorkspace = path.join(rootTmp, 'evil-workspace');
+
+    for (const d of [hostConfigDir, targetDir, demoAddonDir, outsideVictim, evilWorkspace]) {
+      fs.mkdirSync(d, { recursive: true });
+    }
+    fs.writeFileSync(path.join(demoAddonDir, 'index.js'), 'export const a = 1;\n', 'utf8');
+    fs.writeFileSync(path.join(outsideVictim, 'keep.txt'), 'keep-outside', 'utf8');
+    fs.writeFileSync(path.join(evilWorkspace, 'keep.txt'), 'keep-evil', 'utf8');
+
+    // 1) tools/install-plugin.cjs 默认卸载（purgeData: false）必须保留 addons/
+    const unKeep = await installTool.uninstallPlugin({
+      targetDir,
+      hostConfigDir,
+      noCdp: true,
+      syncShortcuts: false,
+      purgeData: false,
+    });
+    assert.equal(unKeep.ok, true);
+    assert.equal(fs.existsSync(path.join(demoAddonDir, 'index.js')), true, 'Default uninstall must preserve addons/');
+
+    // 2) 恶意 AG_PRISM_ADDONS_DIR 与恶意 explicitAddonsDir 参数均必须被对称拒绝
+    process.env.AG_PRISM_ADDONS_DIR = evilWorkspace;
+    assert.equal(installTool.resolveAddonsDir(hostConfigDir), null);
+    assert.equal(installTool.resolveAddonsDir(hostConfigDir, evilWorkspace), null);
+    assert.equal(removeTool.resolveSafeAddonsDir(hostConfigDir, geminiDir, evilWorkspace), null);
+    delete process.env.AG_PRISM_ADDONS_DIR;
+
+    // 3) tools/install-plugin.cjs --purge-data 清理 addons/
+    fs.mkdirSync(targetDir, { recursive: true });
+    const unPurge = await installTool.uninstallPlugin({
+      targetDir,
+      hostConfigDir,
+      noCdp: true,
+      syncShortcuts: false,
+      purgeData: true,
+    });
+    assert.equal(unPurge.ok, true);
+    assert.equal(fs.existsSync(addonsDir), false, '--purge-data must remove sidecar_data/obsidian-prism/addons');
+    assert.equal(fs.readFileSync(path.join(evilWorkspace, 'keep.txt'), 'utf8'), 'keep-evil');
+
+    // 3b) tools/install-plugin.cjs 单独传入 purgeAddons: true 且支持合法 AG_PRISM_ADDONS_DIR 覆盖
+    const customAddonsDir = path.join(rootTmp, 'obsidian-prism', 'addons');
+    fs.mkdirSync(path.join(customAddonsDir, 'ext-a'), { recursive: true });
+    fs.writeFileSync(path.join(customAddonsDir, 'ext-a', 'a.js'), '1', 'utf8');
+    process.env.AG_PRISM_ADDONS_DIR = customAddonsDir;
+    assert.equal(installTool.resolveAddonsDir(hostConfigDir), path.resolve(customAddonsDir));
+    fs.mkdirSync(targetDir, { recursive: true });
+    const unPurgeAddonsOnly = await installTool.uninstallPlugin({
+      targetDir,
+      hostConfigDir,
+      noCdp: true,
+      syncShortcuts: false,
+      purgeData: false,
+      purgeAddons: true,
+    });
+    assert.equal(unPurgeAddonsOnly.ok, true);
+    assert.equal(fs.existsSync(customAddonsDir), false, 'purgeAddons: true must clean valid AG_PRISM_ADDONS_DIR');
+    delete process.env.AG_PRISM_ADDONS_DIR;
+
+    // 4) remove.js purgeUserPluginData 清理 addons/
+    fs.mkdirSync(demoAddonDir, { recursive: true });
+    fs.writeFileSync(path.join(demoAddonDir, 'index.js'), 'export const b = 2;\n', 'utf8');
+    const purgedByRemove = removeTool.purgeUserPluginData({ hostConfigDir });
+    assert.equal(fs.existsSync(addonsDir), false, 'remove.js --purge-data must remove addons/');
+    assert.ok(purgedByRemove.some((p) => path.resolve(p) === path.resolve(addonsDir)));
+
+    // 5) symlink / junction addons/ 必须被 remove.js 和 tools/install-plugin.cjs 双向拒绝删除，且绝不破坏外部目标
+    const linkType = process.platform === 'win32' ? 'junction' : 'dir';
+    fs.symlinkSync(outsideVictim, addonsDir, linkType);
+
+    const purgedSymRemove = removeTool.purgeUserPluginData({ hostConfigDir });
+    assert.equal(purgedSymRemove.some((p) => path.resolve(p) === path.resolve(addonsDir)), false);
+    assert.equal(fs.readFileSync(path.join(outsideVictim, 'keep.txt'), 'utf8'), 'keep-outside');
+
+    fs.mkdirSync(targetDir, { recursive: true });
+    const unSym = await installTool.uninstallPlugin({
+      targetDir,
+      hostConfigDir,
+      noCdp: true,
+      syncShortcuts: false,
+      purgeData: true,
+    });
+    assert.equal(unSym.ok, true);
+    assert.equal(fs.lstatSync(addonsDir).isSymbolicLink(), true, 'Symlink/junction addons/ must never be deleted');
+    assert.equal(fs.readFileSync(path.join(outsideVictim, 'keep.txt'), 'utf8'), 'keep-outside');
+  } finally {
+    if (prevAddonsEnv === undefined) delete process.env.AG_PRISM_ADDONS_DIR;
+    else process.env.AG_PRISM_ADDONS_DIR = prevAddonsEnv;
     fs.rmSync(rootTmp, { recursive: true, force: true });
   }
 });

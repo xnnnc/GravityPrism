@@ -902,7 +902,7 @@ if (require.main === module) {
   const server = createWorkbenchServer();
   server.listen(port, host, () => {
     const addr = server.address();
-    console.log(`Obsidian Prism v1.0.7 Workbench listening on http://${host}:${addr.port}`);
+    console.log(`Obsidian Prism v1.0.8-beta.3 Workbench listening on http://${host}:${addr.port}`);
     console.log(`  · Optical Workbench: http://${host}:${addr.port}/`);
     console.log(`  · Bipolar Studio:    http://${host}:${addr.port}/studio`);
   });

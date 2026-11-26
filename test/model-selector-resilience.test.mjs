@@ -1729,3 +1729,150 @@ test('Scenario 11 (PR #35 / Issue #34 View Usage false-positive Orchestrator L2 
 
   agObs.stop();
 });
+
+test('Scenario 12 (Issue #80 / v2.35.1 nested Orchestrator L3 inside L2): L2 never hides, unbinds, or gets tagged orch-l3 even with 5 nested effort rows', () => {
+  const env = createSimEnv();
+  const neonMin = { label: 'Gemini 4 Neon (Minimal)', modelId: 'gemini-4-neon-min', value: 1531 };
+  const neonLow = { label: 'Gemini 4 Neon (Low)', modelId: 'gemini-4-neon-low', value: 1534 };
+  const neonMed = { label: 'Gemini 4 Neon (Medium)', modelId: 'gemini-4-neon-medium', value: 1533 };
+  const neonHigh = { label: 'Gemini 4 Neon (High)', modelId: 'gemini-4-neon-high', value: 1532 };
+  const neonXHigh = { label: 'Gemini 4 Neon (Extra)', modelId: 'gemini-4-neon-xhigh', value: 1535 };
+  const carbMed = { label: 'Gemini 4 Carbon (Medium)', modelId: 'gemini-4-carbon-medium', value: 1521 };
+  const carbHigh = { label: 'Gemini 4 Carbon (High)', modelId: 'gemini-4-carbon-high', value: 1522 };
+  const orchNeon = { label: 'Orchestrator (Neon)', modelId: 'gemini-pro-orchestrator-neon', value: 1537 };
+
+  const planners = [neonMin, neonLow, neonMed, neonHigh, neonXHigh, carbMed, carbHigh];
+  const modelOptions = [...planners, orchNeon];
+  let selectedModel = orchNeon;
+  let isOpen = true;
+  const orchPicks = [];
+
+  const plannerIdx = new Map([
+    ['gemini-4-neon', new Map([['minimal', neonMin], ['low', neonLow], ['medium', neonMed], ['high', neonHigh], ['xhigh', neonXHigh]])],
+    ['gemini-4-carbon', new Map([['medium', carbMed], ['high', carbHigh]])],
+  ]);
+  const selectorCtx = {
+    effortIndex: plannerIdx,
+    modelOptions,
+    get selectedModel() { return selectedModel; },
+    orchestratorPlanners: planners,
+    orchestratorPlannerIndex: plannerIdx,
+    orchestratorDefaultPlanner: neonHigh,
+    orchestratorPick: {
+      model: neonMed.value,
+      select(v) { orchPicks.push(v); this.model = v; },
+    },
+  };
+  const globalModelCtx = {
+    setModelConfigByLabelForConversation(label) {
+      selectedModel = modelOptions.find((o) => o.label === label) || selectedModel;
+    },
+  };
+
+  const trigger = env.makeTrigger('Orchestrator', 'Medium');
+  env.body.appendChild(trigger);
+  const { panel, listWrap } = env.makePanel();
+  const orchRow = env.makeEl('div', { attrs: { role: 'menuitem', 'data-testid': 'model-selector-orchestrator' }, text: 'Orchestrator Gemini 4 Neon Medium' });
+  listWrap.appendChild(orchRow);
+  env.body.appendChild(panel);
+  env.attachFiberChain(panel, { selectorCtx, convId: 'conv-issue80-12', globalModelCtx });
+
+  // Build exact v2.35.1 DOM: L2 positioner -> L2 menu (.agy-overlay[data-side]) -> 2 planner rows + nested L3 positioner -> L3 menu -> 5 effort rows
+  // Cold-mount L2 + nested L3 simultaneously BEFORE installing observer so L2 is not yet in _boundSubs
+  const l2Pos = env.makeEl('div', { attrs: { role: 'presentation', 'data-side': 'right', 'data-nested': '' } });
+  const l2Menu = env.makeEl('div', { className: 'agy-overlay', attrs: { role: 'menu', 'data-side': 'right' } });
+  const l2Neon = env.makeEl('div', { attrs: { role: 'menuitemradio', 'data-testid': 'orchestrator-picker-row', 'data-model-base': 'Gemini 4 Neon' }, text: 'Gemini 4 Neon Medium' });
+  const l2Carb = env.makeEl('div', { attrs: { role: 'menuitemradio', 'data-testid': 'orchestrator-picker-row', 'data-model-base': 'Gemini 4 Carbon' }, text: 'Gemini 4 Carbon High' });
+  l2Menu.appendChild(l2Neon);
+  l2Menu.appendChild(l2Carb);
+
+  const l3Pos = env.makeEl('div', { attrs: { role: 'presentation', 'data-side': 'right', 'data-nested': '' } });
+  const l3Menu = env.makeEl('div', { className: 'agy-overlay', attrs: { role: 'menu', 'data-side': 'right' } });
+  for (const tier of ['Minimal', 'Low', 'Medium', 'High', 'Extra']) {
+    l3Menu.appendChild(env.makeEl('div', { attrs: { role: 'menuitemradio', 'data-testid': 'orchestrator-picker-effort' }, text: tier }));
+  }
+  l3Pos.appendChild(l3Menu);
+  l2Menu.appendChild(l3Pos);
+  l2Pos.appendChild(l2Menu);
+  env.body.appendChild(l2Pos);
+
+  const agObs = upstreamLib.installAntigravityObserver({ document: env.doc, window: env.win, MutationObserver: env.win.MutationObserver });
+
+  // 1) SLIDER_CSS keeps v108-i18n prefix intact while excluding L2 rows & data-ag-cs-orch-l2 on both [role='menu'] and div[role='presentation']
+  const css = env.doc.getElementById('ag-codex-effort-slider-styles').textContent;
+  assert.ok(
+    css.includes("html[data-ces-slider-ready='1'] [role='menu']:has([data-testid='orchestrator-picker-effort']):not(:has([data-testid='model-selector-panel'])):not(:has([data-testid='orchestrator-picker-row'])):not([data-ag-cs-orch-l2='1'])"),
+    'SLIDER_CSS [role=menu] L3 rule must preserve prefix and exclude L2 rows/marker'
+  );
+  assert.ok(
+    css.includes("html[data-ces-slider-ready='1'] div[role='presentation']:has([data-testid='orchestrator-picker-effort']):not(:has([data-testid='model-selector-panel'])):not(:has([data-testid='orchestrator-picker-row'])):not(:has([data-ag-cs-orch-l2='1']))"),
+    'SLIDER_CSS div[role=presentation] L3 rule must exclude L2 positioner wrapper'
+  );
+
+  // 2) Cold-mounted L2 with 5 nested L3 effort items stays bound as L2 and NEVER gets tagged orch-l3
+  assert.equal(l2Menu.getAttribute('data-ag-cs-orch-l2'), '1', 'L2 menu must stay bound despite 5 nested L3 effort items');
+  assert.equal(l2Menu.getAttribute('data-ag-cs-model-submenu'), '1');
+  assert.equal(l2Pos.getAttribute('data-ag-cs-model-submenu'), '1', 'Outer L2 presentation wrapper must receive data-ag-cs-model-submenu=1');
+  assert.equal(l2Menu.hasAttribute('data-ag-cs-orch-l3'), false, 'L2 menu must NEVER be tagged data-ag-cs-orch-l3');
+  assert.equal(l2Pos.hasAttribute('data-ag-cs-orch-l3'), false, 'Outer L2 positioner must NEVER be tagged data-ag-cs-orch-l3');
+  assert.equal(l2Neon.getAttribute('data-ces-orch-row'), '1');
+  assert.equal(l2Carb.getAttribute('data-ces-orch-row'), '1');
+
+  // 3) Nested L3 menu & its own L3 wrapper are hidden cleanly
+  assert.equal(l3Menu.getAttribute('data-ag-cs-orch-l3'), '1', 'Nested L3 menu must be tagged data-ag-cs-orch-l3');
+  assert.equal(l3Pos.getAttribute('data-ag-cs-orch-l3'), '1', 'Nested L3 dedicated positioner must be tagged data-ag-cs-orch-l3');
+
+  // 4) Direct flat nested [data-testid="orchestrator-picker-effort"] container without inner [role="menu"] also never unbinds L2
+  l3Pos.remove();
+  const flatEffWrap = env.makeEl('div', { attrs: { 'data-testid': 'orchestrator-picker-effort' } });
+  for (const tier of ['Minimal', 'Low', 'Medium', 'High', 'Extra']) {
+    flatEffWrap.appendChild(env.makeEl('div', { attrs: { role: 'menuitemradio' }, text: tier }));
+  }
+  l2Menu.appendChild(flatEffWrap);
+  agObs.rescan();
+  assert.equal(l2Menu.getAttribute('data-ag-cs-orch-l2'), '1', 'L2 must stay bound when flat orchestrator-picker-effort children are nested directly');
+  assert.equal(l2Menu.hasAttribute('data-ag-cs-orch-l3'), false);
+  assert.equal(l2Pos.hasAttribute('data-ag-cs-orch-l3'), false);
+  assert.equal(flatEffWrap.getAttribute('data-ag-cs-orch-l3'), '1');
+
+  // 5) Clicking Carbon in L2 still commits smoothly while keeping menu open
+  const rCarb = env.simulateNativeClick(l2Carb, () => { isOpen = false; });
+  assert.equal(rCarb.ck.defaultPrevented, true);
+  assert.equal(rCarb.nativeCalled, false);
+  assert.equal(isOpen, true);
+  assert.equal(orchPicks[orchPicks.length - 1], carbMed.value);
+
+  // 6) 3-layer Base-UI wrapper (#root > presentation[data-side][data-nested] > .agy-overlay[data-side] > [role=menu]): both outer layers get submenu attr, #root untouched, and cleanup is symmetric
+  l2Pos.remove();
+  l2Menu.isConnected = false;
+  agObs.rescan();
+  assert.equal(l2Pos.hasAttribute('data-ag-cs-model-submenu'), false, 'Detached outer L2 positioner must clean up data-ag-cs-model-submenu');
+  const appRoot = env.makeEl('div', { attrs: { id: 'root' } });
+  const l2Pos3 = env.makeEl('div', { attrs: { role: 'presentation', 'data-side': 'right', 'data-nested': '' } });
+  const l2Pop3 = env.makeEl('div', { className: 'agy-overlay', attrs: { 'data-side': 'right' } });
+  const l2Menu3 = env.makeEl('div', { attrs: { role: 'menu' } });
+  l2Menu3.appendChild(env.makeEl('div', { attrs: { role: 'menuitemradio', 'data-testid': 'orchestrator-picker-row' }, text: 'Gemini 4 Neon Medium' }));
+  l2Menu3.appendChild(env.makeEl('div', { attrs: { role: 'menuitemradio', 'data-testid': 'orchestrator-picker-row' }, text: 'Gemini 4 Carbon High' }));
+  const sharedL3 = env.makeEl('div', { attrs: { role: 'menu' } });
+  sharedL3.appendChild(env.makeEl('div', { attrs: { role: 'menuitemradio', 'data-testid': 'orchestrator-picker-effort' }, text: 'Low' }));
+  sharedL3.appendChild(env.makeEl('div', { attrs: { role: 'menuitemradio', 'data-testid': 'orchestrator-picker-effort' }, text: 'High' }));
+  l2Pop3.appendChild(l2Menu3);
+  l2Pop3.appendChild(sharedL3);
+  l2Pos3.appendChild(l2Pop3);
+  appRoot.appendChild(l2Pos3);
+  env.body.appendChild(appRoot);
+  agObs.rescan();
+  assert.equal(l2Menu3.getAttribute('data-ag-cs-orch-l2'), '1');
+  assert.equal(l2Pop3.getAttribute('data-ag-cs-model-submenu'), '1');
+  assert.equal(l2Pos3.getAttribute('data-ag-cs-model-submenu'), '1', 'Outer Base-UI presentation wrapper must receive data-ag-cs-model-submenu=1');
+  assert.equal(appRoot.hasAttribute('data-ag-cs-model-submenu'), false, '#root must never be tagged data-ag-cs-model-submenu');
+  assert.equal(l2Pop3.hasAttribute('data-ag-cs-orch-l3'), false, 'Shared overlay containing orchestrator-picker-row must never be tagged orch-l3');
+  assert.equal(l2Pos3.hasAttribute('data-ag-cs-orch-l3'), false, 'Outer L2 positioner must never be tagged orch-l3');
+  assert.equal(sharedL3.getAttribute('data-ag-cs-orch-l3'), '1', 'Dedicated sibling L3 effort menu must be hidden');
+
+  agObs.stop();
+  assert.equal(l2Menu3.hasAttribute('data-ag-cs-orch-l2'), false);
+  assert.equal(l2Pop3.hasAttribute('data-ag-cs-model-submenu'), false);
+  assert.equal(l2Pos3.hasAttribute('data-ag-cs-model-submenu'), false);
+  assert.equal(sharedL3.hasAttribute('data-ag-cs-orch-l3'), false);
+});

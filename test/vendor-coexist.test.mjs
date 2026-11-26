@@ -245,14 +245,14 @@ function createLightweightDom() {
 test('Obsidian Prism brand compliance, GPL-3.0 LICENSE, NOTICE, CITATION.cff, THIRD_PARTY_NOTICES.md, plugin.json, and sidecar.json contract', () => {
   const pkgJson = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, 'package.json'), 'utf8'));
   assert.equal(pkgJson.name, 'obsidian-prism');
-  assert.equal(pkgJson.version, '1.1.0');
+  assert.equal(pkgJson.version, '1.2.0');
   assert.equal(pkgJson.license, 'GPL-3.0-only');
 
   const pluginJson = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, 'plugin.json'), 'utf8'));
   assert.deepEqual(Object.keys(pluginJson).sort(), ['description', 'displayName', 'logo', 'name', 'version']);
   assert.equal(pluginJson.name, 'obsidian-prism');
   assert.equal(pluginJson.displayName, 'Obsidian Prism');
-  assert.equal(pluginJson.version, '1.1.0');
+  assert.equal(pluginJson.version, '1.2.0');
   assert.equal(pluginJson.logo, 'assets/logo.svg');
   assert.ok(fs.existsSync(path.join(ROOT_DIR, 'assets', 'logo.svg')));
 
@@ -294,20 +294,41 @@ test('Obsidian Prism brand compliance, GPL-3.0 LICENSE, NOTICE, CITATION.cff, TH
   assert.ok(noticesTxt.includes(disclaimer));
   assert.ok(readmeTxt.includes(disclaimer));
 
+  const readmeEnTxt = fs.readFileSync(path.join(ROOT_DIR, 'README.en.md'), 'utf8');
+  const settingsPanelTxt = fs.readFileSync(path.join(ROOT_DIR, 'settings-panel.js'), 'utf8');
+  const settingsPanelMod = require(path.join(ROOT_DIR, 'settings-panel.js'));
+  const contributorsTxt = fs.readFileSync(path.join(ROOT_DIR, 'docs', 'CONTRIBUTORS.md'), 'utf8');
+
   const noticeSlugs = extractGithubRepoSlugs(noticesTxt);
   const readmeSlugs = extractGithubRepoSlugs(readmeTxt);
-  const sevenUpstreamSlugs = [
+  const readmeEnSlugs = extractGithubRepoSlugs(readmeEnTxt);
+  const settingsSlugs = new Set((settingsPanelMod.UPSTREAM_CREDITS || []).map((c) => c.repo));
+  const nineUpstreamSlugs = [
     '0DNANCY/agy-claude-style',
     'ATtacK030130/antigrative-dashboard',
     'LLYSH-HANNARI/antigravity-Codex-Claude-effort-slider',
+    'yiheng8023/antigravity-chinese',
     'Nwflower/dsh-claude-style',
     'Microqian2th/dsh-codex-effort-slider',
     'mobius/dsh-performance-slider',
     'claudenoshujin/claude-web',
+    'wp3171216237/dsh-TUI',
   ];
-  for (const slug of sevenUpstreamSlugs) {
+  for (const slug of nineUpstreamSlugs) {
     assert.ok(noticeSlugs.has(slug), `THIRD_PARTY_NOTICES.md must credit ${slug}`);
+    assert.ok(noticeFileTxt.includes(slug), `NOTICE must credit ${slug}`);
     assert.ok(readmeSlugs.has(slug), `README.md must credit ${slug}`);
+    assert.ok(readmeEnSlugs.has(slug), `README.en.md must credit ${slug}`);
+    assert.ok(settingsSlugs.has(slug), `settings-panel.js must credit ${slug}`);
+  }
+  for (const holder of ['0DNANCY', 'AG Pulse contributors', 'LLYSH-HANNARI', 'Antigravity Chinese Localization Contributors', 'wp3171216237']) {
+    assert.ok(noticesTxt.includes(holder), `THIRD_PARTY_NOTICES.md must retain MIT holder ${holder}`);
+    assert.ok(noticeFileTxt.includes(holder), `NOTICE must retain MIT holder ${holder}`);
+    assert.ok(settingsPanelTxt.includes(holder), `settings-panel.js must retain MIT holder ${holder}`);
+  }
+  assert.ok(noticesTxt.includes('swarm-i18n-runtime.js') && noticesTxt.includes('swarm-zh-CN.json'), 'THIRD_PARTY_NOTICES.md §1.4 must document swarm-i18n-runtime.js & swarm-zh-CN.json');
+  for (const contributor of ['@OyatsuSuki', '@yzd05', '@wanghaoyi216', '@Gruu6y']) {
+    assert.ok(contributorsTxt.includes(contributor), `CONTRIBUTORS.md must credit v1.0.8 contributor ${contributor}`);
   }
 
   // Verify absorbed upstream sources exist in vendor/
@@ -330,8 +351,8 @@ test('Obsidian Prism brand compliance, GPL-3.0 LICENSE, NOTICE, CITATION.cff, TH
   }
 });
 
-test('i18n-locales.js covers all 5 languages (zh-CN, zh-TW, yue, en, ja) with Obsidian Prism brand, fold hints, coexistence & About keys', () => {
-  const langs = ['zh-CN', 'zh-TW', 'yue', 'en', 'ja'];
+test('i18n-locales.js covers all 8 languages (zh-CN, zh-TW, en, ja, ko, es, fr, de) + legacy yue fallback with Obsidian Prism brand, fold hints, coexistence & About keys', () => {
+  const langs = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de'];
   const requiredKeys = [
     'sectionTitle',
     'sectionSubtitle',
@@ -370,7 +391,7 @@ test('i18n-locales.js covers all 5 languages (zh-CN, zh-TW, yue, en, ja) with Ob
     for (const k of requiredKeys) {
       assert.ok(typeof ui[k] === 'string' && ui[k].length > 0, `Missing ${k} for ${lang}`);
     }
-    assert.ok(/Beta/i.test(ui.setSidebarStudioTitle), `Chat module title must mark Beta for ${lang}`);
+    assert.ok(/B[eê]ta/i.test(ui.setSidebarStudioTitle), `Chat module title must mark Beta for ${lang}`);
   }
   const zh = locales.getUiStrings('zh-CN');
   assert.equal(zh.sectionTitle, 'Obsidian Prism · 黑曜棱镜');
@@ -942,9 +963,9 @@ test('PrismDaemon & install-plugin.cjs: obsidian-prism target, legacy antigravit
                       ready: true,
                       hasPrism: true,
                       hasRepoBridge: true,
-                      prismAttr: '1.1.0',
+                      prismAttr: '1.2.0',
                       hasStyle: true,
-                      version: '1.1.0',
+                      version: '1.2.0',
                       status: 'ok',
                     },
                   },
@@ -1486,8 +1507,8 @@ test('PrismDaemon HS-1 & SEC-2: 68 rapid-fire setting updates, multi-window cros
     assert.equal(stB.vmWin.__agPrism.getState().cfg.palette, 'warm', 'Window B must receive Window A cross-window sync');
     assert.equal(stB.vmWin.__agPrism.getState().cfg.accentTone, 'cobalt');
     assert.ok(
-      totalAddScriptCalls <= 20,
-      `HS-1: Single-flight coalescing should collapse 68 rapid clicks across 2 windows (got ${totalAddScriptCalls})`
+      totalAddScriptCalls <= 22,
+      `HS-1: Single-flight coalescing should collapse 68 rapid clicks across 2 windows × 9 dynamic channels (got ${totalAddScriptCalls})`
     );
 
     // Phase B (Cross-window epoch isolation): Window B (localWriteEpoch 1..12 << Window A's 68!) rapid-fires 12 updates
@@ -1557,8 +1578,8 @@ test('PrismDaemon HS-1 & SEC-2: 68 rapid-fire setting updates, multi-window cros
     assert.equal(stB.vmWin.__agPrism.getState().cfg.palette, 'obsidian', 'Window B must sync with reloaded Window A');
     assert.equal(stB.vmWin.__agPrism.getState().cfg.accentTone, 'iris');
     assert.ok(
-      activeScripts.size <= 10,
-      `HS-1: Active NewDocument script handles across 2 windows × 5 dynamic channels (main + Omni + Sidebar Studio + Inline Diff + Wallpaper) must never leak (got ${activeScripts.size})`
+      activeScripts.size <= 18,
+      `HS-1: Active NewDocument script handles across 2 windows × 9 dynamic channels (main + Omni + Sidebar Studio + Inline Diff + Wallpaper + Periodic Picker + Mascot + Suggester + Home Studio) must never leak (got ${activeScripts.size})`
     );
 
     await daemon.stop(false);
@@ -2420,5 +2441,383 @@ test('13-provider localization coexistence: slider bilingual effort/model parsin
   }
   for (const extWidget of ['data-agy-hans-ui', 'agy-theme-switcher', 'agy-theme-menu', 'antigravity-quota-widget', 'antigravity-translation-audit']) {
     assert.ok(omniSrc.includes(extWidget), `omni-client must ignore external localization widget ${extWidget}`);
+  }
+});
+
+test('host-i18n runtime skips ag-pp- class prefix and #ag-prism-periodic-picker-root without mutating periodic picker DOM', () => {
+  const hostI18nMod = require(path.join(ROOT_DIR, 'vendor', 'host-i18n', 'host-i18n-runtime.js'));
+  const hostI18nSrc = fs.readFileSync(path.join(ROOT_DIR, 'vendor', 'host-i18n', 'host-i18n-runtime.js'), 'utf8');
+  assert.ok(hostI18nSrc.includes("'ag-pp-'"), "host-i18n-runtime.js must whitelist 'ag-pp-' class prefix");
+  assert.ok(hostI18nSrc.includes("'ag-prism-periodic-picker-root'"), "host-i18n-runtime.js must whitelist 'ag-prism-periodic-picker-root' ID");
+
+  const mkNode = (tag, text) => {
+    const attrs = new Map();
+    const el = {
+      nodeType: 1,
+      tagName: String(tag).toUpperCase(),
+      childNodes: [],
+      children: [],
+      parentNode: null,
+      parentElement: null,
+      isConnected: true,
+      className: '',
+      get id() { return attrs.get('id') || ''; },
+      set id(v) { attrs.set('id', String(v)); },
+      get firstChild() { return el.childNodes[0] || null; },
+      get nextSibling() {
+        if (!el.parentNode) return null;
+        const idx = el.parentNode.childNodes.indexOf(el);
+        return idx >= 0 ? el.parentNode.childNodes[idx + 1] || null : null;
+      },
+      getAttribute(k) { return attrs.has(k) ? attrs.get(k) : null; },
+      setAttribute(k, v) { attrs.set(k, String(v)); },
+      hasAttribute(k) { return attrs.has(k); },
+      removeAttribute(k) { attrs.delete(k); },
+      appendChild(child) {
+        child.parentNode = el;
+        child.parentElement = el;
+        child.isConnected = true;
+        el.childNodes.push(child);
+        if (child.nodeType === 1) el.children.push(child);
+        return child;
+      },
+    };
+    if (typeof text === 'string') {
+      const txt = {
+        nodeType: 3,
+        nodeValue: text,
+        parentNode: null,
+        parentElement: null,
+        isConnected: true,
+        get nextSibling() {
+          if (!this.parentNode) return null;
+          const idx = this.parentNode.childNodes.indexOf(this);
+          return idx >= 0 ? this.parentNode.childNodes[idx + 1] || null : null;
+        },
+      };
+      el.appendChild(txt);
+    }
+    return el;
+  };
+  const rootEl = mkNode('html');
+  const bodyEl = mkNode('body');
+  rootEl.appendChild(bodyEl);
+  const fakeDoc = {
+    documentElement: rootEl,
+    body: bodyEl,
+    readyState: 'complete',
+    hidden: false,
+    addEventListener() {},
+    removeEventListener() {},
+    querySelectorAll() { return []; },
+    querySelector() { return null; },
+    getElementById() { return null; },
+  };
+  const fakeWin = {
+    document: fakeDoc,
+    navigator: { language: 'zh-CN' },
+    addEventListener() {},
+    removeEventListener() {},
+    MutationObserver: class { observe() {} disconnect() {} },
+    setTimeout,
+    clearTimeout,
+  };
+
+  const ppWrap = mkNode('div');
+  ppWrap.className = 'ag-pp-stage';
+  const ppBtn = mkNode('button', 'Settings');
+  ppBtn.className = 'ag-pp-keycap';
+  ppBtn.setAttribute('aria-label', 'Settings');
+  ppWrap.appendChild(ppBtn);
+
+  const ppById = mkNode('div');
+  ppById.id = 'ag-prism-periodic-picker-root';
+  const ppInner = mkNode('span', 'Settings');
+  ppInner.setAttribute('aria-label', 'Settings');
+  ppById.appendChild(ppInner);
+
+  const hostBtn = mkNode('button', 'Settings');
+  hostBtn.setAttribute('aria-label', 'Settings');
+
+  bodyEl.appendChild(ppWrap);
+  bodyEl.appendChild(ppById);
+  bodyEl.appendChild(hostBtn);
+
+  const inst = hostI18nMod.mountHostI18n({
+    root: fakeWin,
+    doc: fakeDoc,
+    mode: 'on',
+    dict: { exact: { Settings: '设置' } },
+  });
+  try {
+    assert.equal(hostBtn.getAttribute('aria-label'), '设置', 'Normal host chrome button aria-label must be translated');
+    assert.equal(hostBtn.childNodes[0].nodeValue, '设置', 'Normal host chrome button text must be translated');
+    assert.equal(ppBtn.getAttribute('aria-label'), 'Settings', 'Elements under ag-pp-* class prefix must NEVER have attrs translated');
+    assert.equal(ppBtn.childNodes[0].nodeValue, 'Settings', 'Elements under ag-pp-* class prefix must NEVER have text translated');
+    assert.equal(ppInner.getAttribute('aria-label'), 'Settings', 'Elements inside #ag-prism-periodic-picker-root must NEVER have attrs translated');
+    assert.equal(ppInner.childNodes[0].nodeValue, 'Settings', 'Elements inside #ag-prism-periodic-picker-root must NEVER have text translated');
+  } finally {
+    inst.destroy();
+  }
+});
+
+test('Battle 5: usage-core.js full 8-locale coverage (ko/es/fr/de zero zh-CN fallback, yue->zh-CN, unknown->en)', () => {
+  const usageCore = require(path.join(ROOT_DIR, 'usage-core.js'));
+  assert.equal(usageCore.resolveLang(true), 'zh-CN');
+  assert.equal(usageCore.resolveLang(false), 'en');
+  assert.equal(usageCore.resolveLang(null), 'en');
+  assert.equal(usageCore.resolveLang(undefined), 'en');
+  assert.equal(usageCore.resolveLang('unknown-xx'), 'en');
+  assert.equal(usageCore.resolveLang('yue'), 'zh-CN');
+  assert.equal(usageCore.resolveLang('yue-HK'), 'zh-CN');
+  assert.equal(usageCore.resolveLang('zh-HK'), 'zh-TW');
+  assert.equal(usageCore.resolveLang('ko-KR'), 'ko');
+  assert.equal(usageCore.resolveLang('es-ES'), 'es');
+  assert.equal(usageCore.resolveLang('fr-FR'), 'fr');
+  assert.equal(usageCore.resolveLang('de-DE'), 'de');
+
+  const HAN_RE = /[\u4e00-\u9fff]/;
+  const now = new Date(2026, 10, 14, 12, 0, 0);
+  const dk = usageCore.homeDayKey(now);
+  const recs = [{
+    cascadeId: 'c1',
+    subagent: false,
+    days: { [dk]: { calls: 4, input: 12000, output: 3000, cacheRead: 10000, cacheWrite: 0, total: 25000, hours: Object.assign(new Array(24).fill(0), { 14: 4 }), models: { 'Gemini 4': { input: 12000, output: 3000, cacheRead: 10000, cacheWrite: 0, total: 25000, calls: 4 } } } },
+  }];
+  const nowMs = Date.UTC(2026, 10, 14, 12, 0, 0);
+  const grp = { id: 'custom-pool', windows: { '5h': { available: true, remaining: 0.45, resetAt: new Date(nowMs + 2 * 3600 * 1000).toISOString() } } };
+
+  for (const lang of ['en', 'ko', 'es', 'fr', 'de']) {
+    const rAll = usageCore.homeRangeLabel('all', lang);
+    const r30 = usageCore.homeRangeLabel('30d', lang);
+    const hr = usageCore.formatHomeHour(14, lang);
+    const agg = usageCore.aggregateUsageRollup(recs, 'all', 0, lang, now);
+    const qLbl = usageCore.quotaGroupLabel({ id: '' }, lang);
+    const eta = usageCore.shortEta(90 * 60 * 1000, lang);
+    const eta0 = usageCore.shortEta(0, lang);
+    const rst = usageCore.fmtResetTime(Math.floor(nowMs / 1000) + 5400, lang, Math.floor(nowMs / 1000));
+    const pace = usageCore.groupQuotaPace(grp, lang, nowMs);
+    const dStr = usageCore.homeShortDate(usageCore.homeShortDateFormat(lang), dk);
+    for (const piece of [rAll, r30, hr, agg.funBook, qLbl, eta, eta0, rst, pace.label, pace.detail, dStr]) {
+      assert.ok(typeof piece === 'string' && piece.length > 0, `${lang} returned empty string`);
+      assert.equal(HAN_RE.test(piece), false, `${lang} leaked Han CJK char in "${piece}"`);
+    }
+  }
+  assert.equal(usageCore.homeRangeLabel('all', 'ko'), '전체');
+  assert.equal(usageCore.homeRangeLabel('30d', 'fr'), '30j');
+  assert.equal(usageCore.homeRangeLabel('7d', 'de'), '7T');
+  assert.equal(usageCore.homeRangeLabel('all', 'es'), 'Todo');
+  assert.match(usageCore.aggregateUsageRollup(recs, 'all', 0, 'ko', now).funBook, /토큰/);
+});
+
+test('Battle 5: pulse-dashboard metrics.mjs BigInt/cadence drift guards & store.mjs GetUserStatus quotaInfo fallback', async () => {
+  const { tokenCount, quotaMetrics } = await import('../vendor/pulse-dashboard/sidecars/panel/metrics.mjs');
+  const { MetricsStore, fallbackQuotaFromUserStatus } = await import('../vendor/pulse-dashboard/sidecars/panel/store.mjs');
+
+  // 1) BigInt tokenCount support + safe bounds
+  assert.equal(tokenCount(0n), 0);
+  assert.equal(tokenCount(123456n), 123456);
+  assert.equal(tokenCount(-5n), null);
+  assert.equal(tokenCount(BigInt(Number.MAX_SAFE_INTEGER) + 1n), null);
+
+  // 2) cadence() handles upstream window & bucketId drift variants without misinterpreting explicit non-5h/weekly windows
+  const now = Date.UTC(2026, 10, 14, 12, 0, 0);
+  const isoFuture = new Date(now + 3600 * 1000).toISOString();
+  const qm = quotaMetrics({
+    groups: [
+      {
+        displayName: 'Gemini Drift',
+        buckets: [
+          { bucketId: 'gemini-FIVE_HOURS', window: 'FIVE_HOURS', remainingFraction: 0.72, remainingAmount: 4200n, resetTime: isoFuture },
+          { bucketId: 'gemini-WEEKLY', window: 'WEEKLY', remainingFraction: 0.88, resetTime: isoFuture },
+        ],
+      },
+      {
+        displayName: 'Claude Drift',
+        buckets: [
+          { bucketId: 'claude-5_hours', remainingFraction: 0.55, resetTime: isoFuture },
+          { bucketId: 'claude-7_days', remainingFraction: 0.91, resetTime: isoFuture },
+          { bucketId: 'claude-daily', window: 'daily', remainingFraction: 0.1, resetTime: isoFuture },
+        ],
+      },
+      {
+        displayName: 'Explicit Non-Standard',
+        buckets: [
+          { bucketId: 'other-5h', window: 'monthly', remainingFraction: 0.5, resetTime: isoFuture },
+        ],
+      },
+    ],
+  }, now);
+  assert.equal(qm[0].id, 'gemini');
+  assert.equal(qm[0].windows['5h'].available, true);
+  assert.equal(qm[0].windows['5h'].remaining, 0.72);
+  assert.equal(qm[0].windows['5h'].amount, 4200);
+  assert.equal(qm[0].windows.weekly.available, true);
+  assert.equal(qm[0].windows.weekly.remaining, 0.88);
+  assert.equal(qm[1].id, 'claude');
+  assert.equal(qm[1].windows['5h'].remaining, 0.55);
+  assert.equal(qm[1].windows.weekly.remaining, 0.91);
+  assert.equal(qm[2].windows['5h'].available, false, 'Explicit window="monthly" must not be reinterpreted from bucketId');
+
+  // 3) store.mjs refreshQuota() gracefully falls back to GetUserStatus.clientModelConfigs[].quotaInfo on empty pool or RPC error
+  const userStatusPayload = {
+    userStatus: {
+      email: 'dev@example.com',
+      cascadeModelConfigData: {
+        clientModelConfigs: [
+          { label: 'Gemini 4 Carbon', modelOrAlias: { model: 'gemini-4-carbon' }, quotaInfo: { remainingFraction: 0.8, resetTime: isoFuture } },
+          { label: 'Gemini 4 Flash', modelOrAlias: { model: 'gemini-4-flash' }, quotaInfo: { remainingFraction: 0.65, resetTime: isoFuture } },
+          { label: 'Claude Opus 4.6', modelOrAlias: { model: 'claude-opus-4-6' }, quotaInfo: { remainingFraction: 0.42, resetTime: isoFuture } },
+        ],
+      },
+    },
+  };
+  const directFb = fallbackQuotaFromUserStatus(userStatusPayload, now);
+  assert.equal(directFb.length, 2);
+  assert.equal(directFb.find((g) => g.id === 'gemini').windows['5h'].remaining, 0.65, 'Same-family fallback must pick conservative lowest remainingFraction');
+  assert.equal(directFb.find((g) => g.id === 'claude').windows['5h'].remaining, 0.42);
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-quota-fb-'));
+  try {
+    let quotaMode = 'empty';
+    const mockClient = {
+      async call(method) {
+        if (method === 'GetUserStatus') return userStatusPayload;
+        if (method === 'RetrieveUserQuotaSummary') {
+          if (quotaMode === 'empty') return { groups: [], buckets: [] };
+          throw new Error('RetrieveUserQuotaSummary_deprecated');
+        }
+        return {};
+      },
+    };
+    const store = new MetricsStore(mockClient, { dataDir: tmpDir, transcripts: null });
+    await store.refreshQuota(true);
+    assert.equal(store.quota.length, 2, 'Empty RetrieveUserQuotaSummary must fall back to GetUserStatus quotaInfo');
+    assert.equal(store.quota.find((g) => g.id === 'claude').windows['5h'].remaining, 0.42);
+
+    quotaMode = 'throw';
+    await store.refreshQuota(true);
+    assert.equal(store.quota.length, 2, 'Throwing RetrieveUserQuotaSummary must fall back to GetUserStatus quotaInfo');
+
+    // When both RetrieveUserQuotaSummary throws AND GetUserStatus has no quotaInfo, propagate the error
+    const errStore = new MetricsStore({
+      async call(method) {
+        if (method === 'GetUserStatus') return { userStatus: { email: 'none@example.com' } };
+        throw new Error('rpc_down');
+      },
+    }, { dataDir: tmpDir, transcripts: null });
+    await assert.rejects(() => errStore.refreshQuota(true), /rpc_down/);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('Battle 5: slider-coexist Traditional Chinese EFF_MAP / Current: prefix & full 5+1 anti-translation attributes across all owned modules', () => {
+  // 1) Traditional Chinese EFF_MAP & parseLocalizedModelLabel
+  assert.equal(sliderMod.normalizeEffortToken('極高'), 'xhigh');
+  assert.equal(sliderMod.normalizeEffortToken('極低'), 'minimal');
+  assert.equal(sliderMod.normalizeEffortToken('極簡'), 'minimal');
+  assert.equal(sliderMod.normalizeEffortToken('關閉'), 'off');
+  assert.equal(sliderMod.normalizeEffortToken('關'), 'off');
+  assert.equal(sliderMod.normalizeEffortToken('無'), 'off');
+  const pTw = sliderMod.parseLocalizedModelLabel('選擇模型：Claude Opus 4.6（極高）');
+  assert.equal(pTw.rawBase, 'Claude Opus 4.6');
+  assert.equal(pTw.effort, 'xhigh');
+  assert.equal(pTw.canonicalLabel, 'Claude Opus 4.6 (Extra)');
+  const pCur = sliderMod.parseLocalizedModelLabel('Current: Gemini 4 Hydrogen (Minimal)');
+  assert.equal(pCur.rawBase, 'Gemini 4 Hydrogen');
+  assert.equal(pCur.effort, 'minimal');
+
+  // 2) Full 5+1 anti-translation attributes verified across bento-ui, upstream-client, inline-fallback, home-studio-panel
+  const bentoSrc = fs.readFileSync(path.join(ROOT_DIR, 'vendor', 'periodic-picker', 'bento-ui.js'), 'utf8');
+  for (const attr of ['data-ag-no-i18n', 'translate', 'data-no-translate', 'data-ag-localization-skip', 'data-agy-no-translate', 'data-antigravity-zh-skip']) {
+    assert.ok(bentoSrc.includes(`'${attr}'`), `bento-ui.js markPeriodicOwnedRoot must stamp ${attr}`);
+  }
+  const upstreamSlider = require(path.join(ROOT_DIR, 'vendor', 'effort-slider', 'upstream-client.js'));
+  const upEnv = createLightweightDom();
+  const upNode = upEnv.makeEl('div');
+  upstreamSlider.markNoTranslate(upNode);
+  assert.equal(upNode.getAttribute('translate'), 'no');
+  assert.equal(upNode.getAttribute('data-ag-localization-skip'), 'true');
+  assert.equal(upNode.getAttribute('data-agy-no-translate'), 'true');
+  assert.equal(upNode.getAttribute('data-antigravity-zh-skip'), '1');
+  assert.equal(upNode.getAttribute('data-ag-no-i18n'), '');
+
+  const pulseEnv = createLightweightDom();
+  const pulseCtl = telemetryMod.createTelemetryController({ window: pulseEnv.win, document: pulseEnv.doc });
+  try {
+    pulseCtl.sync({ telemetryModule: 'on' });
+    const bar = pulseEnv.doc.getElementById('ag-prism-pulse-bar');
+    assert.equal(bar.getAttribute('data-ag-no-i18n'), '', '#ag-prism-pulse-bar must include data-ag-no-i18n=""');
+    assert.equal(bar.getAttribute('data-no-translate'), 'true');
+    assert.equal(bar.getAttribute('data-ag-localization-skip'), 'true');
+    assert.equal(bar.getAttribute('data-agy-no-translate'), 'true');
+    assert.equal(bar.getAttribute('data-antigravity-zh-skip'), '1');
+  } finally {
+    pulseCtl.destroy();
+  }
+});
+
+test('Smoked Obsidian Wave 1: style.css hygiene (0 :has, ASCII, LF, no BOM, home-panel backdrop-filter:none) & Ch1 < 549,500 B across all 9 locales', () => {
+  const cssBuf = fs.readFileSync(path.join(ROOT_DIR, 'style.css'));
+  assert.equal(cssBuf[0] === 0xef && cssBuf[1] === 0xbb && cssBuf[2] === 0xbf, false, 'style.css must have zero UTF-8 BOM');
+  const css = cssBuf.toString('utf8');
+  assert.equal(css.includes('\r'), false, 'style.css must use LF line endings only (0 CRLF)');
+  assert.equal(css.includes(':has('), false, 'style.css must have 0 :has(');
+  assert.equal(/[^\x00-\x7F]/.test(css), false, 'style.css must be strictly ASCII');
+  const homeLine = css.split('\n').find((l) => l.startsWith('.ag-cs-home-panel{')) || '';
+  assert.ok(homeLine.includes('backdrop-filter:none') && !homeLine.includes('blur('));
+  assert.ok(css.includes('.ag-cs-home-chart-svg{') && css.includes('.ag-cs-home-chart-peak{'));
+  assert.ok(css.includes('--ag-cs-menu-bg:rgba(13,14,18,.94);') && css.includes('--ag-cs-menu-bg-l:rgba(252,253,254,.96);'));
+
+  for (const lang of ['auto', 'zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de']) {
+    const expr = cdp.buildInjectExpression({ ...cdp.DEFAULT_CONFIG, language: lang }, { bundleCachePath: '' });
+    const bytes = Buffer.byteLength(expr, 'utf8');
+    assert.ok(bytes < 580000, `Channel 1 (${lang}) must be strictly < 580,000 B, got ${bytes}`);
+  }
+});
+
+test('Issue #81: inline-fallback TIER_CSS uses --pt-c instead of --c so external Dashboard card background is never overridden', async () => {
+  const fbPath = path.join(ROOT_DIR, 'vendor', 'pulse-dashboard', 'inline-fallback.js');
+  const bridgePath = path.join(ROOT_DIR, 'pulse-vial-bridge.js');
+  const fbSrc = fs.readFileSync(fbPath, 'utf8');
+  const bridgeBytes = fs.statSync(bridgePath).size;
+
+  assert.ok(bridgeBytes < 31000, `pulse-vial-bridge.js must stay < 31,000 B (got ${bridgeBytes})`);
+  assert.equal(/--c\s*:/.test(fbSrc), false, 'inline-fallback.js must not declare --c: CSS custom property');
+  assert.equal(/var\(\s*--c\s*[,)]/.test(fbSrc), false, 'inline-fallback.js must not reference var(--c)');
+  assert.ok(fbSrc.includes('--pt-c:var(--pv-tint,var(--pulse-ring,#3186ff))'), 'TIER_CSS must declare isolated --pt-c');
+  assert.ok(fbSrc.includes('color-mix(in srgb,var(--pt-c) '), 'TIER_CSS tier-5 highlight must reference var(--pt-c)');
+
+  // Runtime check: external #ag-pulse-status-bar receives style[data-pt="1"] without --c collision
+  const telemetryMod = require(fbPath);
+  const env = createLightweightDom();
+  const extBar = env.doc.createElement('div');
+  extBar.id = 'ag-pulse-status-bar';
+  const extStyles = [];
+  const bridgeStyle = env.doc.createElement('style');
+  bridgeStyle.setAttribute('data-ag-cs-pulse-style', '1');
+  bridgeStyle.textContent = ':host{--c:linear-gradient(160deg,#12151ff5,#0b0d13fa);}.card{background:var(--c)!important;}';
+  extStyles.push(bridgeStyle);
+  extBar.shadowRoot = {
+    querySelector: (sel) => (String(sel).includes('data-pt') ? extStyles.find((s) => s.getAttribute('data-pt') === '1') || null : null),
+    appendChild: (el) => { extStyles.push(el); return el; },
+  };
+  const footer = env.doc.createElement('div');
+  footer.className = 'agy-composer-footer';
+  footer.getBoundingClientRect = () => ({ left: 0, top: 0, width: 320, height: 30, right: 320, bottom: 30 });
+  footer.appendChild(extBar);
+  env.doc.body.appendChild(footer);
+
+  const ctl = telemetryMod.createTelemetryController({ window: env.win, document: env.doc });
+  try {
+    ctl.sync({ telemetryModule: 'auto' });
+    const ptStyle = extStyles.find((s) => s.getAttribute('data-pt') === '1');
+    assert.ok(ptStyle, 'external bar shadowRoot must receive style[data-pt="1"]');
+    assert.equal(/--c\s*:/.test(ptStyle.textContent), false, 'injected style[data-pt="1"] must not define --c:');
+    assert.ok(ptStyle.textContent.includes('--pt-c:'), 'injected style[data-pt="1"] must define --pt-c:');
+    assert.ok(ptStyle.textContent.includes('var(--pt-c)'), 'injected style[data-pt="1"] must reference var(--pt-c)');
+  } finally {
+    ctl.destroy();
   }
 });

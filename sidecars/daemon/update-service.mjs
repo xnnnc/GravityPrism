@@ -209,7 +209,7 @@ export class UpdateService {
     fetchFn = globalThis.fetch,
     spawnFn = spawn,
     platform = process.platform,
-    currentVersion = '1.0.7',
+    currentVersion = '1.2.0',
     channel = 'stable',
     checkTtlMs = CHECK_TTL_MS,
     manualCooldownMs = MANUAL_COOLDOWN_MS,
@@ -221,7 +221,7 @@ export class UpdateService {
     this.fetchFn = fetchFn;
     this.spawnFn = spawnFn;
     this.platform = platform;
-    this.currentVersion = normalizeVersionStr(currentVersion) || '1.0.7';
+    this.currentVersion = normalizeVersionStr(currentVersion) || '1.2.0';
     this.channel = normalizeUpdateChannel(channel);
     this.checkTtlMs = Math.max(0, Number(checkTtlMs) || 0);
     this.manualCooldownMs = Math.max(0, Number(manualCooldownMs) || 0);
@@ -299,13 +299,24 @@ export class UpdateService {
       assets.find((a) => String(a?.name || '') === 'Obsidian-Prism-macOS-universal.dmg') ||
       assets.find((a) => /\.dmg$/i.test(String(a?.name || ''))) ||
       null;
+    const linuxAsset =
+      assets.find((a) => String(a?.name || '').toLowerCase() === 'obsidian-prism-linux-portable.tar.gz') ||
+      assets.find((a) => /linux.*\.tar\.gz$/i.test(String(a?.name || ''))) ||
+      null;
     const rawShaAsset = assets.find((a) => String(a?.name || '') === 'SHA256SUMS.txt') || null;
     const shaAsset =
       rawShaAsset && isTrustedSelectedAssetUrl(rawShaAsset.browser_download_url)
         ? rawShaAsset
         : null;
 
-    const targetAsset = this.platform === 'win32' ? winAsset : this.platform === 'darwin' ? macAsset : null;
+    const targetAsset =
+      this.platform === 'win32'
+        ? winAsset
+        : this.platform === 'darwin'
+          ? macAsset
+          : this.platform === 'linux'
+            ? linuxAsset
+            : null;
     const mode = this.platform === 'win32' ? 'installer' : 'manual';
     const hotReloadCapable = this.platform === 'win32';
     const manualRequired = this.platform !== 'win32';

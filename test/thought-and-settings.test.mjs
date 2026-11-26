@@ -1,11 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import path from 'node:path';
+import vm from 'node:vm';
+import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const cdp = require('../cdp.js');
 const i18nCore = require('../i18n-core.js');
 const i18nLocales = require('../i18n-locales.js');
 const settingsPanel = require('../settings-panel.js');
+const { PrismDaemon } = await import('../sidecars/daemon/main.mjs');
 
 function createMockDomEnv(initialTheme = 'dark') {
   const storeMap = new Map([['ag-prism:settings-open', '1']]);
@@ -323,25 +329,26 @@ test('mountOrSyncSettingsSection mounts all 27 settings (including omniModule, l
     },
   };
 
+  const resolveTestLang = () => (state.language === 'auto' ? 'zh-CN' : state.language);
   const remountOrSync = () => {
     settingsPanel.mountOrSyncSettingsSection({
       version: '1.0.1',
-      getLang: () => state.language,
+      getLang: resolveTestLang,
       uiText: (l) => i18nLocales.getUiStrings(l),
-      isZh: () => state.language !== 'en' && state.language !== 'ja',
+      isZh: () => { const l = resolveTestLang(); return l !== 'en' && l !== 'ja'; },
       i18nCore,
       formatSettingsSummary: (l, u) => `${l}:${state.palette}:${u.optLinkBuiltin}`,
-      resolveSettingRowActiveValue: (k) => state[k],
+      resolveSettingRowActiveValue: (k) => (k === 'language' ? resolveTestLang() : state[k]),
       isSettingButtonMatch: (k, valJson, cur) => JSON.parse(valJson) === cur,
       saveSetting: (k, v) => {
-        const prevLang = state.language;
+        const prevLang = resolveTestLang();
         state[k] = v;
-        if (k === 'language' && v !== prevLang) remountOrSync();
+        if (k === 'language' && resolveTestLang() !== prevLang) remountOrSync();
       },
       saveSettingsBatch: (patch) => {
-        const prevLang = state.language;
+        const prevLang = resolveTestLang();
         Object.assign(state, patch);
-        if (patch.language && patch.language !== prevLang) remountOrSync();
+        if (patch.language && resolveTestLang() !== prevLang) remountOrSync();
       },
       getThoughtTranslateMode: () => state.thoughtTranslate,
       handledGroupClicks: new WeakSet(),
@@ -362,13 +369,13 @@ test('mountOrSyncSettingsSection mounts all 27 settings (including omniModule, l
     assert.equal(sec.getAttribute('data-agy-no-translate'), 'true');
     assert.equal(sec.getAttribute('data-antigravity-zh-skip'), '1');
     const allRows = sec.querySelectorAll('[data-ag-cs-row]');
-    assert.equal(allRows.length, 35, 'Must render all 35 setting rows');
+    assert.equal(allRows.length, 39, 'Must render all 39 setting rows');
     const interactionGrp = sec.querySelector('[data-ag-cs-group="interaction"]');
     const interactionRowKeys = interactionGrp.querySelectorAll('[data-ag-cs-row]').map((r) => r.getAttribute('data-ag-cs-row'));
     assert.ok(interactionRowKeys.includes('sidebarNavFold'), 'interaction group must include sidebarNavFold');
     const modulesGrp = sec.querySelector('[data-ag-cs-group="modules"]');
     const moduleRowKeys = modulesGrp.querySelectorAll('[data-ag-cs-row]').map((r) => r.getAttribute('data-ag-cs-row'));
-    assert.deepEqual(moduleRowKeys, ['telemetryModule', 'effortSliderModule', 'effortSliderStyle', 'effortMemory', 'omniModule', 'linkTarget']);
+    assert.deepEqual(moduleRowKeys, ['telemetryModule', 'effortSliderModule', 'effortSliderStyle', 'effortMemory', 'periodicModelPicker', 'omniModule', 'linkTarget']);
     const betaGrp = sec.querySelector('[data-ag-cs-group="beta"]');
     assert.ok(betaGrp, 'Beta features group must mount');
     const betaRowKeys = betaGrp.querySelectorAll('[data-ag-cs-row]').map((r) => r.getAttribute('data-ag-cs-row'));
@@ -433,9 +440,14 @@ test('mountOrSyncSettingsSection mounts all 27 settings (including omniModule, l
     await new Promise((r) => setTimeout(r, 25));
     assert.equal(clipboardWrites.length, 1);
     const exportedObj = JSON.parse(clipboardWrites[0]);
-    assert.equal(Object.keys(exportedObj.settings).length, 35);
+    assert.equal(Object.keys(exportedObj.settings).length, 40);
     assert.equal(exportedObj.settings.effortSliderStyle, 'classic');
+    assert.equal(exportedObj.settings.darkAura, 'balanced');
+    assert.equal(exportedObj.settings.darkAuraStyle, 'prism');
+    assert.equal(exportedObj.settings.convRipple, 'off');
+    assert.equal(exportedObj.settings.autoArchiveOnExit, false);
     assert.equal(exportedObj.settings.effortMemory, 'on');
+    assert.equal(exportedObj.settings.periodicModelPicker, 'on');
     assert.equal(exportedObj.settings.sidebarNavFold, 'off');
     assert.equal(exportedObj.settings.scrollBottomMotion, 'smooth');
     assert.equal(exportedObj.settings.updateChannel, 'stable');
@@ -467,9 +479,10 @@ test('mountOrSyncSettingsSection mounts all 27 settings (including omniModule, l
     assert.equal(statusAfterImport.getAttribute('data-tone'), 'ok', 'Green toast must survive cross-language panel rebuild');
     assert.equal(statusAfterImport.textContent, i18nLocales.getUiStrings('en').cfgImportOk);
 
-    // 6. Cross-language Reset Defaults (en -> zh-CN) restores all 26 defaults & preserves green 'ok' toast in zh-CN
+    // 6. Cross-language Reset Defaults (en -> auto -> zh-CN) restores defaults & preserves green 'ok' toast in zh-CN
     sec.querySelector('button[data-ag-cs-cfg-action="reset"]').click();
     sec = doc.getElementById(settingsPanel.SETTINGS_SEC_ID);
+    assert.equal(state.language, 'auto');
     assert.equal(sec.getAttribute('data-ag-cs-lang'), 'zh-CN');
     assert.equal(state.omniModule, 'on');
     assert.equal(state.linkTarget, 'builtin');
@@ -683,12 +696,41 @@ test('settings-panel lazy foldBody deferral on collapsed mount, memoized syncRoo
     assert.equal(foldBody.children.length, 0);
     assert.equal(matchCalls, 0);
 
-    // First click on foldHead lazily constructs all 33 rows and 6 groups
+    // First click on foldHead lazily constructs all 38 rows and 6 groups
     foldHead.click();
     assert.equal(sec.getAttribute('data-open'), '1');
     assert.equal(sec.getAttribute('data-body-built'), '1');
-    assert.equal(sec.querySelectorAll('[data-ag-cs-row]').length, 35);
+    assert.equal(sec.querySelectorAll('[data-ag-cs-row]').length, 39);
     assert.equal(sec.querySelectorAll('.ag-cs-settings-group').length, 6);
+    assert.equal(sec.querySelector('button[data-ag-cs-repo-sync]')?.getAttribute('data-tone'), 'secondary');
+    assert.equal(sec.querySelector('button[data-ag-cs-update-check]')?.getAttribute('data-tone'), null);
+    assert.equal(sec.querySelector('button[data-ag-cs-archive-restart]')?.getAttribute('data-tone'), 'amber');
+    assert.equal(sec.querySelector('button[data-ag-cs-storage-restore]')?.getAttribute('data-tone'), 'secondary');
+    assert.equal(sec.querySelector('button[data-ag-cs-storage-archive]')?.getAttribute('data-tone'), 'secondary');
+    assert.equal(sec.querySelector('button[data-ag-cs-gomemlimit-clear]')?.getAttribute('data-tone'), 'secondary');
+    assert.ok(sec.querySelector('.ag-cs-credit-top .ag-cs-credit-repo'), 'Credits cards must use 2-row top/meta structure');
+    assert.ok(sec.querySelector('.ag-cs-credit-meta'), 'Credits cards must include .ag-cs-credit-meta line');
+    assert.equal(sec.querySelector('.ag-cs-about-credits .shrink-0'), null, 'Credits cards must not use single-row shrink-0 layout');
+    const archRestartBtn = sec.querySelector('button[data-ag-cs-archive-restart]');
+    const restoreBtn = sec.querySelector('button[data-ag-cs-storage-restore]');
+    const archiveBtn = sec.querySelector('button[data-ag-cs-storage-archive]');
+    assert.equal(archRestartBtn.parentElement, restoreBtn.parentElement);
+    assert.equal(archRestartBtn.parentElement, archiveBtn.parentElement);
+    const aboutBox = sec.querySelector('[data-ag-cs-about="1"]');
+    const actionRow = archRestartBtn.closest('.ag-cs-about-repo-row');
+    const autoExitRow = sec.querySelector('[data-ag-cs-auto-archive-exit="off"]').closest('.ag-cs-about-repo-row');
+    assert.ok(aboutBox.children.indexOf(actionRow) > -1 && aboutBox.children.indexOf(actionRow) < aboutBox.children.indexOf(autoExitRow));
+    const ch9Style = doc.getElementById('ag-prism-settings-v101-css');
+    assert.ok(ch9Style, 'Expanding settings body must inject Channel 9 settings CSS even when #ag-prism-css is present');
+    assert.ok(ch9Style.textContent.includes('.ag-cs-settings-topdeck') && ch9Style.textContent.includes('.ag-cs-subtabs') && ch9Style.textContent.includes('.ag-cs-tone-dot'));
+    assert.ok(ch9Style.textContent.includes('[data-tone="amber"]') && ch9Style.textContent.includes('#92400E'));
+    assert.ok(ch9Style.textContent.includes('.ag-cs-credit-top') && ch9Style.textContent.includes('max-height:280px'));
+    assert.ok(ch9Style.textContent.includes('.ag-cs-thought-cfg-box') && ch9Style.textContent.includes('@media (max-width:640px){html[data-ag-cs-style] #ag-cs-settings-sec .ag-cs-thought-grid'));
+    assert.ok(ch9Style.textContent.indexOf('.ag-cs-about-box a[href]{') > -1 && ch9Style.textContent.indexOf('.ag-cs-about-box a[href]{') < ch9Style.textContent.indexOf('.ag-cs-about-credits a[href]{'));
+    assert.ok(ch9Style.textContent.indexOf(':is(.ag-cs-license-pre,.ag-cs-about-box pre){') > -1 && ch9Style.textContent.indexOf(':is(.ag-cs-license-pre,.ag-cs-about-box pre){') < ch9Style.textContent.indexOf('.ag-cs-about-box pre[data-ag-cs-storage-detail="1"]{'));
+    assert.ok(ch9Style.textContent.includes('.ag-prism-wp-sliders') && ch9Style.textContent.includes('gap:12px 18px') && ch9Style.textContent.includes('.ag-prism-wp-slider-val'));
+    assert.equal(ch9Style.textContent.includes(':has('), false, 'Channel 9 settings CSS must contain 0 :has() selectors');
+    assert.equal(/[^\x09\x0a\x0d\x20-\x7e]/.test(ch9Style.textContent), false, 'Channel 9 settings CSS must be pure ASCII');
     const callsAfterExpand = matchCalls;
     assert.ok(callsAfterExpand > 0);
 
@@ -713,4 +755,237 @@ test('settings-panel lazy foldBody deferral on collapsed mount, memoized syncRoo
     if (prevStorage === undefined) delete globalThis.localStorage;
     else globalThis.localStorage = prevStorage;
   }
+});
+
+test('Channel 9 hot-reload destroys stale settings node (clearing thought handle) and PrismDaemon self-heals settings & wallpaper hashes without spinning', async () => {
+  const ch9Expr = cdp.buildSettingsChannelExpression();
+  const hashMatch = /const targetHash = "([^"]+)"/.exec(ch9Expr);
+  assert.ok(hashMatch && hashMatch[1], 'Channel 9 expression must embed targetHash');
+  const expectedHash = hashMatch[1];
+
+  const { doc } = createMockDomEnv('dark');
+  const panel = doc.querySelector('.p-6') || doc.body;
+  const staleSec = doc.createElement('div');
+  staleSec.id = 'ag-cs-settings-sec';
+  let mascotDisposed = false;
+  let wpDestroyed = false;
+  let sgDestroyed = false;
+  staleSec.__agMascotStageApi = { dispose() { mascotDisposed = true; } };
+  staleSec.__prismThoughtUiHandle = { box: {} };
+  const wpSlot = doc.createElement('div');
+  wpSlot.setAttribute('data-testid', 'prism-wallpaper-slot');
+  wpSlot.__agPrismWpUiHandle = { destroy() { wpDestroyed = true; } };
+  const sgSlot = doc.createElement('div');
+  sgSlot.setAttribute('data-testid', 'prism-suggester-slot');
+  sgSlot.__agPrismSgUiHandle = { destroy() { sgDestroyed = true; } };
+  staleSec.appendChild(wpSlot);
+  staleSec.appendChild(sgSlot);
+  panel.appendChild(staleSec);
+
+  let syncCalled = false;
+  let remountedThought = false;
+  let remountedWp = false;
+  let remountedSg = false;
+
+  const sandbox = {
+    document: doc,
+    window: null,
+    globalThis: null,
+    setTimeout,
+    clearTimeout,
+    console,
+    Map,
+    Set,
+    WeakMap,
+    WeakSet,
+    JSON,
+    Object,
+    Array,
+    String,
+    Number,
+    Boolean,
+    RegExp,
+    Math,
+    Date,
+    Promise,
+    Error,
+  };
+  sandbox.window = sandbox;
+  sandbox.globalThis = sandbox;
+  sandbox.self = sandbox;
+  sandbox.top = sandbox;
+  sandbox.__agPrismSettingsPanel = { __prismCodeHash: 'stale-old-hash-1286lph' };
+  sandbox.__agCsLocales = { __isFullLocales: true };
+  sandbox.__agPrism = {
+    sync() {
+      syncCalled = true;
+      assert.equal(doc.getElementById('ag-cs-settings-sec'), null, 'stale #ag-cs-settings-sec must be removed before sync() rebuilds it');
+      const freshSec = doc.createElement('div');
+      freshSec.id = 'ag-cs-settings-sec';
+      freshSec.__prismMountThoughtUi = () => { remountedThought = true; };
+      freshSec.__prismMountWp = () => { remountedWp = true; };
+      freshSec.__prismMountSg = () => { remountedSg = true; };
+      panel.appendChild(freshSec);
+    },
+  };
+
+  const res = vm.runInNewContext(ch9Expr, sandbox);
+  assert.equal(res.ok, true);
+  assert.equal(res.codeHash, expectedHash);
+  assert.equal(res.reused, undefined, 'stale settingsCodeHash must not be reused');
+  assert.equal(mascotDisposed, true);
+  assert.equal(wpDestroyed, true);
+  assert.equal(sgDestroyed, true);
+  assert.equal(staleSec.__prismThoughtUiHandle, null, 'stale #ag-cs-settings-sec.__prismThoughtUiHandle must be cleared');
+  assert.equal(syncCalled, true);
+  assert.equal(remountedThought, true);
+  assert.equal(remountedWp, true, 'Channel 9 hot-reload must call #ag-cs-settings-sec.__prismMountWp()');
+  assert.equal(remountedSg, true);
+
+  const daemon = new PrismDaemon({
+    rootDir: ROOT,
+    enableStorageGuardTimer: false,
+    enableAutoUpdateTimer: false,
+    silent: true,
+  });
+  daemon.cdp = {
+    ...cdp,
+    PLUGIN_VERSION: cdp.PLUGIN_VERSION,
+    readConfig: () => ({
+      ...cdp.DEFAULT_CONFIG,
+      mascot: 'off',
+      homeLayout: 'off',
+      periodicModelPicker: 'off',
+      telemetryModule: 'off',
+      omniModule: 'off',
+      sidebarStudio: 'off',
+      hostLocalization: 'off',
+      thoughtTranslate: 'off',
+    }),
+  };
+  daemon.codeHash = 'ch1-same-hash';
+  daemon.injectExpr = '(() => ({ status: "ok" }))()';
+
+  const makeEntry = (probeResult, extra = {}) => {
+    const events = [];
+    const entry = {
+      wsUrl: 'ws://127.0.0.1/page/1',
+      pageId: 'p1',
+      title: 'Antigravity',
+      url: 'https://127.0.0.1:13605/c/1',
+      sidebarHostVerified: true,
+      inlineDiffSkipped: true,
+      wallpaperSkipped: true,
+      suggesterSkipped: true,
+      ...extra,
+      session: {
+        closed: false,
+        evaluate: async (expr) => {
+          if (typeof expr === 'string' && expr.includes('__agPrismWallpaper') && !expr.includes('hasWallpaperUi')) {
+            events.push('wp-eval');
+            return { ok: true, status: 'mounted' };
+          }
+          return probeResult;
+        },
+        send: async (method, params) => {
+          if (method === 'Page.removeScriptToEvaluateOnNewDocument') {
+            events.push(`rm:${params.identifier}`);
+            return {};
+          }
+          if (method === 'Page.addScriptToEvaluateOnNewDocument') {
+            events.push('add-doc-script');
+            return { identifier: 'wp-script-new' };
+          }
+          if (method === 'Runtime.evaluate' && params?.expression?.includes('__agPrismSettingsPanel')) {
+            events.push('ch9-deliver');
+            return { result: { value: { ok: true, codeHash: expectedHash } } };
+          }
+          return { result: { value: null } };
+        },
+      },
+    };
+    return { entry, events };
+  };
+
+  const baseProbe = {
+    ready: true,
+    isHostDom: true,
+    prismAttr: cdp.PLUGIN_VERSION,
+    hasPrism: true,
+    hasRepoBridge: true,
+    hasThoughtBridge: true,
+    hasUsageBridge: true,
+    hasLegacyCss: false,
+    codeHash: 'ch1-same-hash',
+  };
+
+  // Case A: Fresh page (never opened settings) -> 0 Channel 9 delivery
+  const fresh = makeEntry({ ...baseProbe, hasSettingsPanel: false, hasSettingsDialog: false, settingsCodeHash: '', needsSettingsChannel: false });
+  await daemon.verifyAndHealEntry(fresh.entry, true);
+  assert.equal(fresh.events.filter((e) => e === 'ch9-deliver').length, 0);
+
+  // Case B: Previously opened settings (now closed), stale settingsCodeHash -> 1 Channel 9 delivery
+  const staleClosed = makeEntry({ ...baseProbe, hasSettingsPanel: true, hasSettingsDialog: false, settingsCodeHash: '1286lph', needsSettingsChannel: false });
+  await daemon.verifyAndHealEntry(staleClosed.entry, true);
+  assert.equal(staleClosed.events.filter((e) => e === 'ch9-deliver').length, 1);
+
+  // Case C: Up-to-date settingsCodeHash -> 0 Channel 9 delivery
+  const upToDate = makeEntry({ ...baseProbe, hasSettingsPanel: true, hasSettingsDialog: true, settingsCodeHash: expectedHash, needsSettingsChannel: false });
+  await daemon.verifyAndHealEntry(upToDate.entry, true);
+  assert.equal(upToDate.events.filter((e) => e === 'ch9-deliver').length, 0);
+
+  // Case D: Non-settings dialog without settings panel/hash -> must NOT falsely trigger settingsHashMismatch
+  const nonSettingsDialog = makeEntry({ ...baseProbe, hasSettingsPanel: false, hasSettingsDialog: true, settingsCodeHash: '', needsSettingsChannel: false });
+  await daemon.verifyAndHealEntry(nonSettingsDialog.entry, true);
+  assert.equal(nonSettingsDialog.events.filter((e) => e === 'ch9-deliver').length, 0);
+
+  // Case E & F: Stale wallpaperCodeHash + stale settingsCodeHash -> replaces wallpaperScriptId, evaluates wallpaperExpr BEFORE Channel 9, and stops spinning once hash matches
+  daemon.wallpaperExpr = '(() => { const targetHash = "wp-hash-new"; window.__agPrismWallpaper = { __prismCodeHash: targetHash }; return { ok: true }; })()';
+  daemon._wallpaperHashSource = daemon.wallpaperExpr;
+  daemon.wallpaperCodeHash = 'wp-hash-new';
+  const wpHeal = makeEntry(
+    {
+      ...baseProbe,
+      hasWallpaper: true,
+      hasWallpaperUi: true,
+      wallpaperCodeHash: 'wp-hash-old',
+      hasSettingsPanel: true,
+      hasSettingsDialog: true,
+      settingsCodeHash: '1286lph',
+      needsSettingsChannel: false,
+    },
+    {
+      wallpaperSkipped: false,
+      wallpaperMounted: true,
+      wallpaperScriptId: 'wp-script-old',
+      lastWallpaperScriptHash: 'wp-hash-old',
+    }
+  );
+  await daemon.verifyAndHealEntry(wpHeal.entry, true);
+  assert.ok(wpHeal.events.includes('rm:wp-script-old'), 'must remove stale wallpaperScriptId on hash mismatch');
+  assert.equal(wpHeal.entry.wallpaperScriptId, 'wp-script-new');
+  assert.equal(wpHeal.entry.lastWallpaperScriptHash, 'wp-hash-new');
+  assert.ok(wpHeal.events.includes('wp-eval'), 'must evaluate wallpaperExpr on wallpaperHashMismatch to break infinite spin');
+  assert.ok(wpHeal.events.includes('ch9-deliver'));
+  assert.ok(
+    wpHeal.events.indexOf('wp-eval') < wpHeal.events.indexOf('ch9-deliver'),
+    'Channel 9 delivery must run AFTER wallpaper hot-reload to avoid double rebuild'
+  );
+
+  // Follow-up probe with updated wallpaperCodeHash must NOT re-evaluate or spin
+  wpHeal.events.length = 0;
+  wpHeal.entry.session.evaluate = async () => ({
+    ...baseProbe,
+    hasWallpaper: true,
+    hasWallpaperUi: true,
+    wallpaperCodeHash: 'wp-hash-new',
+    hasSettingsPanel: true,
+    hasSettingsDialog: true,
+    settingsCodeHash: expectedHash,
+    needsSettingsChannel: false,
+  });
+  await daemon.verifyAndHealEntry(wpHeal.entry, true);
+  assert.equal(wpHeal.events.length, 0, 'Once wallpaperCodeHash matches, verifyAndHealEntry must settle with 0 further heals');
+
+  await daemon.stop(false, { skipAutoArchive: true });
 });

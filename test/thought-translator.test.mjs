@@ -1142,7 +1142,7 @@ test('Cross-module thoughtView contract: api.sync({ thoughtView }) resists async
   assert.equal(immersiveBtn.getAttribute('aria-pressed'), 'false');
 });
 
-test('UX-3 & UX-6 regression: prioritizes data-ag-cs-lang over host lang="en", live-refreshes 5 locales, and prevents preload/engine-switch leakage', async () => {
+test('UX-3 & UX-6 regression: prioritizes data-ag-cs-lang over host lang="en", live-refreshes 8 locales + yue migration, and prevents preload/engine-switch leakage', async () => {
   const clientSrc = fs.readFileSync(
     path.join(ROOT_DIR, 'vendor', 'thought-translator', 'thought-client.js'),
     'utf8'
@@ -1218,30 +1218,26 @@ test('UX-3 & UX-6 regression: prioritizes data-ag-cs-lang over host lang="en", l
   assert.equal(rawBtn1.textContent, '原文', 'Must read data-ag-cs-lang="zh-CN" instead of host lang="en"');
   assert.equal(fbBadge1.textContent, '机翻降级');
 
-  // Toggle raw on so we can test live-refresh of "Hide Raw" across 5 locales
+  // Toggle raw on so we can test live-refresh of "Hide Raw" across all 8 locales + yue->zh-CN / zh-HK->zh-TW migration
   rawBtn1.dispatchClick();
   assert.equal(rawBtn1.textContent, '收起原文');
 
-  // Live switch to Cantonese (yue), Japanese (ja), Traditional Chinese (zh-TW), English (en)
-  docEl.setAttribute('data-ag-cs-lang', 'yue');
-  api.sync({ thoughtTranslate: 'machine', thoughtTrigger: 'preload', language: 'yue' });
-  assert.equal(rawBtn1.textContent, '收埋原文');
-  assert.equal(fbBadge1.textContent, '機翻降級');
-
-  docEl.setAttribute('data-ag-cs-lang', 'ja');
-  api.sync({ thoughtTranslate: 'machine', thoughtTrigger: 'preload', language: 'ja' });
-  assert.equal(rawBtn1.textContent, '原文を隠す');
-  assert.equal(fbBadge1.textContent, '機械翻訳代替');
-
-  docEl.setAttribute('data-ag-cs-lang', 'en');
-  api.sync({ thoughtTranslate: 'machine', thoughtTrigger: 'preload', language: 'en' });
-  assert.equal(rawBtn1.textContent, 'Hide Raw');
-  assert.equal(fbBadge1.textContent, 'Fallback');
-
-  docEl.setAttribute('data-ag-cs-lang', 'zh-TW');
-  api.sync({ thoughtTranslate: 'machine', thoughtTrigger: 'preload', language: 'zh-TW' });
-  assert.equal(rawBtn1.textContent, '收起原文');
-  assert.equal(fbBadge1.textContent, '機翻降級');
+  for (const [langCode, expRawBtn, expBadge] of [
+    ['yue', '收起原文', '机翻降级'],
+    ['zh-HK', '收起原文', '機翻降級'],
+    ['zh-TW', '收起原文', '機翻降級'],
+    ['ja', '原文を隠す', '機械翻訳代替'],
+    ['ko', '원문 숨기기', '기계 번역 대체'],
+    ['es', 'Ocultar original', 'Respaldo MT'],
+    ['fr', 'Masquer l’original', 'Secours MT'],
+    ['de', 'Original ausblenden', 'MT-Fallback'],
+    ['en', 'Hide Raw', 'Fallback'],
+  ]) {
+    docEl.setAttribute('data-ag-cs-lang', langCode);
+    api.sync({ thoughtTranslate: 'machine', thoughtTrigger: 'preload', language: langCode });
+    assert.equal(rawBtn1.textContent, expRawBtn, `rawBtn1 mismatch for ${langCode}`);
+    assert.equal(fbBadge1.textContent, expBadge, `fbBadge1 mismatch for ${langCode}`);
+  }
 
   // 2) Finish streaming on collapsed btn2 so it enters waitTimer under preload, then switch thoughtTrigger -> 'expand'!
   btn2.removeAttribute('data-op-thought-state');
@@ -1249,6 +1245,7 @@ test('UX-3 & UX-6 regression: prioritizes data-ag-cs-lang over host lang="en", l
   api.scanImmediate();
   const callsBeforeExpandSwitch = streamCalls.length;
   // Immediately switch trigger to 'expand' BEFORE 450ms/900ms waitTimer fires!
+  docEl.setAttribute('data-ag-cs-lang', 'zh-CN');
   api.sync({ thoughtTranslate: 'machine', thoughtTrigger: 'expand', language: 'zh-CN' });
   await new Promise((r) => setTimeout(r, 980));
   assert.equal(
@@ -1269,7 +1266,7 @@ test('UX-3 & UX-6 regression: prioritizes data-ag-cs-lang over host lang="en", l
   assert.equal(panel1.getAttribute('data-op-show-raw'), null);
 });
 
-test('UX-5 & UX-8 regression: thought-settings-ui supports 5 locales, optThoughtImmersive/Bilingual keys, deduplicated view bar, and reloadConfig()', async () => {
+test('UX-5 & UX-8 regression: thought-settings-ui supports 8 locales + yue migration, optThoughtImmersive/Bilingual keys, deduplicated view bar, and reloadConfig()', async () => {
   const settingsUiSrc = fs.readFileSync(
     path.join(ROOT_DIR, 'vendor', 'thought-translator', 'thought-settings-ui.js'),
     'utf8'
@@ -1329,15 +1326,23 @@ test('UX-5 & UX-8 regression: thought-settings-ui supports 5 locales, optThought
   assert.equal(fetchBtn.textContent, 'モデル一覧取得');
   assert.equal(cacheBadge.textContent, 'キャッシュ 3 件');
 
-  // Switch to Cantonese (yue) & Traditional Chinese (zh-TW) dynamically
-  docEl.setAttribute('data-ag-cs-lang', 'yue');
-  cfgUi.onLanguageChanged('yue');
-  assert.equal(cacheBadge.textContent, '快取 3 條');
-
-  docEl.setAttribute('data-ag-cs-lang', 'zh-TW');
-  cfgUi.onLanguageChanged('zh-TW');
-  assert.equal(fetchBtn.textContent, '擷取模型清單');
-  assert.equal(cacheBadge.textContent, '快取 3 筆');
+  // Switch across all 8 locales + yue->zh-CN migration dynamically
+  for (const [loc, expFetch, expCache] of [
+    ['yue', '拉取模型列表', '缓存 3 条'],
+    ['zh-CN', '拉取模型列表', '缓存 3 条'],
+    ['zh-TW', '擷取模型清單', '快取 3 筆'],
+    ['ko', '모델 목록 가져오기', '캐시 3개'],
+    ['es', 'Obtener modelos', 'Caché: 3'],
+    ['fr', 'Charger les modèles', 'Cache : 3'],
+    ['de', 'Modelle abrufen', 'Cache: 3'],
+    ['en', 'Fetch Models', 'Cache: 3'],
+    ['zh-TW', '擷取模型清單', '快取 3 筆'],
+  ]) {
+    docEl.setAttribute('data-ag-cs-lang', loc);
+    cfgUi.onLanguageChanged(loc);
+    assert.equal(fetchBtn.textContent, expFetch, `fetchBtn mismatch for ${loc}`);
+    assert.equal(cacheBadge.textContent, expCache, `cacheBadge mismatch for ${loc}`);
+  }
 
   // Simulate JSON config import updating backend store (including 'tech' alias -> normalized 'technical') and calling reloadConfig()
   backendConfig = {
@@ -2373,24 +2378,31 @@ test('Mixed-language CoT regression: Chinese-prefixed English reasoning is never
   }
 });
 
-test('5-locale targetLang adaptation: prompt/boundary routing, GTX tl= mapping, EN/JA/zh-TW/yue trigger rules & cache isolation', async () => {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-thought-5lang-'));
+test('8-locale targetLang adaptation: prompt/boundary routing, GTX tl= mapping, EN/JA/KO/ES/FR/DE/zh-TW trigger rules, yue->zh-CN migration & cache isolation', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-thought-8lang-'));
   try {
     // 1) normalizeTargetLang & canonicalizeThoughtSkeleton Japanese/Korean preservation
     assert.equal(normalizeTargetLang('zh'), 'zh-CN');
     assert.equal(normalizeTargetLang('zh-CN'), 'zh-CN');
     assert.equal(normalizeTargetLang('zh-Hant'), 'zh-TW');
     assert.equal(normalizeTargetLang('zh-TW'), 'zh-TW');
-    assert.equal(normalizeTargetLang('zh-HK'), 'yue');
-    assert.equal(normalizeTargetLang('zh-MO'), 'yue');
-    assert.equal(normalizeTargetLang('yue'), 'yue');
+    assert.equal(normalizeTargetLang('zh-HK'), 'zh-TW');
+    assert.equal(normalizeTargetLang('zh-MO'), 'zh-TW');
+    assert.equal(normalizeTargetLang('yue'), 'zh-CN');
+    assert.equal(normalizeTargetLang('zh-yue'), 'zh-CN');
+    assert.equal(normalizeTargetLang('cantonese'), 'zh-CN');
     assert.equal(normalizeTargetLang('en-US'), 'en');
     assert.equal(normalizeTargetLang('ja-JP'), 'ja');
+    assert.equal(normalizeTargetLang('ko-KR'), 'ko');
+    assert.equal(normalizeTargetLang('es-ES'), 'es');
+    assert.equal(normalizeTargetLang('fr-FR'), 'fr');
+    assert.equal(normalizeTargetLang('de-DE'), 'de');
 
-    for (const loc of ['zh-CN', 'zh-TW', 'yue', 'en', 'ja']) {
+    for (const loc of ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de']) {
       assert.ok(SYSTEM_PROMPTS_BY_LANG[loc]?.technical?.length > 40, `Missing technical prompt for ${loc}`);
       assert.ok(SYSTEM_PROMPTS_BY_LANG[loc]?.concise?.length > 40, `Missing concise prompt for ${loc}`);
     }
+    assert.equal(SYSTEM_PROMPTS_BY_LANG.yue, undefined, 'Legacy yue prompt slot must be removed');
 
     const jaSkel = canonicalizeThoughtSkeleton('これはテストの推論です。');
     assert.ok(jaSkel.includes('これはテストの'), 'Japanese kana must survive skeleton canonicalization');
@@ -2400,27 +2412,40 @@ test('5-locale targetLang adaptation: prompt/boundary routing, GTX tl= mapping, 
       'Different Japanese strings must not collide on empty skeleton'
     );
 
-    // 2) Skip heuristics across 5 languages
+    // 2) Skip heuristics across 8 languages
     const zhThought = '首先检查配置文件路径与权限状态，确认不存在异常残留字段后再继续执行。';
     const enThought = 'First verify the configuration file path and permission state before proceeding with validation.';
     const jaThought = 'まず設定ファイルのパスと権限を確認し、問題がないことを確かめてから次の処理に進みます。';
+    const koThought = '먼저 설정 파일 경로와 권한 상태를 확인하고 문제가 없는지 검증한 뒤 다음 단계로 진행합니다.';
 
     assert.equal(isAlreadyTargetLang(zhThought, 'en'), false, 'Chinese thought must translate when targetLang=en');
     assert.equal(isAlreadyTargetLang(enThought, 'en'), true, 'English thought should skip when targetLang=en');
     assert.equal(isAlreadyTargetLang(enThought, 'ja'), false, 'English thought must translate when targetLang=ja');
     assert.equal(isAlreadyTargetLang(zhThought, 'ja'), false, 'Chinese thought (no kana) must translate when targetLang=ja');
     assert.equal(isAlreadyTargetLang(jaThought, 'ja'), true, 'Japanese thought should skip when targetLang=ja');
+    assert.equal(isAlreadyTargetLang(enThought, 'ko'), false, 'English thought must translate when targetLang=ko');
+    assert.equal(isAlreadyTargetLang(koThought, 'ko'), true, 'Korean thought should skip when targetLang=ko');
+    assert.equal(isAlreadyTargetLang(enThought, 'es'), false, 'English thought must translate when targetLang=es');
+    assert.equal(isAlreadyTargetLang(enThought, 'fr'), false, 'English thought must translate when targetLang=fr');
+    assert.equal(isAlreadyTargetLang(enThought, 'de'), false, 'English thought must translate when targetLang=de');
     assert.equal(isAlreadyTargetLang(zhThought, 'zh-TW'), false, 'Simplified Chinese must NOT skip when targetLang=zh-TW');
-    assert.equal(isAlreadyTargetLang(zhThought, 'yue'), false, 'Simplified Chinese must NOT skip when targetLang=yue');
+    assert.equal(isAlreadyTargetLang(zhThought, 'yue'), true, 'Legacy yue migrates to zh-CN and skips pure Simplified Chinese');
     assert.equal(isAlreadyTargetLang('分析问题中', 'en'), false, '5-char Chinese title must translate when targetLang=en');
     assert.equal(isAlreadyTargetLang('分析问题', 'en'), false, '4-char Chinese title must translate when targetLang=en');
 
-    // Frontend thought-client.js zh-HK/zh-MO mapping & short threshold parity
+    // Frontend thought-client.js 8-locale / yue->zh-CN / zh-HK,MO->zh-TW mapping & short threshold parity
     const tcSrc = fs.readFileSync(path.join(ROOT_DIR, 'vendor', 'thought-translator', 'thought-client.js'), 'utf8');
-    assert.ok(/if\s*\(\/\^\(\?:yue\|zh\[-_\]\(\?:yue\|HK\|MO\)\)\/i\.test\(s\)\)\s*return\s*'yue'/.test(tcSrc), 'thought-client.js must map zh-HK/zh-MO to yue before zh-TW');
+    assert.ok(
+      tcSrc.includes("if (s === 'yue' || s.startsWith('yue-') || s === 'zh-yue' || s.includes('cantonese')) return 'zh-CN';"),
+      'thought-client.js must migrate yue/cantonese to zh-CN'
+    );
+    assert.ok(
+      tcSrc.includes("if (/^zh-(tw|hk|mo|hant)/.test(s) || s === 'tw' || s === 'hant') return 'zh-TW';"),
+      'thought-client.js must normalize zh-HK/zh-MO/zh-TW/zh-Hant to zh-TW'
+    );
     assert.ok(tcSrc.includes('!norm || norm.length < 4'), 'thought-client.js must use < 4 short-text threshold');
 
-    // 3) Backend AI + GTX tl= mapping + cache isolation
+    // 3) Backend AI + GTX tl= mapping + cache isolation across all 8 languages
     const aiRequests = [];
     const gtxRequests = [];
     const mockFetch = async (url, init = {}) => {
@@ -2433,10 +2458,16 @@ test('5-locale targetLang adaptation: prompt/boundary routing, GTX tl= mapping, 
           ? 'EN:'
           : sys.includes('日本語')
           ? 'JA:'
+          : sys.includes('한국어')
+          ? 'KO:'
+          : sys.includes('español')
+          ? 'ES:'
+          : sys.includes('français')
+          ? 'FR:'
+          : sys.includes('Deutsch')
+          ? 'DE:'
           : sys.includes('繁體中文')
           ? 'TW:'
-          : sys.includes('粵語')
-          ? 'YUE:'
           : 'CN:';
         return new Response(
           JSON.stringify({ choices: [{ message: { content: `${tag} translated reasoning` } }] }),
@@ -2460,37 +2491,58 @@ test('5-locale targetLang adaptation: prompt/boundary routing, GTX tl= mapping, 
     svc.saveConfig({
       stylePreset: 'technical',
       activeProfileId: 'p1',
-      profiles: [{ id: 'p1', name: 'Mock', baseUrl: 'https://mock.ai/v1', apiKey: 'sk-5lang-test', model: 'gpt-4o-mini' }],
+      profiles: [{ id: 'p1', name: 'Mock', baseUrl: 'https://mock.ai/v1', apiKey: 'sk-8lang-test', model: 'gpt-4o-mini' }],
     });
 
     const aiEn = await svc.translateThought({ text: zhThought, mode: 'ai', targetLang: 'en' });
     const aiJa = await svc.translateThought({ text: enThought, mode: 'ai', targetLang: 'ja' });
+    const aiKo = await svc.translateThought({ text: enThought, mode: 'ai', targetLang: 'ko' });
+    const aiEs = await svc.translateThought({ text: enThought, mode: 'ai', targetLang: 'es' });
+    const aiFr = await svc.translateThought({ text: enThought, mode: 'ai', targetLang: 'fr' });
+    const aiDe = await svc.translateThought({ text: enThought, mode: 'ai', targetLang: 'de' });
     const aiTw = await svc.translateThought({ text: zhThought, mode: 'ai', targetLang: 'zh-TW' });
-    const aiYue = await svc.translateThought({ text: zhThought, mode: 'ai', targetLang: 'yue' });
+    const aiYue = await svc.translateThought({ text: enThought, mode: 'ai', targetLang: 'yue' });
 
     assert.equal(aiEn.text, 'EN: translated reasoning');
     assert.equal(aiJa.text, 'JA: translated reasoning');
+    assert.equal(aiKo.text, 'KO: translated reasoning');
+    assert.equal(aiEs.text, 'ES: translated reasoning');
+    assert.equal(aiFr.text, 'FR: translated reasoning');
+    assert.equal(aiDe.text, 'DE: translated reasoning');
     assert.equal(aiTw.text, 'TW: translated reasoning');
-    assert.equal(aiYue.text, 'YUE: translated reasoning');
+    assert.equal(aiYue.text, 'CN: translated reasoning');
     assert.ok(aiEn.key.startsWith('ai_technical_en_v3_'));
     assert.ok(aiJa.key.startsWith('ai_technical_ja_v3_'));
+    assert.ok(aiKo.key.startsWith('ai_technical_ko_v3_'));
+    assert.ok(aiEs.key.startsWith('ai_technical_es_v3_'));
+    assert.ok(aiFr.key.startsWith('ai_technical_fr_v3_'));
+    assert.ok(aiDe.key.startsWith('ai_technical_de_v3_'));
     assert.ok(aiTw.key.startsWith('ai_technical_zh-TW_v3_'));
-    assert.ok(aiYue.key.startsWith('ai_technical_yue_v3_'));
+    assert.equal(aiYue.key, hashThoughtKey(enThought, 'ai_technical'), 'Legacy yue must migrate to zh-CN cache namespace');
 
     // Cache isolation check: zh-CN keeps exact legacy key format, and different targetLangs do not collide
     const aiCn = await svc.translateThought({ text: enThought, mode: 'ai', targetLang: 'zh-CN' });
     assert.equal(aiCn.key, hashThoughtKey(enThought, 'ai_technical'), 'zh-CN cache key must stay 100% backward compatible');
     assert.notEqual(aiCn.key, aiJa.key);
 
-    // GTX tl= mapping across 5 locales
-    await svc.translateThought({ text: enThought, mode: 'machine', targetLang: 'zh-CN' });
-    await svc.translateThought({ text: enThought, mode: 'machine', targetLang: 'zh-TW' });
-    await svc.translateThought({ text: enThought, mode: 'machine', targetLang: 'yue' });
+    // GTX tl= mapping across all 8 locales (+ yue->zh-CN, zh-HK->zh-TW cache unification)
+    const mtCn = await svc.translateThought({ text: enThought, mode: 'machine', targetLang: 'zh-CN' });
+    const mtTw = await svc.translateThought({ text: enThought, mode: 'machine', targetLang: 'zh-TW' });
+    const mtHk = await svc.translateThought({ text: enThought, mode: 'machine', targetLang: 'zh-HK' });
+    const mtYue = await svc.translateThought({ text: enThought, mode: 'machine', targetLang: 'yue' });
+    assert.equal(mtHk.cached, true, 'zh-HK must share zh-TW machine cache');
+    assert.equal(mtHk.text, mtTw.text);
+    assert.equal(mtYue.cached, true, 'yue must share zh-CN machine cache');
+    assert.equal(mtYue.text, mtCn.text);
     await svc.translateThought({ text: zhThought, mode: 'machine', targetLang: 'en' });
     await svc.translateThought({ text: enThought, mode: 'machine', targetLang: 'ja' });
+    await svc.translateThought({ text: enThought, mode: 'machine', targetLang: 'ko' });
+    await svc.translateThought({ text: enThought, mode: 'machine', targetLang: 'es' });
+    await svc.translateThought({ text: enThought, mode: 'machine', targetLang: 'fr' });
+    await svc.translateThought({ text: enThought, mode: 'machine', targetLang: 'de' });
     assert.deepEqual(
       gtxRequests.map((r) => r.tl),
-      ['zh-CN', 'zh-TW', 'zh-TW', 'en', 'ja']
+      ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de']
     );
 
     // Machine-fallback key in non-zh-CN still starts with 'mt_'
@@ -3151,7 +3203,7 @@ test('Issue #14 end-to-end local proxy transport: HTTP forwarding, SSE streaming
   }
 });
 
-test('Issue #14 thought-settings-ui: renders 5-locale usage hint, 5+1 anti-translation attrs, and live daemon bridge offline warning', async () => {
+test('Issue #14 thought-settings-ui: renders 8-locale usage hint, 5+1 anti-translation attrs, and live daemon bridge offline warning', async () => {
   const settingsUiSrc = fs.readFileSync(
     path.join(ROOT_DIR, 'vendor', 'thought-translator', 'thought-settings-ui.js'),
     'utf8'
@@ -3189,7 +3241,7 @@ test('Issue #14 thought-settings-ui: renders 5-locale usage hint, 5+1 anti-trans
   assert.equal(cfgUi.box.getAttribute('data-agy-no-translate'), 'true');
   assert.equal(cfgUi.box.getAttribute('data-antigravity-zh-skip'), '1');
 
-  // 2) Without __agPrismThoughtBridge -> usage hint & gentle offline daemon warning both visible across all 5 locales
+  // 2) Without __agPrismThoughtBridge -> usage hint & gentle offline daemon warning both visible across all 8 locales + yue migration
   const banner = cfgUi.box.querySelector('[data-testid="thought-usage-banner"]');
   const usageHint = cfgUi.box.querySelector('[data-testid="thought-usage-hint"]');
   const bridgeWarn = cfgUi.box.querySelector('[data-testid="thought-bridge-warning"]');
@@ -3200,9 +3252,13 @@ test('Issue #14 thought-settings-ui: renders 5-locale usage hint, 5+1 anti-trans
   const localeChecks = [
     ['zh-CN', '系统代理', 'Prism 后台服务未连接'],
     ['zh-TW', '系統代理', 'Prism 背景服務未連線'],
-    ['yue', '系統代理', 'Prism 後台服務未連接'],
+    ['yue', '系统代理', 'Prism 后台服务未连接'],
     ['en', 'system proxy', 'Prism background service is disconnected'],
     ['ja', 'システムプロキシ', 'Prism バックグラウンドサービスに接続されていません'],
+    ['ko', '시스템 프록시', 'Prism 백그라운드 서비스가 연결되지 않았습니다'],
+    ['es', 'proxy del sistema', 'El servicio en segundo plano de Prism está desconectado'],
+    ['fr', 'proxy système', 'Le service d’arrière-plan Prism est déconnecté'],
+    ['de', 'Systemproxy', 'Der Prism-Hintergrunddienst ist getrennt'],
   ];
   for (const [loc, expectedHint, expectedWarn] of localeChecks) {
     docEl.setAttribute('data-ag-cs-lang', loc);

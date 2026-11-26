@@ -43,6 +43,73 @@ function extractWorkspaceName(sum) {
   }
 }
 
+function toIsoResetTime(raw) {
+  if (typeof raw === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(raw)) return raw;
+  if (raw && typeof raw === 'object' && raw.seconds !== undefined) {
+    const sec = Number(raw.seconds);
+    const nanos = Number(raw.nanos ?? 0);
+    if (Number.isFinite(sec) && sec > 0) {
+      return new Date(sec * 1000 + Math.floor((Number.isFinite(nanos) ? nanos : 0) / 1e6)).toISOString();
+    }
+  }
+  if (typeof raw === 'number' || typeof raw === 'bigint') {
+    const n = Number(raw);
+    if (Number.isFinite(n) && n > 0) return new Date(n > 1e11 ? n : n * 1000).toISOString();
+  }
+  return null;
+}
+
+export function fallbackQuotaFromUserStatus(user, now = Date.now()) {
+  const configs = user?.userStatus?.cascadeModelConfigData?.clientModelConfigs;
+  if (!Array.isArray(configs) || !configs.length) return [];
+  const groups = new Map();
+  for (const cfg of configs) {
+    const qi = cfg?.quotaInfo;
+    if (!qi || typeof qi !== 'object') continue;
+    const rawFrac = qi.remainingFraction ?? qi.remaining?.remainingFraction ?? qi.remaining;
+    const fracNum = typeof rawFrac === 'number' || (typeof rawFrac === 'string' && rawFrac.trim() !== '') ? Number(rawFrac) : NaN;
+    if (!Number.isFinite(fracNum) || fracNum < 0 || fracNum > 1) continue;
+    const label = String(cfg.label || cfg.displayName || cfg.modelOrAlias?.model || cfg.model || cfg.id || '').trim();
+    const modelId = String(cfg.modelOrAlias?.model || cfg.model || cfg.id || '').trim();
+    const hay = `${label} ${modelId}`.toLowerCase();
+    let family = 'model';
+    let displayName = label || modelId || 'Quota Pool';
+    if (/argon|wtu/.test(hay)) { family = 'gemini-argon'; displayName = 'Gemini (Argon)'; }
+    else if (/claude|anthropic|gpt|openai|\bo[134]\b/.test(hay)) { family = 'claude'; displayName = 'Claude / GPT'; }
+    else if (/gemini|google|carbon|hydrogen/.test(hay)) { family = 'gemini'; displayName = 'Gemini'; }
+    else if (modelId || label) { family = (modelId || label).toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '') || 'model'; }
+    const winKey = typeof qi.window === 'string' && /week|7d|7_days/i.test(qi.window) ? 'weekly' : '5h';
+    const resetTime = toIsoResetTime(qi.resetTime ?? qi.resetAt);
+    const bucket = {
+      bucketId: `${family}-${winKey}`,
+      window: winKey,
+      remainingFraction: fracNum,
+      ...(qi.remainingAmount !== undefined ? { remainingAmount: qi.remainingAmount } : {}),
+      ...(resetTime ? { resetTime } : {}),
+      disabled: qi.disabled === true,
+      description: displayName,
+    };
+    let g = groups.get(family);
+    if (!g) {
+      g = { displayName, description: '', buckets: new Map() };
+      groups.set(family, g);
+    }
+    const prev = g.buckets.get(winKey);
+    if (!prev || fracNum < prev.remainingFraction) {
+      g.buckets.set(winKey, bucket);
+    }
+  }
+  if (!groups.size) return [];
+  const payload = {
+    groups: [...groups.values()].map((g) => ({
+      displayName: g.displayName,
+      description: g.description,
+      buckets: [...g.buckets.values()],
+    })),
+  };
+  return quotaMetrics(payload, now);
+}
+
 export class MetricsStore {
   constructor(clientOrOpts = undefined, maybeOpts = {}) {
     const isClientInstance = clientOrOpts && typeof clientOrOpts.call === 'function';
@@ -81,6 +148,8 @@ export class MetricsStore {
     if (this.background && client.reader) client.reader.isBackgroundManaged = id => this.sessions.get(id)?.backgroundOnly === true;
     this.delegated = new DelegatedUsage(client, {
       owns,
+      maxAgents: 24,
+      refreshMs: 30000,
       onSource: async (scope, id, raw, options = {}) => {
         if (this.owned() && scope === this.storageScope() && this.onTrajectory && (!options.isCurrent || options.isCurrent() === true)) {
           await this.onTrajectory(scope, id, raw, options);
@@ -189,9 +258,29 @@ export class MetricsStore {
         this.clearUsagePersistenceErrors();
       }
       this.identity = identity;
-      const response = await this.client.call('RetrieveUserQuotaSummary', force ? { forceRefresh: true } : {});
-      if (!this.owned() || epoch !== this.epoch || identity !== this.identity) throw new Error('后台已重新连接，请等待刷新');
-      this.quota = quotaMetrics(response);
+      let primaryQuota = null;
+      let quotaErr = null;
+      try {
+        const response = await this.client.call('RetrieveUserQuotaSummary', force ? { forceRefresh: true } : {});
+        if (!this.owned() || epoch !== this.epoch || identity !== this.identity) throw new Error('后台已重新连接，请等待刷新');
+        primaryQuota = quotaMetrics(response);
+      } catch (err) {
+        if (!this.owned() || epoch !== this.epoch || identity !== this.identity) throw new Error('后台已重新连接，请等待刷新');
+        quotaErr = err;
+      }
+      const hasUsablePool = (groups) =>
+        Array.isArray(groups) &&
+        groups.some((g) => g?.windows && (g.windows['5h']?.available || g.windows.weekly?.available));
+      if (!hasUsablePool(primaryQuota)) {
+        const fallbackQuota = fallbackQuotaFromUserStatus(user);
+        if (hasUsablePool(fallbackQuota)) {
+          this.quota = fallbackQuota;
+          this.quotaAt = Date.now();
+          return;
+        }
+        if (quotaErr) throw quotaErr;
+      }
+      this.quota = Array.isArray(primaryQuota) ? primaryQuota : [];
       this.quotaAt = Date.now();
     })().finally(() => { this.quotaPending = null; });
     return this.quotaPending;

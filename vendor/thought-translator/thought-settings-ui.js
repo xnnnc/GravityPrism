@@ -1,4 +1,4 @@
-// Obsidian Prism — OpenAI-Compatible Thought Translator Settings Workbench UI (v1.0.7 Five-Locale & Sync Hardened)
+// Obsidian Prism — OpenAI-Compatible Thought Translator Settings Workbench UI (v1.0.8-beta.3 Five-Locale & Sync Hardened)
 // Extracted modular UI component mounted on globalThis.__agPrismThoughtSettingsUi
 
 (function (root) {
@@ -33,12 +33,6 @@
       '管道',
       '未設模型',
     ],
-    yue: [
-      'OpenAI 兼容主力渠道|自訂渠道|譯文閱讀視圖|純譯文沉浸|譯文+原文對照|潤飾文風預設|專業工程手稿|精煉核心要點|自訂提示詞|喺度輸入只會儲存喺本機私密設定 (~/.gemini/config/) 嘅自訂系統提示詞，絕唔寫入 Git 倉庫…|OpenAI 兼容渠道預設|+ 新增渠道|刪除而家呢個|渠道名稱|例如：主力網關 / 本機 Ollama|拉取模型清單|儲存渠道設定|發送測試訊息|清空快取|金鑰同自訂提示詞以 0600 權限獨立保存喺本機 ~/.gemini/config/，遮罩顯示，唔會寫入公開 Git 倉庫。|本機渠道可留空免密|本機免密|清除金鑰|待儲存清除|正在拉取上游模型清單…|拉取模型失敗|正在儲存設定…|儲存失敗（守護進程離線）|正在儲存並發送測試訊息…|測試連接失敗|✓ 已清空雙端轉譯快取|✓ 已清空前端快取|開啟後撳開英文思考區塊就睇到譯文；本身已經係目標語言嘅思考區塊會自動保留原文；免費機翻喺代理環境下會自動跟隨系統代理。|Prism 後台服務未連接，請確認外掛守護進程已經啟動。|自訂代理地址|自動偵測|自訂|直連|留空自動偵測環境變數同系統代理；支援 http://、https://、socks5://、socks5h://|已啟用直連模式，會略過環境變數同系統代理。|✓ 代理地址格式有效（儲存後優先使用呢個代理，憑證自動遮罩）|✓ 已儲存認證代理（憑證已遮罩，清空或覆寫可修改）|✕ 代理地址無效：只支援 http://、https://、socks5://、socks5h://（端口 1-65535，禁止換行或控制字符）|清除|「正在探索」工具摘要翻譯|只批量翻譯探索/工具列表入面嘅自然語言短句（預設關閉），自動保護檔名、路徑、行號同退出碼，關閉後即刻無損還原原文。|已開啟|已關閉',
-      ['已儲存 {0}（留空保持唔變）', '快取 {0} 條', '前端快取 {0} 條 / 磁碟快取 {1} 條', '▾ 由已拉取嘅 {0} 個上游模型入面快速揀選…', '✓ 成功拉取 {0} 個模型 · {1}ms', '✓ 已儲存（{0} · {1}）', '✓ 連通正常 · {0}ms · {1} 回覆: 「{2}」'],
-      '渠道',
-      '未設模型',
-    ],
     en: [
       'Primary OpenAI Profile|Profile|Reading View|Translated Only|Bilingual Stacked|Polishing Style|Technical Manuscript|Concise Key Points|Custom Prompt|Enter local-only custom system prompt (saved in ~/.gemini/config/, never in Git)…|OpenAI Endpoint Profiles|+ New|Delete|Profile Name|e.g. Primary Gateway / Local Ollama|Fetch Models|Save Config|Send Test Message|Clear Cache|API keys & custom prompts are stored locally in ~/.gemini/config/ (0600) and never touch Git.|Optional for local endpoint|Keyless OK|Clear|Pending clear|Fetching upstream /models…|Failed to fetch models|Saving configuration…|Save failed (daemon offline)|Testing endpoint latency…|Connection test failed|✓ Cleared translation cache|✓ Cleared local cache|Expand an English thinking block to view translations; blocks already in your target language keep the original text; free machine translation automatically follows your system proxy.|Prism background service is disconnected. Please make sure the plugin daemon is running.|Custom Proxy URL|Auto|Custom|Direct|Leave blank to auto-detect env & OS system proxy; supports http://, https://, socks5://, socks5h://|Direct mode enabled: env & OS system proxies are bypassed.|✓ Proxy URL valid (prioritized after save; credentials redacted)|✓ Saved proxy with redacted credentials (clear or overwrite to change)|✕ Invalid proxy URL: only http://, https://, socks5://, socks5h:// (port 1–65535, no control chars)|Clear|Translate "Exploring" Tool Summaries|Batch-translate short English prose in Exploring/tool lists (off by default); auto-protects filenames, paths, line refs & exit codes, and restores raw text when off.|On|Off',
       ['Saved {0} (leave blank to keep)', 'Cache: {0}', 'Frontend: {0} / Daemon: {1}', '▾ Quick-select from {0} models…', '✓ Loaded {0} models · {1}ms', '✓ Saved ({0} · {1})', '✓ Connected · {0}ms · Reply: "{2}"'],
@@ -50,6 +44,30 @@
       ['保存済み {0}（空欄で維持）', 'キャッシュ {0} 件', 'フロント {0} 件 / デーモン {1} 件', '▾ 取得した {0} 個のモデルから選択…', '✓ {0} 個のモデルを取得 · {1}ms', '✓ 保存完了（{0} · {1}）', '✓ 接続正常 · {0}ms · {1} 応答: 「{2}」'],
       'プロファイル',
       'モデル未設定',
+    ],
+    ko: [
+      'OpenAI 호환 기본 프로필|사용자 지정 프로필|번역 보기|번역만 보기|번역+원문 대조|문체 프리셋|기술 원고체|핵심 요약|사용자 프롬프트|로컬 전용 시스템 프롬프트 입력 (~/.gemini/config/에 저장, Git 미포함)…|OpenAI 호환 프로필 프리셋|+ 추가|삭제|프로필 이름|예: 메인 게이트웨이 / 로컬 Ollama|모델 목록 가져오기|설정 저장|테스트 전송|캐시 비우기|API 키와 프롬프트는 ~/.gemini/config/ (0600)에 로컬 저장되며 Git에 기록되지 않습니다.|로컬 엔드포인트는 비워 둘 수 있음|키 불필요|키 지우기|저장 시 삭제|모델 목록을 불러오는 중…|모델 목록 가져오기 실패|설정을 저장하는 중…|저장 실패(데몬 오프라인)|저장 후 연결 테스트 중…|연결 테스트 실패|✓ 양쪽 번역 캐시를 비웠습니다|✓ 로컬 캐시를 비웠습니다|활성화 후 영어 사고 블록을 펼치면 번역이 표시됩니다. 이미 대상 언어인 블록은 원문을 유지하며 무료 기계 번역은 시스템 프록시를 따릅니다.|Prism 백그라운드 서비스가 연결되지 않았습니다. 데몬이 실행 중인지 확인하세요.|사용자 프록시 URL|자동 감지|사용자 지정|직접 연결|비워 두면 환경 변수 및 시스템 프록시를 자동 감지합니다 (http://, https://, socks5://, socks5h:// 지원)|직접 연결 모드: 환경 변수 및 시스템 프록시를 무시합니다.|✓ 유효한 프록시 URL입니다 (저장 후 우선 적용, 인증 정보 자동 마스킹)|✓ 인증 포함 프록시 저장됨 (인증 정보 마스킹됨, 지우거나 덮어써서 변경)|✕ 잘못된 프록시 URL: http://, https://, socks5://, socks5h://만 지원 (포트 1–65535, 제어 문자 불가)|지우기|"탐색 중" 도구 요약 번역|탐색/도구 목록의 짧은 영어 문장을 일괄 번역합니다(기본 꺼짐). 파일명·경로·줄 번호·종료 코드를 자동 보호하며, 끄면 즉시 원문으로 복원됩니다.|켜짐|꺼짐',
+      ['{0} 저장됨(비우면 유지)', '캐시 {0}개', '프론트 {0} / 데몬 {1}', '▾ 가져온 {0}개 모델 중 빠른 선택…', '✓ {0}개 모델 로드 · {1}ms', '✓ 저장됨 ({0} · {1})', '✓ 연결 정상 · {0}ms · {1} 응답: "{2}"'],
+      '프로필',
+      '모델 없음',
+    ],
+    es: [
+      'Perfil OpenAI principal|Perfil personalizado|Vista de lectura|Solo traducción|Bilingüe apilado|Estilo de pulido|Manuscrito técnico|Puntos clave concisos|Prompt personalizado|Introduce un prompt de sistema local (~/.gemini/config/, nunca en Git)…|Perfiles OpenAI compatibles|+ Nuevo|Eliminar|Nombre del perfil|ej. Pasarela principal / Ollama local|Obtener modelos|Guardar config.|Enviar prueba|Limpiar caché|Las claves API y prompts se guardan localmente en ~/.gemini/config/ (0600) y nunca entran en Git.|Opcional para servidor local|Sin clave|Borrar clave|Pendiente borrar|Obteniendo /models…|Error al obtener modelos|Guardando configuración…|Error al guardar (demonio offline)|Probando latencia del endpoint…|Error de conexión|✓ Caché de traducción limpiada|✓ Caché local limpiada|Expande un bloque de pensamiento en inglés para ver la traducción; los bloques ya en tu idioma conservan el original y la traducción gratuita sigue al proxy del sistema.|El servicio en segundo plano de Prism está desconectado. Verifica que el demonio esté en ejecución.|URL de proxy personalizada|Auto|Personalizado|Directo|Deja vacío para detectar el proxy del entorno y sistema; admite http://, https://, socks5://, socks5h://|Modo directo activado: se omiten los proxies de entorno y sistema.|✓ URL de proxy válida (priorizada al guardar; credenciales ocultas)|✓ Proxy guardado con credenciales ocultas (borra o sobrescribe para cambiar)|✕ URL de proxy inválida: solo http://, https://, socks5://, socks5h:// (puerto 1–65535, sin caracteres de control)|Borrar|Traducir resúmenes "Explorando"|Traduce en lote frases cortas de herramientas (desactivado por defecto); protege rutas, líneas y códigos de salida, y restaura el original al apagar.|Activado|Desactivado',
+      ['Guardado {0} (vacío para mantener)', 'Caché: {0}', 'Frontend: {0} / Demonio: {1}', '▾ Selección rápida de {0} modelos…', '✓ {0} modelos cargados · {1}ms', '✓ Guardado ({0} · {1})', '✓ Conectado · {0}ms · Respuesta: "{2}"'],
+      'Perfil',
+      'Sin modelo',
+    ],
+    fr: [
+      'Profil OpenAI principal|Profil personnalisé|Mode d’affichage|Traduction seule|Bilingue empilé|Style d’affinage|Manuscrit technique|Points clés concis|Prompt personnalisé|Saisissez un prompt système local (~/.gemini/config/, jamais dans Git)…|Profils OpenAI compatibles|+ Nouveau|Supprimer|Nom du profil|ex. Passerelle principale / Ollama local|Charger les modèles|Enregistrer|Tester l’envoi|Vider le cache|Clés API et prompts sont stockés localement dans ~/.gemini/config/ (0600), jamais dans Git.|Facultatif en local|Sans clé|Effacer clé|Suppression en attente|Récupération de /models…|Échec de récupération des modèles|Enregistrement…|Échec (démon hors ligne)|Test de connexion en cours…|Échec du test de connexion|✓ Cache de traduction vidé|✓ Cache local vidé|Dépliez un bloc de réflexion en anglais pour voir sa traduction ; les blocs déjà dans votre langue restent intacts et la traduction gratuite suit le proxy système.|Le service d’arrière-plan Prism est déconnecté. Vérifiez que le démon est démarré.|URL de proxy personnalisée|Auto|Personnalisé|Direct|Laisser vide pour détecter le proxy système/env ; supporte http://, https://, socks5://, socks5h://|Mode direct activé : les proxies système et env sont ignorés.|✓ URL de proxy valide (prioritaire après sauvegarde ; identifiants masqués)|✓ Proxy enregistré avec identifiants masqués (effacer ou écraser pour modifier)|✕ URL invalide : uniquement http://, https://, socks5://, socks5h:// (port 1–65535, sans caractères de contrôle)|Effacer|Traduire les résumés « Exploring »|Traduit par lots les courtes phrases des listes d’outils (désactivé par défaut) ; protège chemins, lignes et codes de sortie.|Activé|Désactivé',
+      ['Enregistré {0} (laisser vide pour garder)', 'Cache : {0}', 'Client : {0} / Démon : {1}', '▾ Choisir parmi {0} modèles…', '✓ {0} modèles chargés · {1}ms', '✓ Enregistré ({0} · {1})', '✓ Connecté · {0}ms · Réponse : « {2} »'],
+      'Profil',
+      'Aucun modèle',
+    ],
+    de: [
+      'Primäres OpenAI-Profil|Benutzerdefiniertes Profil|Leseansicht|Nur Übersetzung|Zweisprachig gestapelt|Stilvorgabe|Technisches Manuskript|Prägnante Kernpunkte|Eigener Prompt|Lokalen System-Prompt eingeben (~/.gemini/config/, niemals in Git)…|OpenAI-kompatible Profile|+ Neu|Löschen|Profilname|z. B. Haupt-Gateway / Lokales Ollama|Modelle abrufen|Speichern|Test senden|Cache leeren|API-Schlüssel & Prompts werden lokal in ~/.gemini/config/ (0600) gespeichert und landen nie in Git.|Für lokal optional|Ohne Schlüssel|Löschen|Löschen vorgemerkt|Rufe /models ab…|Modellabruf fehlgeschlagen|Speichere Konfiguration…|Speichern fehlgeschlagen (Daemon offline)|Teste Endpunktlatenz…|Verbindungstest fehlgeschlagen|✓ Übersetzungscache geleert|✓ Lokalen Cache geleert|Englische Denkblöcke beim Aufklappen übersetzen; Blöcke in der Zielsprache bleiben unverändert und kostenlose MT folgt dem Systemproxy.|Der Prism-Hintergrunddienst ist getrennt. Bitte prüfen, ob der Daemon läuft.|Eigene Proxy-URL|Auto|Benutzerdef.|Direkt|Leer lassen für Auto-Erkennung von Env- & Systemproxy; unterstützt http://, https://, socks5://, socks5h://|Direktmodus aktiv: Env- und Systemproxies werden umgangen.|✓ Gültige Proxy-URL (nach Speichern bevorzugt; Zugangsdaten maskiert)|✓ Proxy mit maskierten Zugangsdaten gespeichert (zum Ändern leeren/überschreiben)|✕ Ungültige Proxy-URL: nur http://, https://, socks5://, socks5h:// (Port 1–65535, keine Steuerzeichen)|Leeren|„Exploring“-Tool-Kurztexte übersetzen|Übersetzt kurze englische Tool-Hinweise im Batch (standardmäßig aus); schützt Dateinamen, Pfade, Zeilen & Exitcodes.|Ein|Aus',
+      ['{0} gespeichert (leer lassen zum Behalten)', 'Cache: {0}', 'Frontend: {0} / Daemon: {1}', '▾ Schnellauswahl aus {0} Modellen…', '✓ {0} Modelle geladen · {1}ms', '✓ Gespeichert ({0} · {1})', '✓ Verbunden · {0}ms · Antwort: „{2}“'],
+      'Profil',
+      'Kein Modell',
     ],
   };
   const WORKBENCH_I18N = Object.fromEntries(
@@ -133,40 +151,6 @@
       diagCopyBtn: '複製指令',
       diagCopied: '已複製 ✓',
     },
-    yue: {
-      titlesLabel: '會話標題自動翻譯',
-      titlesDesc: '只喺渲染層翻譯英文會話標題（預設關閉），唔會改動底層會話資料，自動跳過時間戳/檔名/路徑，關閉後即刻無損還原原文。',
-      diagBtn: '一鍵診斷',
-      diagRunning: '正在診斷…',
-      diagBridgeLbl: '① 守護橋接',
-      diagBridgeOnline: '在線',
-      diagBridgeOffline: '離線（後台守護進程未連接）',
-      diagProfileLbl: '② 模式同設定',
-      diagModeAi: 'AI 潤飾',
-      diagModeMachine: '免費機翻',
-      diagModeOff: '已關閉',
-      diagProfileOk: '渠道設定齊全',
-      diagProfileMissing: '設定未齊全',
-      diagIssueUrl: 'Base URL 無效',
-      diagIssueModel: '缺少模型 ID',
-      diagIssueKey: '缺少 API Key',
-      diagConnLbl: '③ 代理同連通',
-      diagConnOk: '連通正常',
-      diagConnSkipped: '未探測（思考翻譯而家關閉）',
-      diagConnOffline: '未探測（守護橋接離線）',
-      diagConnFail: '連通異常',
-      diagProxyNone: '直連/無代理',
-      diagProxyOs: '系統代理',
-      diagRemedyLbl: '④ 排查指引',
-      diagHealthy: '各項鏈路正常，撳開英文思考區塊就睇到譯文。',
-      diagRemedyOffline: '請先喺終端執行下面嘅自檢命令確認守護進程在線，有需要就用已修補捷徑重開一次 Antigravity。',
-      diagRemedyAuth: '上游驗證失敗，請檢查 API Key 係咪正確、額度夠唔夠或者有無目標模型權限。',
-      diagRemedyProxy: '上游或代理逾時/連唔到，請切換「自動偵測 / 自訂 / 直連」並確認本機代理端口正常。',
-      diagRemedyProfile: '請先補齊 AI 渠道嘅 Base URL、模型 ID 同 API Key（本機 Ollama 可免密），或者轉用免費機翻。',
-      diagRemedyGeneral: '如果問題仲喺度，請執行下面狀態檢查命令核對守護狀態，或者重開 Antigravity。',
-      diagCopyBtn: '複製命令',
-      diagCopied: '已複製 ✓',
-    },
     en: {
       titlesLabel: 'Auto-Translate Conversation Titles',
       titlesDesc: 'Translates English conversation titles in the render layer only (off by default); never modifies underlying session data, skips timestamps/paths/filenames, and restores raw titles when off.',
@@ -174,30 +158,30 @@
       diagRunning: 'Diagnosing…',
       diagBridgeLbl: '1. Daemon Bridge',
       diagBridgeOnline: 'Online',
-      diagBridgeOffline: 'Offline (daemon bridge disconnected)',
-      diagProfileLbl: '2. Mode & Config',
+      diagBridgeOffline: 'Offline (daemon disconnected)',
+      diagProfileLbl: '2. Mode & Profile',
       diagModeAi: 'AI Polish',
       diagModeMachine: 'Machine',
       diagModeOff: 'Off',
       diagProfileOk: 'Profile ready',
-      diagProfileMissing: 'Config incomplete',
+      diagProfileMissing: 'Incomplete config',
       diagIssueUrl: 'Invalid Base URL',
       diagIssueModel: 'Missing Model ID',
       diagIssueKey: 'Missing API Key',
-      diagConnLbl: '3. Proxy & Upstream',
+      diagConnLbl: '3. Proxy & Connectivity',
       diagConnOk: 'Connected',
-      diagConnSkipped: 'Skipped (translator is off)',
+      diagConnSkipped: 'Skipped (translator off)',
       diagConnOffline: 'Unavailable (bridge offline)',
       diagConnFail: 'Unreachable',
       diagProxyNone: 'Direct / No proxy',
-      diagProxyOs: 'OS proxy',
+      diagProxyOs: 'OS Proxy',
       diagRemedyLbl: '4. Troubleshooting',
-      diagHealthy: 'All checks passed. Expand an English thinking block to see translations.',
-      diagRemedyOffline: 'Run the status command below in a terminal to verify the daemon, then restart Antigravity via the patched shortcut.',
-      diagRemedyAuth: 'Upstream auth failed. Check your API key, quota, and model permissions.',
-      diagRemedyProxy: 'Upstream/proxy timed out or unreachable. Try switching Auto / Custom / Direct proxy mode and verify your proxy port.',
-      diagRemedyProfile: 'Complete a valid Base URL, Model ID, and API key (optional for local Ollama), or switch to free Machine mode.',
-      diagRemedyGeneral: 'Run the status command below to verify installation & daemon health, or restart Antigravity.',
+      diagHealthy: 'All checks passed. Expand an English thought block to see translation.',
+      diagRemedyOffline: 'Run the status command below in a terminal to verify the daemon, then relaunch Antigravity via its patched shortcut.',
+      diagRemedyAuth: 'Upstream authentication failed. Check your API key, quota, and model permissions.',
+      diagRemedyProxy: 'Upstream or proxy timed out / unreachable. Switch Auto / Custom / Direct proxy mode and verify your local proxy port.',
+      diagRemedyProfile: 'Fill in a valid Base URL, Model ID, and API Key (local Ollama can omit key), or switch to free Machine Translation.',
+      diagRemedyGeneral: 'Run the status command below to inspect installation & daemon health, or restart Antigravity.',
       diagCopyBtn: 'Copy',
       diagCopied: 'Copied ✓',
     },
@@ -235,19 +219,159 @@
       diagCopyBtn: 'コピー',
       diagCopied: 'コピー済 ✓',
     },
+    ko: {
+      titlesLabel: '대화 제목 자동 번역',
+      titlesDesc: '렌더링 계층에서만 영어 대화 제목을 번역합니다(기본 꺼짐). 원본 세션 데이터를 변경하지 않으며, 타임스탬프·파일명·경로를 건너뛰고 끄면 즉시 복원합니다.',
+      diagBtn: '진단',
+      diagRunning: '진단 중…',
+      diagBridgeLbl: '1. 데몬 브리지',
+      diagBridgeOnline: '온라인',
+      diagBridgeOffline: '오프라인(데몬 연결 끊김)',
+      diagProfileLbl: '2. 모드 및 설정',
+      diagModeAi: 'AI 다듬기',
+      diagModeMachine: '기계 번역',
+      diagModeOff: '꺼짐',
+      diagProfileOk: '프로필 준비됨',
+      diagProfileMissing: '설정 미완료',
+      diagIssueUrl: '잘못된 Base URL',
+      diagIssueModel: '모델 ID 누락',
+      diagIssueKey: 'API 키 누락',
+      diagConnLbl: '3. 프록시 및 연결',
+      diagConnOk: '연결됨',
+      diagConnSkipped: '건너뜀(번역 꺼짐)',
+      diagConnOffline: '확인 불가(브리지 오프라인)',
+      diagConnFail: '연결 불가',
+      diagProxyNone: '직접 연결 / 프록시 없음',
+      diagProxyOs: 'OS 프록시',
+      diagRemedyLbl: '4. 문제 해결',
+      diagHealthy: '모든 검사를 통과했습니다. 영어 사고 블록을 펼치면 번역이 표시됩니다.',
+      diagRemedyOffline: '터미널에서 아래 상태 확인 명령을 실행해 데몬을 확인한 뒤 패치된 바로가기로 Antigravity를 재시작하세요.',
+      diagRemedyAuth: '상위 인증에 실패했습니다. API 키, 할당량 및 모델 권한을 확인하세요.',
+      diagRemedyProxy: '상위/프록시 연결 시간이 초과되었거나 도달할 수 없습니다. 자동/사용자/직접 프록시 모드를 전환하고 포트를 확인하세요.',
+      diagRemedyProfile: '유효한 Base URL, 모델 ID, API 키를 입력하거나 무료 기계 번역 모드로 전환하세요.',
+      diagRemedyGeneral: '아래 상태 명령으로 설치 및 데몬 상태를 확인하거나 Antigravity를 재시작하세요.',
+      diagCopyBtn: '복사',
+      diagCopied: '복사됨 ✓',
+    },
+    es: {
+      titlesLabel: 'Traducir títulos automáticamente',
+      titlesDesc: 'Traduce títulos en inglés solo en la capa de vista (desactivado por defecto); nunca altera los datos de sesión y restaura el texto original al apagar.',
+      diagBtn: 'Diagnosticar',
+      diagRunning: 'Diagnosticando…',
+      diagBridgeLbl: '1. Puente del demonio',
+      diagBridgeOnline: 'En línea',
+      diagBridgeOffline: 'Desconectado',
+      diagProfileLbl: '2. Modo y config.',
+      diagModeAi: 'Pulido IA',
+      diagModeMachine: 'Automática',
+      diagModeOff: 'Desactivado',
+      diagProfileOk: 'Perfil listo',
+      diagProfileMissing: 'Config. incompleta',
+      diagIssueUrl: 'Base URL inválida',
+      diagIssueModel: 'Falta ID de modelo',
+      diagIssueKey: 'Falta clave API',
+      diagConnLbl: '3. Proxy y conexión',
+      diagConnOk: 'Conectado',
+      diagConnSkipped: 'Omitido (traductor apagado)',
+      diagConnOffline: 'No disponible (puente offline)',
+      diagConnFail: 'Inaccesible',
+      diagProxyNone: 'Directo / Sin proxy',
+      diagProxyOs: 'Proxy del SO',
+      diagRemedyLbl: '4. Solución',
+      diagHealthy: 'Todas las comprobaciones correctas. Expande un bloque de pensamiento en inglés para ver la traducción.',
+      diagRemedyOffline: 'Ejecuta el comando de estado en una terminal para verificar el demonio y reinicia Antigravity.',
+      diagRemedyAuth: 'Error de autenticación. Revisa tu clave API, cuota y permisos del modelo.',
+      diagRemedyProxy: 'Tiempo de espera o proxy inaccesible. Cambia entre Auto / Personalizado / Directo y verifica el puerto.',
+      diagRemedyProfile: 'Completa una Base URL, ID de modelo y clave API válidos o cambia al modo automático gratuito.',
+      diagRemedyGeneral: 'Ejecuta el comando de estado para verificar la instalación o reinicia Antigravity.',
+      diagCopyBtn: 'Copiar',
+      diagCopied: 'Copiado ✓',
+    },
+    fr: {
+      titlesLabel: 'Traduction auto des titres',
+      titlesDesc: 'Traduit les titres anglais uniquement à l’affichage (désactivé par défaut) ; ne modifie jamais les données de session et restaure l’original à l’arrêt.',
+      diagBtn: 'Diagnostiquer',
+      diagRunning: 'Diagnostic…',
+      diagBridgeLbl: '1. Pont démon',
+      diagBridgeOnline: 'En ligne',
+      diagBridgeOffline: 'Hors ligne (démon déconnecté)',
+      diagProfileLbl: '2. Mode et config.',
+      diagModeAi: 'Affinage IA',
+      diagModeMachine: 'Automatique',
+      diagModeOff: 'Désactivé',
+      diagProfileOk: 'Profil prêt',
+      diagProfileMissing: 'Config. incomplète',
+      diagIssueUrl: 'Base URL invalide',
+      diagIssueModel: 'ID de modèle manquant',
+      diagIssueKey: 'Clé API manquante',
+      diagConnLbl: '3. Proxy et réseau',
+      diagConnOk: 'Connecté',
+      diagConnSkipped: 'Ignoré (traducteur coupé)',
+      diagConnOffline: 'Indisponible (pont hors ligne)',
+      diagConnFail: 'Inaccessible',
+      diagProxyNone: 'Direct / Sans proxy',
+      diagProxyOs: 'Proxy OS',
+      diagRemedyLbl: '4. Dépannage',
+      diagHealthy: 'Tous les tests ont réussi. Dépliez un bloc de réflexion en anglais pour voir la traduction.',
+      diagRemedyOffline: 'Exécutez la commande d’état ci-dessous dans un terminal pour vérifier le démon, puis relancez Antigravity.',
+      diagRemedyAuth: 'Échec d’authentification. Vérifiez votre clé API, votre quota et les droits du modèle.',
+      diagRemedyProxy: 'Délai dépassé ou proxy inaccessible. Basculez Auto / Personnalisé / Direct et vérifiez votre port.',
+      diagRemedyProfile: 'Renseignez Base URL, ID de modèle et clé API valides, ou passez en mode automatique gratuit.',
+      diagRemedyGeneral: 'Exécutez la commande d’état pour vérifier l’installation ou redémarrez Antigravity.',
+      diagCopyBtn: 'Copier',
+      diagCopied: 'Copié ✓',
+    },
+    de: {
+      titlesLabel: 'Gesprächstitel automatisch übersetzen',
+      titlesDesc: 'Übersetzt englische Titel nur in der Darstellung (standardmäßig aus); verändert keine Sitzungsdaten und stellt Originale beim Ausschalten wieder her.',
+      diagBtn: 'Diagnose',
+      diagRunning: 'Diagnose läuft…',
+      diagBridgeLbl: '1. Daemon-Bridge',
+      diagBridgeOnline: 'Online',
+      diagBridgeOffline: 'Offline (Daemon getrennt)',
+      diagProfileLbl: '2. Modus & Config',
+      diagModeAi: 'KI-Feinschliff',
+      diagModeMachine: 'Maschinell',
+      diagModeOff: 'Aus',
+      diagProfileOk: 'Profil bereit',
+      diagProfileMissing: 'Unvollständig',
+      diagIssueUrl: 'Ungültige Base URL',
+      diagIssueModel: 'Modell-ID fehlt',
+      diagIssueKey: 'API-Schlüssel fehlt',
+      diagConnLbl: '3. Proxy & Verbindung',
+      diagConnOk: 'Verbunden',
+      diagConnSkipped: 'Übersprungen (Übersetzer aus)',
+      diagConnOffline: 'Nicht verfügbar (Bridge offline)',
+      diagConnFail: 'Nicht erreichbar',
+      diagProxyNone: 'Direkt / Kein Proxy',
+      diagProxyOs: 'OS-Proxy',
+      diagRemedyLbl: '4. Fehlerbehebung',
+      diagHealthy: 'Alle Prüfungen bestanden. Englischen Denkblock aufklappen, um Übersetzungen zu sehen.',
+      diagRemedyOffline: 'Führe den Statusbefehl unten im Terminal aus und starte Antigravity über die gepatchte Verknüpfung neu.',
+      diagRemedyAuth: 'Upstream-Auth fehlgeschlagen. API-Schlüssel, Kontingent und Modellrechte prüfen.',
+      diagRemedyProxy: 'Timeout oder Proxy nicht erreichbar. Auto / Benutzerdef. / Direkt wechseln und Port prüfen.',
+      diagRemedyProfile: 'Gültige Base URL, Modell-ID und API-Schlüssel ergänzen oder auf kostenlose MT wechseln.',
+      diagRemedyGeneral: 'Statusbefehl zur Prüfung der Installation ausführen oder Antigravity neu starten.',
+      diagCopyBtn: 'Kopieren',
+      diagCopied: 'Kopiert ✓',
+    },
   };
   for (const [lk, extra] of Object.entries(EXTRA_I18N)) {
     if (WORKBENCH_I18N[lk]) Object.assign(WORKBENCH_I18N[lk], extra);
   }
 
   function normalizeLangCode(raw) {
-    const s = String(raw || '').trim();
-    if (!s) return '';
-    if (/^zh[-_](?:TW|HK|MO|Hant)/i.test(s)) return 'zh-TW';
-    if (/^(?:yue|zh[-_]yue)/i.test(s)) return 'yue';
-    if (/^ja\b/i.test(s)) return 'ja';
-    if (/^en\b/i.test(s)) return 'en';
-    if (/^zh\b/i.test(s)) return 'zh-CN';
+    const s = String(raw || '').trim().toLowerCase().replace(/_/g, '-');
+    if (!s || s === 'auto') return '';
+    if (s === 'yue' || s.startsWith('yue-') || s === 'zh-yue' || s.includes('cantonese')) return 'zh-CN';
+    if (/^zh-(tw|hk|mo|hant)/.test(s) || s === 'tw' || s === 'hant') return 'zh-TW';
+    if (/^zh\b/.test(s)) return 'zh-CN';
+    if (/^(ja|jp)\b/.test(s) || s === 'japanese') return 'ja';
+    if (/^(ko|kr)\b/.test(s) || s === 'korean') return 'ko';
+    if (/^es\b/.test(s) || s === 'spanish') return 'es';
+    if (/^fr\b/.test(s) || s === 'french') return 'fr';
+    if (/^de\b/.test(s) || s === 'german') return 'de';
+    if (/^en\b/.test(s) || s === 'english') return 'en';
     return '';
   }
 
@@ -435,11 +559,14 @@
       }
       const hostLang = normalizeLangCode(resolveHostPrism()?.getState?.()?.cfg?.language);
       if (hostLang) return hostLang;
+      const navObj = G && 'navigator' in G ? G.navigator : (typeof navigator !== 'undefined' ? navigator : null);
+      const navLang = normalizeLangCode(navObj?.language || '');
+      if (navLang) return navLang;
     } catch (_) {}
     if (typeof isZhFn === 'function') {
       return isZhFn() ? 'zh-CN' : 'en';
     }
-    return 'zh-CN';
+    return 'en';
   }
 
   function createThoughtAiConfigBox({
@@ -473,7 +600,7 @@
 
     const getPack = () => {
       const code = resolveWorkbenchLang(doc, currentExplicitLang, getLang, isZh);
-      return WORKBENCH_I18N[code] || WORKBENCH_I18N['zh-CN'];
+      return WORKBENCH_I18N[code] || WORKBENCH_I18N.en;
     };
 
     const box = mkEl('div', 'ag-cs-thought-cfg-box');
@@ -1891,6 +2018,17 @@
         });
     });
 
+    // 通知同窗口已挂载的提示词建议设置卡片同步最新共享渠道列表，防止陈旧凭据覆写
+    const notifyPeerSuggesterUi = () => {
+      try {
+        const sgUi =
+          (typeof window !== 'undefined' && window.__agPrismSuggesterSettingsUi) ||
+          G.__agPrismSuggesterSettingsUi ||
+          null;
+        sgUi?.reloadProfiles?.();
+      } catch {}
+    };
+
     saveBtn.addEventListener('click', (ev) => {
       if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
       const api = resolveThoughtApi();
@@ -1915,6 +2053,7 @@
             try {
               api.scan?.();
             } catch {}
+            notifyPeerSuggesterUi();
           } else {
             setStatus('err', `✕ ${res?.error || curPack.saveErr}`);
           }
@@ -1942,7 +2081,10 @@
       void api
         .saveConfig(payload)
         .then((savedRes) => {
-          if (savedRes && savedRes.ok) applySanitizedConfig(savedRes, { fromSave: true });
+          if (savedRes && savedRes.ok) {
+            applySanitizedConfig(savedRes, { fromSave: true });
+            notifyPeerSuggesterUi();
+          }
           const cur = getActiveProfile();
           return api.testConnection({
             profileId: cur?.id,

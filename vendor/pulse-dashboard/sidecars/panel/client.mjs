@@ -290,6 +290,19 @@ export class AntigravityClient {
     return { steps, cwu, compact };
   }
 
+  _resolveProxyTrajectoryTtl(cached, sumStamp) {
+    const settled = this._isProxySettled(cached.data);
+    if (settled) {
+      return sumStamp && cached.sumStamp && sumStamp === cached.sumStamp ? 60000 : 20000;
+    }
+    // 运行中对话按轨迹体量动态拉长全量 GetCascadeTrajectory TTL（12s~20s），避免长对话每 4s 触发 LS 整树反序列化
+    const steps = Number(cached.ctxSig?.steps ?? cached.data?.numTotalSteps ?? 0) || 0;
+    const bytes = Number(cached.bytes || 0) || 0;
+    if (steps >= 200 || bytes >= 768 * 1024) return 20000;
+    if (steps >= 80 || bytes >= 256 * 1024) return 12000;
+    return 4000;
+  }
+
   async _getProxyTrajectory(cascadeId, force = false, summaryOrOpts = null) {
     const explicitScope =
       summaryOrOpts && typeof summaryOrOpts === 'object' && typeof summaryOrOpts.scopeKey === 'string'
@@ -309,15 +322,10 @@ export class AntigravityClient {
       const stampChanged = Boolean(sumStamp && cached.sumStamp && sumStamp !== cached.sumStamp);
       if (!stampChanged) {
         const settled = this._isProxySettled(cached.data);
-        const ttl = settled
-          ? sumStamp && cached.sumStamp && sumStamp === cached.sumStamp
-            ? 60000
-            : 20000
-          : 4000;
+        const ttl = this._resolveProxyTrajectoryTtl(cached, sumStamp);
         if (age < ttl) {
           let peekChanged = false;
-          // In renderer-proxy mode without an explicit summary stamp, run a zero-LS-RPC
-          // in-memory context peek after 3.5s so /compact completion invalidates stale cache immediately.
+          // 1) 已结束会话：无 summary stamp 时用零 LS-RPC 内存态探针秒级感知 /compact 变化
           if (settled && !sumStamp && age >= 3500 && (!cached.peekAt || now - cached.peekAt >= 2000)) {
             cached.peekAt = now;
             try {
@@ -340,6 +348,29 @@ export class AntigravityClient {
                 } else {
                   if (hasPeekSteps) cached.peekSteps = pSig.steps;
                   if (peekMod && !cached.peekMod) cached.peekMod = peekMod;
+                }
+              }
+            } catch {}
+          } else if (!settled && ttl >= 12000 && age >= 3500 && (!cached.peekAt || now - cached.peekAt >= 2500)) {
+            // 2) 运行中长对话：在 12s~20s 动态 TTL 内优先通过零 LS-RPC PeekContextState 刷新上下文水位与结束态
+            cached.peekAt = now;
+            try {
+              const peek = await this.rendererRpc('PeekContextState', { cascadeId });
+              if (peek && typeof peek === 'object') {
+                const pSig = this._proxyContextSig(peek);
+                const cSig = cached.ctxSig || this._proxyContextSig(cached.data);
+                const becameSettled = peek.status !== undefined && this._isProxySettled(peek);
+                const compactedChanged = Boolean(pSig.compact && pSig.compact !== cSig.compact);
+                if (becameSettled || compactedChanged) {
+                  peekChanged = true;
+                } else if (cached.data && typeof cached.data === 'object') {
+                  if (peek.contextWindowUsage && typeof peek.contextWindowUsage === 'object') {
+                    cached.data.contextWindowUsage = peek.contextWindowUsage;
+                  }
+                  if (pSig.steps > cSig.steps) {
+                    cached.data.numTotalSteps = pSig.steps;
+                  }
+                  cached.ctxSig = this._proxyContextSig(cached.data);
                 }
               }
             } catch {}

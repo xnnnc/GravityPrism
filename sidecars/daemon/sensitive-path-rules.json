@@ -1,0 +1,72 @@
+{
+  "basenames": [
+    "config.json",
+    "model-hub.config.json",
+    "secrets.json",
+    "credentials.json",
+    "auth.json",
+    "token.json",
+    "mcp_config.json",
+    "transcript.jsonl",
+    "transcript_full.jsonl",
+    "state.vscdb",
+    ".claude.json",
+    "keys.txt",
+    ".npmrc",
+    ".pypirc",
+    ".git-credentials",
+    ".netrc",
+    "kubeconfig",
+    "cookies",
+    "cookies-journal",
+    "login data",
+    "login data-journal",
+    "local state",
+    "web data"
+  ],
+  "extensions": [
+    ".env",
+    ".pem",
+    ".key",
+    ".p12",
+    ".pfx",
+    ".kdbx",
+    ".jks",
+    ".keystore",
+    ".ppk",
+    ".ovpn",
+    ".vscdb",
+    ".sqlite",
+    ".sqlite3",
+    ".db"
+  ],
+  "directories": [
+    ".ssh",
+    ".aws",
+    ".gnupg",
+    ".kube",
+    ".gemini",
+    ".azure",
+    ".claude",
+    ".codex"
+  ],
+  "sshKeyNames": [
+    "id_rsa",
+    "id_ed25519",
+    "id_ecdsa",
+    "id_dsa",
+    "id_ed25519_sk",
+    "id_ecdsa_sk"
+  ],
+  "sysPrefixPattern": "^(?:\\/(?:proc|sys|dev|etc)(?:\\/|$)|(?:[a-z]:)?\\/(?:windows|program files(?: \\(x86\\))?|programdata)(?:\\/|$))",
+  "subpathPattern": "(?:^|\\/)(?:\\.config\\/(?:gcloud|gh)|appdata\\/roaming|appdata\\/local\\/google|library\\/application support\\/google|library\\/keychains)(?:\\/|$)",
+  "sysSuffixes": [
+    "/etc/shadow",
+    "/etc/gshadow",
+    "/etc/master.passwd",
+    "/etc/sudoers",
+    "/windows/system32/config/sam",
+    "/windows/system32/config/system",
+    "/windows/system32/config/security"
+  ]
+}

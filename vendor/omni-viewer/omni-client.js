@@ -1,4 +1,4 @@
-// Obsidian Prism — Omni Native Browser Router, Context Menu & Streaming Workbench Client (v1.0.7)
+// Obsidian Prism — Omni Native Browser Router, Context Menu & Streaming Workbench Client (v1.0.8-beta.3)
 // Second-channel runtime (`window.__agPrismOmni`) + CommonJS factory for deterministic unit tests.
 // Engineering & security guarantees:
 // 1. ZERO custom side-dock DOM or rogue `wcvBrowser` calls: 100% native integration with Antigravity's
@@ -32,29 +32,36 @@
 })(typeof window !== 'undefined' ? window : globalThis, function () {
   'use strict';
 
-  const VERSION = '1.0.7';
+  const VERSION = '1.0.8-beta.3';
   const STYLE_EL_ID = 'ag-prism-omni-css';
   const HL_URL_NAME = 'ag-omni-url';
   const HL_PATH_NAME = 'ag-omni-path';
   const GUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 
-  // Compact 5-locale fallback table [zh-CN, zh-TW, yue, en, ja]; primary source is `window.__agCsLocales`
-  const LANG_INDEX = { 'zh-CN': 0, 'zh-TW': 1, yue: 2, en: 3, ja: 4 };
+  // Compact 8-locale fallback table [zh-CN, zh-TW, en, ja, ko, es, fr, de]; primary source is `window.__agCsLocales`
+  const LANG_INDEX = { 'zh-CN': 0, 'zh-TW': 1, en: 2, ja: 3, ko: 4, es: 5, fr: 6, de: 7 };
   const FALLBACK_ROWS = {
-    omniOpenBuiltin: ['在右侧面板打开', '在右側面板開啟', '喺右邊面板打開', 'Open in Side Pane', '右パネルで開く'],
-    omniOpenPreview: ['在右侧检视台预览', '在右側檢視台預覽', '喺右邊檢視台預覽', 'Preview in Workbench', 'ワークベンチでプレビュー'],
-    omniOpenExternal: ['使用系统默认程序打开', '使用系統預設程式開啟', '用系統預設程式打開', 'Open in Default App', '既定のアプリで開く'],
-    omniOpenBrowser: ['在系统浏览器中打开', '在系統瀏覽器中開啟', '喺系統瀏覽器打開', 'Open in System Browser', '標準ブラウザで開く'],
-    omniRevealFolder: ['在文件夹中显示', '在資料夾中顯示', '喺資料夾入面顯示', 'Reveal in Folder', 'フォルダに表示'],
-    omniInsertMention: ['作为 @引用 填入输入框', '作為 @引用 填入輸入框', '當做 @引用 填入輸入框', 'Insert as @Mention', '@参照として入力欄へ挿入'],
-    omniCopyLink: ['复制链接地址', '複製連結位址', '複製連結地址', 'Copy Link URL', 'リンクURLをコピー'],
-    omniCopyAbsPath: ['复制绝对路径', '複製絕對路徑', '複製絕對路徑', 'Copy Absolute Path', '絶対パスをコピー'],
-    omniCopyRelPath: ['复制相对路径', '複製相對路徑', '複製相對路徑', 'Copy Relative Path', '相対パスをコピー'],
-    omniCopyText: ['复制文本', '複製文字', '複製文字', 'Copy Text', 'テキストをコピー'],
-    omniZoomDiagram: ['放大查看图表', '放大檢視圖表', '放大睇圖表', 'Zoom Diagram', '図を拡大表示'],
-    omniViewWorkbench: ['检视台视图', '檢視台檢視', '檢視台檢視', 'Workbench View', 'プレビュー表示'],
-    omniViewRaw: ['原始视图', '原始檢視', '原始檢視', 'Raw View', 'ソース表示'],
-    omniCopied: ['已复制', '已複製', '已複製', 'Copied', 'コピー済'],
+    omniOpenBuiltin: ['在右侧面板打开', '在右側面板開啟', 'Open in Side Pane', '右パネルで開く', '오른쪽 패널에서 열기', 'Abrir en panel lateral', 'Ouvrir dans le panneau latéral', 'Im Seitenbereich öffnen'],
+    omniOpenPreview: ['在右侧检视台预览', '在右側檢視台預覽', 'Preview in Workbench', 'ワークベンチでプレビュー', '워크벤치에서 미리보기', 'Previsualizar en Workbench', 'Aperçu dans Workbench', 'In Workbench vorschauen'],
+    omniOpenExternal: ['使用系统默认程序打开', '使用系統預設程式開啟', 'Open in Default App', '既定のアプリで開く', '기본 앱으로 열기', 'Abrir en app predeterminada', 'Ouvrir avec l’app par défaut', 'In Standard-App öffnen'],
+    omniOpenBrowser: ['在系统浏览器中打开', '在系統瀏覽器中開啟', 'Open in System Browser', '標準ブラウザで開く', '시스템 브라우저에서 열기', 'Abrir en el navegador', 'Ouvrir dans le navigateur', 'Im Systembrowser öffnen'],
+    omniRevealFolder: ['在文件夹中显示', '在資料夾中顯示', 'Reveal in Folder', 'フォルダに表示', '폴더에서 보기', 'Mostrar en carpeta', 'Afficher dans le dossier', 'Im Ordner anzeigen'],
+    omniInsertMention: ['作为 @引用 填入输入框', '作為 @引用 填入輸入框', 'Insert as @Mention', '@参照として入力欄へ挿入', '@멘션으로 입력창에 삽입', 'Insertar como @mención', 'Insérer comme @mention', 'Als @Erwähnung einfügen'],
+    omniCopyLink: ['复制链接地址', '複製連結位址', 'Copy Link URL', 'リンクURLをコピー', '링크 URL 복사', 'Copiar enlace', 'Copier le lien', 'Link-URL kopieren'],
+    omniCopyAbsPath: ['复制绝对路径', '複製絕對路徑', 'Copy Absolute Path', '絶対パスをコピー', '절대 경로 복사', 'Copiar ruta absoluta', 'Copier le chemin absolu', 'Absoluten Pfad kopieren'],
+    omniCopyRelPath: ['复制相对路径', '複製相對路徑', 'Copy Relative Path', '相対パスをコピー', '상대 경로 복사', 'Copiar ruta relativa', 'Copier le chemin relatif', 'Relativen Pfad kopieren'],
+    omniCopyText: ['复制文本', '複製文字', 'Copy Text', 'テキストをコピー', '텍스트 복사', 'Copiar texto', 'Copier le texte', 'Text kopieren'],
+    omniZoomDiagram: ['放大查看图表', '放大檢視圖表', 'Zoom Diagram', '図を拡大表示', '다이어그램 확대', 'Ampliar diagrama', 'Agrandir le diagramme', 'Diagramm vergrößern'],
+    omniViewWorkbench: ['检视台视图', '檢視台檢視', 'Workbench View', 'プレビュー表示', '워크벤치 보기', 'Vista Workbench', 'Vue Workbench', 'Workbench-Ansicht'],
+    omniViewRaw: ['原始视图', '原始檢視', 'Raw View', 'ソース表示', '원본 보기', 'Vista sin formato', 'Vue brute', 'Rohansicht'],
+    omniViewPreview: ['预览', '預覽', 'Preview', 'プレビュー', '미리보기', 'Vista previa', 'Aperçu', 'Vorschau'],
+    omniViewSource: ['源码', '原始碼', 'Source', 'ソース', '소스', 'Código fuente', 'Code source', 'Quelltext'],
+    omniSandboxIsolated: ['沙盒隔离', '沙盒隔離', 'Sandbox Isolated', 'サンドボックス隔離', '샌드박스 격리', 'Aislado en sandbox', 'Isolé en sandbox', 'Sandbox-isoliert'],
+    omniCopied: ['已复制', '已複製', 'Copied', 'コピー済', '복사됨', 'Copiado', 'Copié', 'Kopiert'],
+    omniMermaidDiagram: ['Mermaid 图表', 'Mermaid 圖表', 'Mermaid Diagram', 'Mermaid 図', 'Mermaid 다이어그램', 'Diagrama Mermaid', 'Diagramme Mermaid', 'Mermaid-Diagramm'],
+    omniMermaidSvg: ['Mermaid SVG 图表', 'Mermaid SVG 圖表', 'Mermaid SVG', 'Mermaid SVG', 'Mermaid SVG', 'Mermaid SVG', 'Mermaid SVG', 'Mermaid SVG'],
+    omniHintClick: ['单击', '單擊', 'Click', 'クリック', '클릭', 'Clic', 'Clic', 'Klick'],
+    omniHintCtrlClick: ['Ctrl+单击', 'Ctrl+單擊', 'Ctrl+Click', 'Ctrl+クリック', 'Ctrl+클릭', 'Ctrl+Clic', 'Ctrl+Clic', 'Strg+Klick'],
   };
 
   const PREVIEW_KIND_BY_EXT = {
@@ -68,6 +75,7 @@
   };
 
   const AUX_SWITCHABLE_EXTS = new Set(Object.keys(PREVIEW_KIND_BY_EXT));
+  const AUTO_PREVIEW_EXTS = new Set(['html', 'htm', 'svg']);
 
   const KNOWN_FILE_EXTS = new Set([
     ...AUX_SWITCHABLE_EXTS,
@@ -161,13 +169,17 @@
   }
 
   function normalizeLangCode(raw) {
-    const s = String(raw || '').trim();
-    if (!s) return '';
-    if (/^zh[-_](?:TW|HK|MO|Hant)/i.test(s)) return 'zh-TW';
-    if (/^(?:yue|zh[-_]yue)/i.test(s)) return 'yue';
-    if (/^ja\b/i.test(s)) return 'ja';
-    if (/^en\b/i.test(s)) return 'en';
-    if (/^zh\b/i.test(s)) return 'zh-CN';
+    const s = String(raw || '').trim().toLowerCase().replace(/_/g, '-');
+    if (!s || s === 'auto') return '';
+    if (s === 'yue' || s.startsWith('yue-') || s === 'zh-yue' || s.includes('cantonese')) return 'zh-CN';
+    if (/^zh-(tw|hk|mo|hant)/.test(s) || s === 'tw' || s === 'hant') return 'zh-TW';
+    if (/^zh\b/.test(s)) return 'zh-CN';
+    if (/^(ja|jp)\b/.test(s) || s === 'japanese') return 'ja';
+    if (/^(ko|kr)\b/.test(s) || s === 'korean') return 'ko';
+    if (/^es\b/.test(s) || s === 'spanish') return 'es';
+    if (/^fr\b/.test(s) || s === 'french') return 'fr';
+    if (/^de\b/.test(s) || s === 'german') return 'de';
+    if (/^en\b/.test(s) || s === 'english') return 'en';
     return '';
   }
 
@@ -464,7 +476,7 @@
     return null;
   }
 
-  function extractTargetMeta(startNode) {
+  function extractTargetMeta(startNode, defaultMermaidLabel = 'Mermaid Diagram') {
     const el = startNode && startNode.nodeType === 1 ? startNode : startNode?.parentElement;
     if (!el) return null;
     if (findClosest(el, '.ag-omni-menu')) return null;
@@ -628,7 +640,7 @@
         return {
           kind: 'mermaid',
           rawContent: svgMarkup,
-          text: (mermaidBox.getAttribute?.('aria-label') || 'Mermaid Diagram').trim(),
+          text: (mermaidBox.getAttribute?.('aria-label') || defaultMermaidLabel).trim(),
           element: mermaidBox,
         };
       }
@@ -660,6 +672,7 @@
     '[data-omni-mermaid-box]:hover>.ag-omni-mermaid-zoom-btn,.ag-omni-mermaid-zoom-btn:focus-visible{opacity:.92}',
     '.ag-omni-mermaid-zoom-btn:hover{opacity:1!important;background:color-mix(in srgb,var(--ag-cs-accent,var(--primary,#669DF6)) 18%,var(--card,#1e293b))}',
     '.ag-omni-aux-bar{display:flex;align-items:center;gap:6px;padding:4px 10px;border-bottom:1px solid var(--ag-cs-border-1,var(--border,rgba(148,163,184,.16)));background:var(--ag-cs-tonal-2,var(--card,var(--ag-cs-panel-bg,rgba(20,23,30,.9))));font-size:11.5px;flex-shrink:0}',
+    '.ag-omni-sandbox-badge{margin-left:auto;display:inline-flex;align-items:center;gap:4px;height:20px;padding:0 7px;border-radius:999px;border:1px solid var(--ag-cs-border-1,var(--border,rgba(148,163,184,.2)));background:var(--ag-cs-tonal-1,rgba(255,255,255,.04));color:var(--muted-foreground,var(--ag-cs-muted,#94a3b8));font-size:10.5px;font-weight:500;letter-spacing:.01em;line-height:1;white-space:nowrap;user-select:none;opacity:.86}',
     '.ag-omni-aux-overlay{width:100%;flex:1 1 0%;min-height:360px;border:0;display:block;background:var(--ag-cs-tonal-0,var(--background,#0B0B0E));opacity:0;transition:opacity 140ms ease}',
     '.ag-omni-aux-overlay[data-wb-ready="1"]{opacity:1}',
   ].join('');
@@ -726,15 +739,18 @@
       const attrLang = normalizeLangCode(D?.documentElement?.getAttribute?.('data-ag-cs-lang'));
       if (attrLang) return attrLang;
       const cfgLang = normalizeLangCode(W?.__agPrism?.getState?.()?.cfg?.language);
-      return cfgLang || 'zh-CN';
+      if (cfgLang) return cfgLang;
+      const navObj = W && 'navigator' in W ? W.navigator : (typeof navigator !== 'undefined' ? navigator : null);
+      const navLang = normalizeLangCode(navObj?.language || '');
+      return navLang || 'en';
     }
 
     function getStrings() {
       const lang = resolveLang();
-      const idx = LANG_INDEX[lang] ?? 0;
+      const idx = LANG_INDEX[lang] ?? 2;
       const base = {};
       for (const k of Object.keys(FALLBACK_ROWS)) {
-        base[k] = FALLBACK_ROWS[k][idx] || FALLBACK_ROWS[k][0];
+        base[k] = FALLBACK_ROWS[k][idx] ?? FALLBACK_ROWS[k][2];
       }
       try {
         const shared = W?.__agCsLocales?.getUiStrings?.(lang);
@@ -1439,10 +1455,7 @@
         if (rec.iframe && rec.iframe.isConnected && rec.iframe.contentWindow) {
           pushWorkbenchSyncToIframe(rec.iframe, { filePath: rec.filePath });
         }
-        if (rec.btnWb && rec.btnRaw) {
-          rec.btnWb.textContent = s.omniViewWorkbench;
-          rec.btnRaw.textContent = s.omniViewRaw;
-        }
+        syncAuxBarUi(rec, s);
       }
       for (const box of decoratedMermaidBoxes) {
         const btn = box.querySelector?.('.ag-omni-mermaid-zoom-btn');
@@ -1552,6 +1565,7 @@
       el.setAttribute('data-ag-localization-skip', 'true');
       el.setAttribute('data-agy-no-translate', 'true');
       el.setAttribute('data-antigravity-zh-skip', '1');
+      el.setAttribute('data-ag-no-i18n', '');
       return el;
     }
 
@@ -1636,13 +1650,13 @@
         entries.push({
           id: 'open-builtin',
           label: s.omniOpenBuiltin,
-          hint: linkTarget === 'builtin' ? 'Click' : 'Ctrl+Click',
+          hint: linkTarget === 'builtin' ? s.omniHintClick : s.omniHintCtrlClick,
           run: () => openUrl(meta.url, 'builtin'),
         });
         entries.push({
           id: 'open-browser',
           label: s.omniOpenBrowser,
-          hint: linkTarget === 'external' ? 'Click' : 'Ctrl+Click',
+          hint: linkTarget === 'external' ? s.omniHintClick : s.omniHintCtrlClick,
           run: () => openUrl(meta.url, 'external'),
         });
         entries.push({ separator: true });
@@ -1742,7 +1756,7 @@
           label: s.omniCopyText,
           run: () => copyTextToClipboard(meta.rawContent),
         });
-        return { header: meta.text || 'Mermaid SVG', entries };
+        return { header: meta.text || s.omniMermaidSvg || 'Mermaid SVG', entries };
       }
 
       return null;
@@ -1954,7 +1968,7 @@
       let selectedText = '';
       try { selectedText = String(W?.getSelection?.()?.toString?.() || '').trim(); } catch (_) {}
 
-      const meta = extractTargetMeta(el) || hitTestHighlightedToken(ev.clientX, ev.clientY);
+      const meta = extractTargetMeta(el, getStrings().omniMermaidDiagram) || hitTestHighlightedToken(ev.clientX, ev.clientY);
       if (!meta) {
         closeContextMenu();
         return;
@@ -2399,6 +2413,60 @@
       return viewEl;
     }
 
+    function isAutoPreviewFilePath(filePath) {
+      const ext = getFileExt(filePath);
+      return Boolean(ext && AUTO_PREVIEW_EXTS.has(ext));
+    }
+
+    function isNodeAncestorOf(ancestor, node) {
+      let cur = node?.parentElement;
+      while (cur) {
+        if (cur === ancestor) return true;
+        cur = cur.parentElement;
+      }
+      return false;
+    }
+
+    function syncAuxBarUi(rec, strings) {
+      if (!rec || !rec.bar) return;
+      const s = strings || getStrings();
+      const isAuto = isAutoPreviewFilePath(rec.filePath);
+      if (rec.btnWb) rec.btnWb.textContent = isAuto ? s.omniViewPreview : s.omniViewWorkbench;
+      if (rec.btnRaw) rec.btnRaw.textContent = isAuto ? s.omniViewSource : s.omniViewRaw;
+      if (isAuto) {
+        if (!rec.sandboxBadge && D) {
+          const badge = markNoTranslate(D.createElement('span'));
+          badge.className = 'ag-omni-sandbox-badge';
+          badge.setAttribute('data-testid', 'ag-omni-sandbox-badge');
+          badge.setAttribute('data-ag-prism-omni-owned', '1');
+          rec.sandboxBadge = badge;
+        }
+        if (rec.sandboxBadge) {
+          rec.sandboxBadge.textContent = s.omniSandboxIsolated;
+          rec.sandboxBadge.title = s.omniSandboxIsolated;
+          if (rec.sandboxBadge.parentNode !== rec.bar) {
+            rec.bar.appendChild(rec.sandboxBadge);
+          }
+        }
+      } else if (rec.sandboxBadge) {
+        try { rec.sandboxBadge.remove?.(); } catch (_) {}
+        rec.sandboxBadge = null;
+      }
+    }
+
+    function isAutoPreviewAuxShell(shell) {
+      if (!isValidAuxShell(shell)) return false;
+      if (!findClosest(shell, '[data-testid="aux-pane-split"]')) return false;
+      if (findClosest(shell, '[data-testid="csv-file-viewer"], video')) return false;
+      if (shell.querySelector?.('[data-testid="conversation-view"], aside, .agy-home, [data-testid="csv-file-viewer"], video')) {
+        return false;
+      }
+      const rawRef = extractAuxFileRef(shell);
+      if (!rawRef) return false;
+      const { filePath } = parseFileUriToPath(rawRef);
+      return isAutoPreviewFilePath(filePath);
+    }
+
     function unmountSingleAuxSwitch(rec) {
       if (!rec) return;
       for (const item of rec.hiddenKids) {
@@ -2411,6 +2479,7 @@
       }
       try { rec.bar?.remove?.(); } catch (_) {}
       try { rec.iframe?.remove?.(); } catch (_) {}
+      rec.sandboxBadge = null;
       rec.viewEl?.removeAttribute?.('data-omni-aux-mounted');
       rec.hostEl?.removeAttribute?.('data-omni-aux-mounted');
       mountedAuxSwitches.delete(rec);
@@ -2445,18 +2514,29 @@
           unmountSingleAuxSwitch(rec);
           continue;
         }
+        const hostUnsupported = hasHostUnsupportedState(rec.viewEl, rec.hostEl);
+        if (!hostUnsupported && rec.hostEl.querySelector?.('[data-testid="csv-file-viewer"], video')) {
+          unmountSingleAuxSwitch(rec);
+          continue;
+        }
         const curRaw = extractAuxFileRef(rec.hostEl) || extractAuxFileRef(rec.viewEl);
         if (!curRaw) continue;
         const curPath = parseFileUriToPath(curRaw).filePath;
         if (curPath && curPath !== rec.filePath) {
           const nextExt = getFileExt(curPath);
-          if (nextExt && AUX_SWITCHABLE_EXTS.has(nextExt) && hasHostUnsupportedState(rec.viewEl, rec.hostEl)) {
+          const keepUnsupported = Boolean(nextExt && AUX_SWITCHABLE_EXTS.has(nextExt) && hostUnsupported);
+          const keepAutoPreview = Boolean(nextExt && AUTO_PREVIEW_EXTS.has(nextExt) && isAutoPreviewAuxShell(rec.hostEl));
+          if (keepUnsupported || keepAutoPreview) {
             rec.filePath = curPath;
+            syncAuxBarUi(rec, getStrings());
             if (rec.activeMode === 'workbench' && rec.iframe && serverMeta?.baseUrl && serverMeta?.token) {
               const nextSrc = buildViewerUrl(serverMeta, { filePath: curPath, kind: detectPreviewKind(curPath) });
-              if (rec.iframe.src !== nextSrc) rec.iframe.src = nextSrc;
+              if (rec.iframe.src !== nextSrc) {
+                rec.iframe.removeAttribute('data-wb-ready');
+                rec.iframe.src = nextSrc;
+              }
               pushWorkbenchSyncToIframe(rec.iframe, { filePath: curPath });
-            } else if (rec.switchMode && shouldAutoActivateWorkbench(rec.viewEl, rec.hostEl)) {
+            } else if (rec.switchMode && shouldAutoActivateWorkbench(rec.viewEl, rec.hostEl, curPath)) {
               void rec.switchMode(true, { auto: true });
             }
           } else {
@@ -2466,8 +2546,11 @@
       }
     }
 
-    function shouldAutoActivateWorkbench(viewEl, hostEl) {
-      return hasHostUnsupportedState(viewEl, hostEl);
+    function shouldAutoActivateWorkbench(viewEl, hostEl, filePath) {
+      if (hasHostUnsupportedState(viewEl, hostEl)) return true;
+      const resolved =
+        filePath || parseFileUriToPath(extractAuxFileRef(hostEl) || extractAuxFileRef(viewEl)).filePath;
+      return isAutoPreviewFilePath(resolved);
     }
 
     function collectAuxCandidateViews(scopeEl) {
@@ -2487,7 +2570,7 @@
         pushUnique(el);
       }
 
-      // Detect host File Pane `UHc` (>20MB / >200MB / read-error) views lacking data-testid
+      // Detect host File Pane `UHc` (>20MB / >200MB / read-error) and normal `.html/.htm/.svg` views in aux-pane-split
       const shellPool = new Set();
       if (scopeEl !== D.body && scopeEl !== D.documentElement) {
         const ancShell = findClosest(scopeEl, '.relative.h-full.w-full');
@@ -2497,11 +2580,20 @@
         if (isValidAuxShell(sh)) shellPool.add(sh);
       }
 
+      const autoShells = [];
       for (const sh of shellPool) {
         if (sh.querySelector?.(AUX_FILE_VIEW_SELECTOR)) continue;
         const txt = String(sh.textContent || '');
         const hasHostError = txt.length > 0 && txt.length < 4096 && HOST_AUX_ERROR_RE.test(txt);
-        if (hasHostError) pushUnique(sh);
+        if (hasHostError) {
+          pushUnique(sh);
+        } else if (isAutoPreviewAuxShell(sh)) {
+          autoShells.push(sh);
+        }
+      }
+      for (const sh of autoShells) {
+        const hasMoreSpecificDescendant = autoShells.some((other) => other !== sh && isNodeAncestorOf(sh, other));
+        if (!hasMoreSpecificDescendant) pushUnique(sh);
       }
       return candidates;
     }
@@ -2548,21 +2640,20 @@
         const btnWb = D.createElement('button');
         btnWb.type = 'button';
         btnWb.className = 'ag-omni-btn';
-        btnWb.textContent = s.omniViewWorkbench;
 
         const btnRaw = D.createElement('button');
         btnRaw.type = 'button';
         btnRaw.className = 'ag-omni-btn';
         btnRaw.setAttribute('data-active', '1');
-        btnRaw.textContent = s.omniViewRaw;
 
         bar.appendChild(btnWb);
         bar.appendChild(btnRaw);
 
         const rec = {
           viewEl, hostEl, origHostDisplay, origHostFlexDir,
-          bar, btnWb, btnRaw, iframe: null, filePath, hiddenKids: [], activeMode: 'raw',
+          bar, btnWb, btnRaw, sandboxBadge: null, iframe: null, filePath, hiddenKids: [], activeMode: 'raw',
         };
+        syncAuxBarUi(rec, s);
 
         const switchMode = async (toWorkbench, opts = {}) => {
           if (toWorkbench) {
@@ -2573,6 +2664,7 @@
             }
             btnWb.setAttribute('data-active', '1');
             btnRaw.removeAttribute('data-active');
+            syncAuxBarUi(rec, getStrings());
             if (hostEl.style) {
               hostEl.style.display = 'flex';
               hostEl.style.flexDirection = 'column';
@@ -2629,7 +2721,7 @@
         else hostEl.appendChild(bar);
         mountedAuxSwitches.add(rec);
 
-        if (shouldAutoActivateWorkbench(viewEl, hostEl)) {
+        if (shouldAutoActivateWorkbench(viewEl, hostEl, filePath)) {
           void switchMode(true, { auto: true });
         }
       }
@@ -2678,8 +2770,15 @@
         if (!sawExplicitScan && cur.getAttribute?.('role') === 'dialog') {
           return true;
         }
+        if (cur.hasAttribute?.('data-hover-card-popup') || cur.tagName === 'ASIDE') return true;
+        if (d === 0) {
+          const f = cur.firstElementChild;
+          if (f?.hasAttribute?.('data-hover-card-popup') || f?.firstElementChild?.hasAttribute?.('data-hover-card-popup')) return true;
+          if (cur.hasAttribute?.('data-base-ui-portal') && cur.querySelector?.('[data-hover-card-popup]')) return true;
+        }
         const tid = cur.getAttribute?.('data-testid');
-        if (tid === 'agent-input-box' || tid === 'conversation-row-sidebar') return true;
+        if (tid === 'agent-input-box' || tid === 'conversation-row-sidebar' || tid === 'conversation-list-sidebar' || tid === 'project-header') return true;
+        if (cur.parentElement?.getAttribute?.('data-testid') === 'sidebar-split' && cur === cur.parentElement.firstElementChild) return true;
         const cls = typeof cur.className === 'string' ? cur.className : '';
         if (
           cls &&
@@ -2768,7 +2867,7 @@
           }
           decorateMermaidContainers(r);
           if (!findClosest(r, '[data-testid="conversation-view"]')) {
-            const auxRoot = !scannedAuxSplit && findClosest(r, '[data-testid="aux-pane-split"]');
+            const auxRoot = !scannedAuxSplit && (findClosest(r, '[data-testid="aux-pane-split"]') || r.querySelector?.('[data-testid="aux-pane-split"]'));
             if (auxRoot) {
               scannedAuxSplit = true;
               decorateAuxUnsupportedViews(auxRoot);
@@ -2907,19 +3006,35 @@
             if (isIgnoredMutationTarget(m.target)) continue;
             if (m.type === 'childList') {
               const useHl = supportsHighlightApi();
+              let queuedTargetAux = false;
               for (let j = 0; j < m.addedNodes.length; j++) {
                 const n = m.addedNodes[j];
                 if (n.nodeType !== 1 && n.nodeType !== 3) continue;
                 if (isIgnoredMutationTarget(n)) continue;
                 if (useHl && n.nodeType === 3) {
                   scheduleTextNodeHighlight(n);
+                  if (!queuedTargetAux && mountedAuxSwitches.size > 0 && findClosest(m.target, '[data-testid="aux-pane-split"]')) {
+                    queuedTargetAux = true;
+                    scheduleIncrementalScan(m.target);
+                  }
                 } else {
                   scheduleIncrementalScan(n);
                 }
               }
+              if (
+                !queuedTargetAux &&
+                m.removedNodes.length > 0 &&
+                mountedAuxSwitches.size > 0 &&
+                findClosest(m.target, '[data-testid="aux-pane-split"]')
+              ) {
+                scheduleIncrementalScan(m.target);
+              }
             } else if (m.type === 'characterData' && m.target) {
               if (supportsHighlightApi() && m.target.nodeType === 3) {
                 scheduleTextNodeHighlight(m.target);
+                if (mountedAuxSwitches.size > 0 && findClosest(m.target, '[data-testid="aux-pane-split"]')) {
+                  scheduleIncrementalScan(m.target);
+                }
               } else {
                 scheduleIncrementalScan(m.target);
               }
@@ -2929,6 +3044,15 @@
                 (attrName === 'data-ag-cs-spark-streaming' || attrName === 'data-ag-cs-thought-streaming') &&
                 m.target &&
                 !m.target.hasAttribute?.(attrName)
+              ) {
+                scheduleIncrementalScan(m.target);
+              } else if (
+                (attrName === 'data-active-file-uri' ||
+                  attrName === 'data-file-uri' ||
+                  attrName === 'data-uri' ||
+                  attrName === 'data-file-path') &&
+                m.target &&
+                findClosest(m.target, '[data-testid="aux-pane-split"]')
               ) {
                 scheduleIncrementalScan(m.target);
               }
@@ -2945,6 +3069,10 @@
             attributeFilter: [
               'data-ag-cs-spark-streaming',
               'data-ag-cs-thought-streaming',
+              'data-active-file-uri',
+              'data-file-uri',
+              'data-uri',
+              'data-file-path',
             ],
           });
         }
@@ -3097,6 +3225,7 @@
   return {
     VERSION,
     PREVIEW_KIND_BY_EXT,
+    AUTO_PREVIEW_EXTS,
     createOmniClient,
     shortStableHash,
     normalizeLangCode,

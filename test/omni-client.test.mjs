@@ -1234,6 +1234,178 @@ test('auto-replaces host >20MB File Pane error (UHc without data-testid) with in
   client.destroy();
 });
 
+// ── 6c. Battle 3: Aux Auto-Preview for .html/.htm/.svg + Sandbox Badge + 8-Locale + Clean Unmount ─
+test('auto-previews normal .html/.htm/.svg in aux-pane-split without error banner, toggles Source, unmounts on .ts, excludes native containers, and renders 8-locale 5+1 sandbox badge', async () => {
+  const env = createFakeDomEnvironment();
+  const { window, document } = env;
+  mountMockHostRoot(document, { withBrowserCtx: true, withV2: true });
+  document.documentElement.setAttribute('data-ag-cs-lang', 'zh-CN');
+
+  const auxSplit = document.createElement('div');
+  auxSplit.setAttribute('data-testid', 'aux-pane-split');
+  const mainPane = document.createElement('div');
+  const convView = document.createElement('div');
+  convView.setAttribute('data-testid', 'conversation-view');
+  const convShell = document.createElement('div');
+  convShell.className = 'relative h-full w-full';
+  convShell.__reactFiber$host = { return: { memoizedProps: { fileUri: 'file:///projects/demo/ignored-in-conv.html' } } };
+  convView.appendChild(convShell);
+  mainPane.appendChild(convView);
+
+  const rightPane = document.createElement('div');
+  auxSplit.appendChild(mainPane);
+  auxSplit.appendChild(rightPane);
+  document.body.appendChild(auxSplit);
+
+  // Excluded containers inside aux-pane-split that must NEVER be hijacked
+  const asideBox = document.createElement('aside');
+  const asideShell = document.createElement('div');
+  asideShell.className = 'relative h-full w-full';
+  asideShell.__reactFiber$host = { return: { memoizedProps: { fileUri: 'file:///projects/demo/sidebar.html' } } };
+  asideBox.appendChild(asideShell);
+  rightPane.appendChild(asideBox);
+
+  const homeBox = document.createElement('div');
+  homeBox.className = 'agy-home';
+  const homeShell = document.createElement('div');
+  homeShell.className = 'relative h-full w-full';
+  homeShell.__reactFiber$host = { return: { memoizedProps: { fileUri: 'file:///projects/demo/home.svg' } } };
+  homeBox.appendChild(homeShell);
+  rightPane.appendChild(homeBox);
+
+  const csvShell = document.createElement('div');
+  csvShell.className = 'relative h-full w-full';
+  csvShell.__reactFiber$host = { return: { memoizedProps: { fileUri: 'file:///projects/demo/fake.html' } } };
+  const csvChild = document.createElement('div');
+  csvChild.setAttribute('data-testid', 'csv-file-viewer');
+  csvShell.appendChild(csvChild);
+  rightPane.appendChild(csvShell);
+
+  const vidShell = document.createElement('div');
+  vidShell.className = 'relative h-full w-full';
+  vidShell.__reactFiber$host = { return: { memoizedProps: { fileUri: 'file:///projects/demo/fake.svg' } } };
+  vidShell.appendChild(document.createElement('video'));
+  rightPane.appendChild(vidShell);
+
+  // Normal host File Pane shell opening an ordinary .html file (NO error banner!)
+  const fileShell = document.createElement('div');
+  fileShell.className = 'relative h-full w-full';
+  const fiberState = {
+    memoizedProps: {
+      fileUri: 'file:///projects/demo/landing/index.html',
+      tabId: 'file__html_1',
+    },
+  };
+  fileShell.__reactFiber$host = { return: fiberState };
+  const editorBox = document.createElement('div');
+  editorBox.className = 'monaco-editor-host';
+  editorBox.textContent = '<!doctype html><h1>Preview Me</h1>';
+  fileShell.appendChild(editorBox);
+  rightPane.appendChild(fileShell);
+
+  const client = omniMod.createOmniClient({ window, document });
+  client.sync({ omniModule: 'on' }, { baseUrl: 'http://127.0.0.1:46600', token: 'tok_b3' });
+  await flushMicrotasks();
+
+  // 1) Excluded containers must have ZERO switchers
+  assert.equal(convShell.querySelector('[data-testid="ag-omni-aux-switcher"]'), null, 'conversation-view must be excluded');
+  assert.equal(asideShell.querySelector('[data-testid="ag-omni-aux-switcher"]'), null, 'aside must be excluded');
+  assert.equal(homeShell.querySelector('[data-testid="ag-omni-aux-switcher"]'), null, '.agy-home must be excluded');
+  assert.equal(csvShell.querySelector('[data-testid="ag-omni-aux-switcher"]'), null, 'csv-file-viewer must be excluded');
+  assert.equal(vidShell.querySelector('[data-testid="ag-omni-aux-switcher"]'), null, '<video> container must be excluded');
+
+  // 2) Normal .html shell auto-activates rendered preview immediately
+  const switcher = fileShell.querySelector('[data-testid="ag-omni-aux-switcher"]');
+  const iframe = fileShell.querySelector('[data-testid="ag-omni-aux-iframe"]');
+  const badge = fileShell.querySelector('[data-testid="ag-omni-sandbox-badge"]');
+  assert.ok(switcher, 'Normal .html shell must mount .ag-omni-aux-bar');
+  assert.ok(iframe, 'Normal .html shell must auto-activate preview iframe');
+  assert.equal(iframe.hidden, false);
+  assert.equal(editorBox.style.display, 'none', 'Native source editor must be hidden in preview mode');
+  assert.match(iframe.src, /^http:\/\/127\.0\.0\.1:46600\/viewer\?token=tok_b3.*landing%2Findex\.html/);
+  assert.match(iframe.src, /kind=html/);
+  assert.equal(switcher.children[0].textContent, '预览', 'children[0] must remain Preview button');
+  assert.equal(switcher.children[1].textContent, '源码', 'children[1] must remain Source button');
+
+  // 3) Sandbox badge carries full 5+1 anti-translate attributes
+  assert.ok(badge, 'Sandbox isolation badge must render for .html/.htm/.svg');
+  assert.equal(badge.className, 'ag-omni-sandbox-badge');
+  assert.equal(badge.textContent, '沙盒隔离');
+  for (const [attr, expected] of [
+    ['translate', 'no'],
+    ['data-no-translate', 'true'],
+    ['data-ag-localization-skip', 'true'],
+    ['data-agy-no-translate', 'true'],
+    ['data-antigravity-zh-skip', '1'],
+    ['data-ag-no-i18n', ''],
+  ]) {
+    assert.equal(badge.getAttribute(attr), expected, `Sandbox badge must set ${attr}="${expected}"`);
+    assert.equal(switcher.getAttribute(attr), expected, `Aux bar must set ${attr}="${expected}"`);
+  }
+
+  // 4) All 8 locales update switcher & badge cleanly with 0 CJK in non-CJK locales
+  const cjkRe = /[\u3400-\u9FFF\uF900-\uFAFF]/;
+  const expectedBadges = {
+    'zh-CN': '沙盒隔离',
+    'zh-TW': '沙盒隔離',
+    en: 'Sandbox Isolated',
+    ja: 'サンドボックス隔離',
+    ko: '샌드박스 격리',
+    es: 'Aislado en sandbox',
+    fr: 'Isolé en sandbox',
+    de: 'Sandbox-isoliert',
+  };
+  for (const [lang, expectedBadge] of Object.entries(expectedBadges)) {
+    document.documentElement.setAttribute('data-ag-cs-lang', lang);
+    client.sync({ omniModule: 'on' });
+    assert.equal(badge.textContent, expectedBadge, `Badge text mismatch for ${lang}`);
+    if (['en', 'ko', 'es', 'fr', 'de'].includes(lang)) {
+      assert.equal(cjkRe.test(badge.textContent), false, `${lang} badge must contain 0 CJK chars`);
+      assert.equal(cjkRe.test(switcher.children[0].textContent), false, `${lang} preview btn must contain 0 CJK chars`);
+      assert.equal(cjkRe.test(switcher.children[1].textContent), false, `${lang} source btn must contain 0 CJK chars`);
+    }
+  }
+  document.documentElement.setAttribute('data-ag-cs-lang', 'zh-CN');
+  client.sync({ omniModule: 'on' });
+
+  // 5) Clicking Source button restores native editor & hides iframe; clicking Preview returns to iframe
+  switcher.children[1].click();
+  await flushMicrotasks();
+  assert.equal(iframe.hidden, true, 'Iframe must hide when switched to Source');
+  assert.equal(editorBox.style.display, '', 'Native editor must be restored in Source mode');
+
+  switcher.children[0].click();
+  await flushMicrotasks();
+  assert.equal(iframe.hidden, false, 'Iframe must reappear when switched back to Preview');
+  assert.equal(editorBox.style.display, 'none');
+
+  // 6) Same-slot switch to .htm and then .svg keeps auto-preview & updates viewer kind
+  fiberState.memoizedProps = { fileUri: 'file:///projects/demo/legacy/page.htm', tabId: 'file__htm_1' };
+  editorBox.appendChild(document.createTextNode(' '));
+  await new Promise((r) => setTimeout(r, 90));
+  assert.match(fileShell.querySelector('[data-testid="ag-omni-aux-iframe"]').src, /page\.htm/);
+  assert.match(fileShell.querySelector('[data-testid="ag-omni-aux-iframe"]').src, /kind=html/);
+
+  fiberState.memoizedProps = { fileUri: 'file:///projects/demo/icons/logo.svg', tabId: 'file__svg_1' };
+  editorBox.appendChild(document.createTextNode(' '));
+  await new Promise((r) => setTimeout(r, 90));
+  const svgIframe = fileShell.querySelector('[data-testid="ag-omni-aux-iframe"]');
+  assert.ok(svgIframe);
+  assert.match(svgIframe.src, /logo\.svg/);
+  assert.match(svgIframe.src, /kind=svg/);
+  assert.ok(fileShell.querySelector('[data-testid="ag-omni-sandbox-badge"]'), 'SVG preview must retain sandbox badge');
+
+  // 7) Switching same slot to a normal source file (.ts) cleanly unmounts overlay & restores native editor
+  fiberState.memoizedProps = { fileUri: 'file:///projects/demo/src/app.ts', tabId: 'file__ts_1' };
+  editorBox.appendChild(document.createTextNode(' '));
+  await new Promise((r) => setTimeout(r, 90));
+  assert.equal(fileShell.querySelector('[data-testid="ag-omni-aux-switcher"]'), null, 'Switching to .ts must unmount aux bar');
+  assert.equal(fileShell.querySelector('[data-testid="ag-omni-aux-iframe"]'), null, 'Switching to .ts must unmount preview iframe');
+  assert.equal(editorBox.style.display, '', 'Native editor must be cleanly restored after switching to .ts');
+
+  client.destroy();
+});
+
 // ── 6b. 0-rAF Pointer Fast Path, Dialog/Mascot Mutation Filtering & Streaming Debounce ─
 test('pointermove takes 0-rAF fast path over non-highlighted DOM, ignores [role="dialog"] unless [data-omni-scan], and routes childList TextNodes to CSS.highlights', async () => {
   const env = createFakeDomEnvironment({ enableCssHighlights: true });

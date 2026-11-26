@@ -399,20 +399,37 @@ function createTestEnv(initialTime = 1000) {
   };
 }
 
-test('dictionary hygiene: vendor/host-i18n/zh-CN.json has 3367 exact + 327 patterns, zero private terms, compact JSON, and safe regexes', () => {
+test('dictionary hygiene: vendor/host-i18n/zh-CN.json has 4763 exact + 405 patterns, zero private terms, compact JSON, and safe regexes', () => {
   const dictPath = path.join(ROOT, 'vendor', 'host-i18n', 'zh-CN.json');
   const raw = fs.readFileSync(dictPath, 'utf8');
   assert.equal(raw.includes('\n  '), false, 'zh-CN.json must be compact JSON without pretty-print indentation');
 
   const dict = JSON.parse(raw);
   const exactKeys = Object.keys(dict.exact || {});
-  assert.equal(exactKeys.length, 3367);
-  assert.equal((dict.patterns || []).length, 327);
+  assert.equal(exactKeys.length, 4763);
+  assert.equal((dict.patterns || []).length, 405);
   assert.equal(dict.exact['Unlock the power of agent swarms.'], '解锁智能体 Swarm 协作的强大能力。');
   assert.ok(
     dict.exact["Live view of the native swarm board, roster and @mention graph for the current conversation's swarm."]?.includes('Swarm'),
     'Swarm sidecar description must be translated while preserving Swarm'
   );
+  // Antigravity v2.35.0 upstream sync spot-checks (yiheng8023/antigravity-chinese v3.3.63)
+  assert.equal(dict.exact['Switch to RTL text direction'], '切换为从右到左的文字方向');
+  assert.equal(dict.exact['Select Environment'], '选择环境');
+  assert.equal(dict.exact['Clone from Remote'], '从远程克隆');
+  assert.equal(
+    dict.exact['Agent finished. Queued messages send after background work finishes.'],
+    '智能体已完成工作。后台工作结束后将发送排队消息。'
+  );
+  assert.equal(dict.exact['System UI'], '系统界面字体');
+  assert.equal(dict.exact['Prevent sleep'], '阻止系统休眠');
+
+  const eng = runtime.createHostI18nEngine(dict);
+  assert.equal(eng.translate('Select Sidebar Item 3'), '选择侧栏第 3 项');
+  assert.equal(eng.translate('Work locally on main'), '在 main 上本地工作');
+  assert.equal(eng.translate('3 of 8'), '第 3 轮（共 8 轮）');
+  assert.equal(eng.translate('Created worker alpha'), null, 'Negative lookahead must keep Swarm "Created worker ..." untranslated');
+  assert.equal(eng.translate('Created 2026-11-24'), '创建于 2026-11-24');
 
   const privRe = /ema-persona|emoji_emma|C:\\Users\\Administrator|\/Users\/|\/home\/|\.hermes|obsidian-prism/i;
   for (const k of exactKeys) {
@@ -493,7 +510,7 @@ test('runtime translates exact, pattern, attributes, multi-text merge, inline re
   assert.equal(after.active, false);
   assert.equal(after.status, 'off');
   assert.equal(after.translatedCount, 0);
-  assert.equal(env.doc.documentElement.getAttribute('data-ag-prism-host-i18n'), 'off');
+  assert.equal(env.doc.documentElement.getAttribute('data-ag-prism-host-i18n'), null);
 
   assert.equal(navBtn.textContent, 'Settings');
   assert.equal(navBtn.getAttribute('aria-label'), 'Settings');
@@ -841,7 +858,7 @@ test('0fps hibernation on document.hidden / window blur and resume scan on focus
   inst.destroy();
 });
 
-test('Channel 4 isolation: main bundle < 690 KiB without dict, shouldEnableHostI18n gating, and off mode 0 B fail-closed', () => {
+test('Channel 4 isolation: main bundle < 690 KiB without dict, shouldEnableHostI18n gating (incl. off reverse-restore), and auto+non-zh 0 B fail-closed', () => {
   const mainExpr = cdp.buildInjectExpression(cdp.DEFAULT_CONFIG);
   const mainBytes = Buffer.byteLength(mainExpr, 'utf8');
   assert.ok(mainBytes <= 704000, `Main bundle must stay <= 704,000 B, got ${mainBytes}`);
@@ -849,10 +866,11 @@ test('Channel 4 isolation: main bundle < 690 KiB without dict, shouldEnableHostI
   assert.equal(mainExpr.includes('mountHostI18n'), false, 'Main bundle must NOT contain Channel 4 runtime');
   assert.equal(mainExpr.includes('浏览器子智能体已被您的管理员禁用'), false, 'Main bundle must NOT contain zh-CN.json entries');
 
-  assert.equal(cdp.DEFAULT_CONFIG.hostLocalization, 'auto');
+  assert.equal(cdp.DEFAULT_CONFIG.hostLocalization, 'off');
   assert.deepEqual(cdp.VALIDATORS.hostLocalization, ['auto', 'on', 'off']);
 
-  assert.equal(cdp.shouldEnableHostI18n({ hostLocalization: 'off', language: 'zh-CN' }), false);
+  assert.equal(cdp.shouldEnableHostI18n({ hostLocalization: 'off', language: 'zh-CN' }), true);
+  assert.equal(cdp.shouldEnableHostI18n({ hostLocalization: 'off', language: 'en' }), true);
   assert.equal(cdp.shouldEnableHostI18n({ hostLocalization: 'on', language: 'en' }), true);
   assert.equal(cdp.shouldEnableHostI18n({ hostLocalization: 'auto', language: 'zh-CN' }), true);
   assert.equal(cdp.shouldEnableHostI18n({ hostLocalization: 'auto', language: 'en' }), false);
@@ -860,8 +878,12 @@ test('Channel 4 isolation: main bundle < 690 KiB without dict, shouldEnableHostI
   assert.equal(cdp.shouldEnableHostI18n({ hostLocalization: 'auto', language: 'auto' }, 'zh-CN'), true);
   assert.equal(cdp.shouldEnableHostI18n({ hostLocalization: 'auto', language: 'auto' }, 'en-US'), false);
 
-  assert.equal(cdp.buildHostI18nExpression({ hostLocalization: 'off', language: 'zh-CN' }), '');
+  const offExpr = cdp.buildHostI18nExpression({ hostLocalization: 'off', language: 'zh-CN' });
+  assert.ok(Buffer.byteLength(offExpr, 'utf8') > 100000, 'off mode must mount Channel 4 for reverse English restore');
+  assert.doesNotThrow(() => new vm.Script(offExpr));
   assert.equal(cdp.buildHostI18nExpression({ hostLocalization: 'auto', language: 'en' }), '');
+  assert.equal(cdp.buildHostI18nExpression({ hostLocalization: 'auto', language: 'zh-TW' }), '');
+  assert.equal(cdp.buildHostI18nExpression({ hostLocalization: 'auto', language: 'auto' }, 'en-US'), '');
 
   const ch4Expr = cdp.buildHostI18nExpression({ hostLocalization: 'auto', language: 'zh-CN' });
   assert.ok(Buffer.byteLength(ch4Expr, 'utf8') > 100000);
@@ -964,6 +986,7 @@ test('[P0-1] shouldEnableHostI18n resolves LANG=zh_CN.UTF-8 and skips LC_ALL=C.U
     Intl.DateTimeFormat = function () {
       return { resolvedOptions: () => ({ locale: 'zh-CN' }) };
     };
+    cdp._setWindowsUiLocaleReaderForTest(() => '');
     try {
       process.env.LC_ALL = 'C.UTF-8';
       process.env.LC_MESSAGES = 'POSIX';
@@ -971,11 +994,224 @@ test('[P0-1] shouldEnableHostI18n resolves LANG=zh_CN.UTF-8 and skips LC_ALL=C.U
       assert.equal(cdp.shouldEnableHostI18n({ hostLocalization: 'auto', language: 'auto' }), true);
     } finally {
       Intl.DateTimeFormat = origIntl;
+      cdp._setWindowsUiLocaleReaderForTest(null);
     }
 
     assert.equal(cdp.shouldEnableHostI18n({ hostLocalization: 'auto', language: 'auto' }, 'zh_CN.UTF-8'), true);
     assert.equal(cdp.shouldEnableHostI18n({ hostLocalization: 'auto', language: 'auto' }, 'C.UTF-8'), false);
   } finally {
+    if (prevLcAll === undefined) delete process.env.LC_ALL; else process.env.LC_ALL = prevLcAll;
+    if (prevLcMsg === undefined) delete process.env.LC_MESSAGES; else process.env.LC_MESSAGES = prevLcMsg;
+    if (prevLang === undefined) delete process.env.LANG; else process.env.LANG = prevLang;
+  }
+});
+
+test('[PR #50] Windows UI Display Language overrides Intl regional format, preserves hostLocalization="off" reverse channel, and prevents daemon skippedByLiveCfg heal churn', async () => {
+  const prevLcAll = process.env.LC_ALL;
+  const prevLcMsg = process.env.LC_MESSAGES;
+  const prevLang = process.env.LANG;
+  const origIntl = Intl.DateTimeFormat;
+  try {
+    process.env.LC_ALL = '';
+    process.env.LC_MESSAGES = '';
+    process.env.LANG = '';
+
+    // Case 1: Windows Display Language is en-US while Regional Format (Intl) is zh-CN -> auto must NOT enable zh-CN host-i18n
+    Intl.DateTimeFormat = function () {
+      return { resolvedOptions: () => ({ locale: 'zh-CN' }) };
+    };
+    cdp._setWindowsUiLocaleReaderForTest(() => 'en-US');
+    assert.equal(cdp.readWindowsPreferredUiLanguage(), 'en-US');
+    assert.equal(cdp.detectSystemUiLocale(), 'en-US');
+    assert.equal(cdp.resolveSystemLangNode(), 'en');
+    assert.equal(cdp.shouldEnableHostI18n({ hostLocalization: 'auto', language: 'auto' }), false);
+    assert.equal(cdp.shouldEnableHostI18n({}), false);
+    // CRITICAL redline: hostLocalization='off' MUST still return true to mount reverse English restoration channel
+    assert.equal(cdp.shouldEnableHostI18n({ hostLocalization: 'off', language: 'auto' }), true);
+    assert.equal(cdp.shouldEnableHostI18n({ hostLocalization: 'off', language: 'en' }), true);
+    const copyEn = cdp.buildRelaunchDialogCopy('auto');
+    assert.equal(copyEn.relaunchBtn, 'Relaunch Now');
+    assert.equal(/[\u4e00-\u9fa5]/.test(copyEn.body), false);
+
+    // Case 2: Windows Display Language is zh-Hans-CN while Intl is en-US -> enables zh-CN host-i18n and Chinese relaunch prompt
+    Intl.DateTimeFormat = function () {
+      return { resolvedOptions: () => ({ locale: 'en-US' }) };
+    };
+    cdp._setWindowsUiLocaleReaderForTest(() => 'zh-Hans-CN');
+    assert.equal(cdp.readWindowsPreferredUiLanguage(), 'zh-Hans-CN');
+    assert.equal(cdp.detectSystemUiLocale(), 'zh-Hans-CN');
+    assert.equal(cdp.resolveSystemLangNode(), 'zh-CN');
+    assert.equal(cdp.shouldEnableHostI18n({ hostLocalization: 'auto', language: 'auto' }), true);
+    const copyZh = cdp.buildRelaunchDialogCopy('auto');
+    assert.equal(copyZh.relaunchBtn, '立即重开');
+
+    // Case 3: buildConfigRefreshExpression honors navigator.languages[0] for auto non-zh destroy() AND preserves setMode('off')
+    const runRefresh = (cfg, nav) => {
+      const calls = [];
+      const refExpr = cdp.buildConfigRefreshExpression(cfg);
+      const sb = {
+        navigator: nav,
+        document: {
+          documentElement: {
+            setAttribute() {},
+            removeAttribute() {},
+          },
+          querySelectorAll: () => [],
+        },
+        window: null,
+        globalThis: null,
+        __agPrism: {
+          version: cdp.PLUGIN_VERSION,
+          codeHash: JSON.parse(refExpr.match(/"codeHash":"([^"]+)"/)[1] ? `"${refExpr.match(/"codeHash":"([^"]+)"/)[1]}"` : '""'),
+          refreshConfig: () => true,
+          getState: () => ({ cfg }),
+        },
+        __agPrismHostI18n: {
+          setMode: (m) => calls.push(['setMode', m]),
+          destroy: () => calls.push(['destroy']),
+        },
+      };
+      sb.window = sb;
+      sb.globalThis = sb;
+      const res = vm.runInNewContext(refExpr, sb);
+      assert.equal(res.refreshed, true);
+      return calls;
+    };
+
+    assert.deepEqual(
+      runRefresh({ ...cdp.DEFAULT_CONFIG, hostLocalization: 'off', language: 'auto' }, { language: 'en-US', languages: ['en-US'] }),
+      [['setMode', 'off']],
+      'hostLocalization="off" must invoke setMode("off"), never destroy()'
+    );
+    assert.deepEqual(
+      runRefresh({ ...cdp.DEFAULT_CONFIG, hostLocalization: 'auto', language: 'auto' }, { language: 'zh-CN', languages: ['en-US', 'zh-CN'] }),
+      [['destroy']],
+      'auto mode must prioritize navigator.languages[0] and gracefully destroy() hostI18n on non-zh UI'
+    );
+    assert.deepEqual(
+      runRefresh({ ...cdp.DEFAULT_CONFIG, hostLocalization: 'auto', language: 'auto' }, { language: 'en-US', languages: ['zh-CN', 'en-US'] }),
+      [['setMode', 'auto']],
+      'auto mode with zh-CN primary navigator.languages[0] keeps setMode("auto")'
+    );
+
+    // Case 4: PrismDaemon consumes skippedByLiveCfg and prevents repeated verifyAndHeal churn on the same sig
+    const { PrismDaemon } = await import('../sidecars/daemon/main.mjs');
+    let hostI18nEvalCount = 0;
+    let currentCfg = { ...cdp.DEFAULT_CONFIG, hostLocalization: 'auto', language: 'auto', omniModule: 'off', sidebarStudio: 'off', thoughtTranslate: 'off', periodicModelPicker: 'off', mascot: 'off', homeLayout: 'off', homeMode: 'off' };
+    const daemon = new PrismDaemon({ rootDir: ROOT, silent: true, enableStorageGuardTimer: false, enableAutoUpdateTimer: false });
+    daemon.cdp = {
+      ...cdp,
+      readConfig: () => ({ ...currentCfg }),
+      shouldEnableHostI18n: (c) => (c.hostLocalization === 'off' ? true : c.hostLocalization === 'on' ? true : true),
+      buildHostI18nExpression: () => '(() => ({ ok: true, status: "off", skippedByLiveCfg: true }))()',
+    };
+    daemon.injectExpr = '(() => ({ ok: true }))()';
+    daemon.hostI18nExpr = '(() => ({ ok: true, status: "off", skippedByLiveCfg: true }))()';
+    const entry = {
+      wsUrl: 'ws://skip-guard',
+      pageId: 'p1',
+      url: 'vscode-file://vscode-app/workbench.html',
+      title: 'Antigravity',
+      mainFrameId: 'MAIN',
+      contextFrames: new Map(),
+      isolatedHostI18nPaused: false,
+      isolatedHostI18nNoExtCtxs: new Set(),
+      scriptId: 'main-1',
+      omniScriptId: null,
+      lastOmniExpr: '',
+      sidebarScriptId: null,
+      sidebarBindingAdded: false,
+      sidebarMounted: false,
+      hostI18nScriptId: 'hi-1',
+      hostI18nMounted: false,
+      hostI18nSkippedByLiveCfg: false,
+      lastHostI18nSig: '',
+      lastHostI18nScriptSig: 'auto:auto',
+      thoughtScriptId: null,
+      thoughtMounted: false,
+      inlineDiffScriptId: null,
+      inlineDiffMounted: false,
+      inlineDiffSkipped: true,
+      wallpaperScriptId: null,
+      wallpaperMounted: false,
+      wallpaperSkipped: true,
+      suggesterScriptId: null,
+      suggesterMounted: false,
+      suggesterSkipped: true,
+      periodicPickerScriptId: null,
+      periodicPickerMounted: false,
+      mascotScriptId: null,
+      mascotMounted: false,
+      homeStudioScriptId: null,
+      homeStudioMounted: false,
+      session: {
+        closed: false,
+        send: async (m) => (m === 'Page.addScriptToEvaluateOnNewDocument' ? { identifier: 'hi-new' } : {}),
+        evaluate: async (expr) => {
+          if (expr.includes('hasHostI18n')) {
+            return {
+              ready: true,
+              isHostDom: true,
+              hasStyle: true,
+              hasRuntime: true,
+              hasOmni: false,
+              hasSidebar: false,
+              hasSidebarBridge: false,
+              hasHostI18n: false,
+              hostI18nMode: '',
+              hasThought: false,
+              hasThoughtSettingsUi: false,
+              hasInlineDiff: false,
+              hasWallpaper: false,
+              hasWallpaperUi: false,
+              hasSuggester: false,
+              hasSuggesterUi: false,
+              hasPeriodicPicker: false,
+              hasMascot: false,
+              hasHomeStudio: false,
+              codeHash: daemon.cdp.buildInjectExpression ? '' : '',
+              href: 'vscode-file://vscode-app/workbench.html',
+            };
+          }
+          if (expr.includes('skippedByLiveCfg')) {
+            hostI18nEvalCount += 1;
+            return { ok: true, status: 'off', skippedByLiveCfg: true };
+          }
+          return { ok: true };
+        },
+      },
+    };
+    // First verify: evaluates once and records hostI18nSkippedByLiveCfg = true
+    await daemon._verifyAndHealEntryUnlocked(entry);
+    assert.equal(hostI18nEvalCount, 1);
+    assert.equal(entry.hostI18nMounted, false);
+    assert.equal(entry.hostI18nSkippedByLiveCfg, true);
+    assert.equal(entry.lastHostI18nSig, 'auto:auto');
+
+    // Second verify under same sig: MUST NOT re-evaluate hostI18nExpr (0 churn!)
+    await daemon._verifyAndHealEntryUnlocked(entry);
+    assert.equal(hostI18nEvalCount, 1, 'Repeated health checks under same sig must skip hostI18n heal');
+
+    // Config changes to hostLocalization='off': sig changes -> guard clears and evaluates reverse mode
+    currentCfg = { ...currentCfg, hostLocalization: 'off' };
+    daemon.hostI18nExpr = '(() => ({ ok: true, status: "off-enforced" }))()';
+    let offEvaluated = 0;
+    const origEval = entry.session.evaluate;
+    entry.session.evaluate = async (expr) => {
+      if (expr.includes('off-enforced')) {
+        offEvaluated += 1;
+        return { ok: true, status: 'off-enforced' };
+      }
+      return origEval(expr);
+    };
+    await daemon._verifyAndHealEntryUnlocked(entry);
+    assert.equal(offEvaluated, 1, 'Switching to hostLocalization="off" must bypass old skippedByLiveCfg sig');
+    assert.equal(entry.hostI18nMounted, true);
+    assert.equal(entry.hostI18nSkippedByLiveCfg, false);
+    assert.equal(entry.lastHostI18nSig, 'off:auto');
+  } finally {
+    Intl.DateTimeFormat = origIntl;
+    cdp._setWindowsUiLocaleReaderForTest(null);
     if (prevLcAll === undefined) delete process.env.LC_ALL; else process.env.LC_ALL = prevLcAll;
     if (prevLcMsg === undefined) delete process.env.LC_MESSAGES; else process.env.LC_MESSAGES = prevLcMsg;
     if (prevLang === undefined) delete process.env.LANG; else process.env.LANG = prevLang;
@@ -1353,7 +1589,7 @@ test('[P1-C, P1-D, P1-E, P1-F] hover trailing tooltip, post-1200ms observer hibe
   inst.destroy();
   assert.equal(hoverBtn.getAttribute('aria-label'), 'Collapse');
 
-  // [P1-E] yielded state destroy() resets status and root attribute to 'off'
+  // [P1-E] yielded state destroy() resets status to 'off' and removes root attribute
   const yEnv = createTestEnv();
   yEnv.win.__AGY_I18N_INITIALIZED__ = true;
   const yInst = runtime.mountHostI18n({ root: yEnv.win, doc: yEnv.doc, dict, mode: 'auto' });
@@ -1362,7 +1598,7 @@ test('[P1-C, P1-D, P1-E, P1-F] hover trailing tooltip, post-1200ms observer hibe
   yInst.destroy();
   assert.equal(yInst.getStatus().status, 'off');
   assert.equal(yInst.getStatus().yielded, false);
-  assert.equal(yEnv.doc.documentElement.getAttribute('data-ag-prism-host-i18n'), 'off');
+  assert.equal(yEnv.doc.documentElement.getAttribute('data-ag-prism-host-i18n'), null);
 
   // Re-mounting over existing instance destroys old instance cleanly
   const yInst2 = runtime.mountHostI18n({ root: yEnv.win, doc: yEnv.doc, dict, mode: 'on' });
@@ -1553,7 +1789,7 @@ function createBruteForceReferenceTranslator(dictData) {
   };
 }
 
-test('[Perf-1] pattern precheck index + bounded LRU unitCache (<= 2048) matches 327 brute-force patterns 100% byte-for-byte across full corpus + 250+ edge strings', () => {
+test('[Perf-1] pattern precheck index + bounded LRU unitCache (<= 2048) matches 405 brute-force patterns 100% byte-for-byte across full corpus + 250+ edge strings', () => {
   const dict = JSON.parse(fs.readFileSync(path.join(ROOT, 'vendor', 'host-i18n', 'zh-CN.json'), 'utf8'));
   const brute = createBruteForceReferenceTranslator(dict);
   const engine = runtime.createHostI18nEngine(dict);
@@ -2470,4 +2706,65 @@ test('[Coexist-13] Layer 1 detects all Top 13 external localization fingerprints
   const testSelfSrc = fs.readFileSync(path.join(ROOT, 'test', 'host-i18n.test.mjs'), 'utf8');
   assert.equal(rtSrc.includes(localWorkspaceLeak), false, 'Runtime must not contain local workspace path');
   assert.equal(testSelfSrc.includes(localWorkspaceLeak), false, 'Test file must not contain local workspace path');
+});
+
+test('Issue #80: host-i18n exempts orchestrator-picker-row/effort and data-ag-cs-orch-l2/l3 / data-ces-orch-row on initial scan and frame-0 pointerenter', () => {
+  const env = createTestEnv();
+  const dict = { exact: { Settings: '设置', Save: '保存', Cancel: '取消' }, patterns: [] };
+
+  const orchRow = env.makeEl('div', { attrs: { 'data-testid': 'orchestrator-picker-row', role: 'menuitem' } });
+  const orchRowLabel = env.makeEl('span', { text: 'Settings' });
+  orchRow.append(orchRowLabel);
+
+  const orchEffort = env.makeEl('div', { attrs: { 'data-testid': 'orchestrator-picker-effort' } });
+  const orchEffortLabel = env.makeEl('span', { text: 'Save' });
+  orchEffort.append(orchEffortLabel);
+
+  const l2Menu = env.makeEl('div', { attrs: { role: 'menu', 'data-ag-cs-orch-l2': '1' } });
+  const l2Item = env.makeEl('span', { text: 'Cancel' });
+  l2Menu.append(l2Item);
+
+  const l3Menu = env.makeEl('div', { attrs: { role: 'menu', 'data-ag-cs-orch-l3': '1' } });
+  const l3Item = env.makeEl('span', { text: 'Settings' });
+  l3Menu.append(l3Item);
+
+  const cesRow = env.makeEl('div', { attrs: { 'data-ces-orch-row': '1' } });
+  const cesItem = env.makeEl('span', { text: 'Save' });
+  cesRow.append(cesItem);
+
+  const normalBtn = env.makeEl('button', { text: 'Settings' });
+  env.doc.body.append(orchRow, orchEffort, l2Menu, l3Menu, cesRow, normalBtn);
+
+  const inst = runtime.mountHostI18n({
+    root: env.win,
+    doc: env.doc,
+    dict,
+    mode: 'on',
+    nowFn: env.nowFn,
+    setTimeoutFn: env.setTimeoutFn,
+    clearTimeoutFn: env.clearTimeoutFn,
+    rafFn: env.rafFn,
+    cancelRafFn: env.cancelRafFn,
+  });
+
+  // Control button translates normally while all 5 Orchestrator submenu targets remain completely untouched
+  assert.equal(normalBtn.textContent, '设置');
+  assert.equal(orchRowLabel.textContent, 'Settings');
+  assert.equal(orchEffortLabel.textContent, 'Save');
+  assert.equal(l2Item.textContent, 'Cancel');
+  assert.equal(l3Item.textContent, 'Settings');
+  assert.equal(cesItem.textContent, 'Save');
+
+  // Simulate frame-0 pointerenter directly on each Orchestrator submenu node
+  for (const tgt of [orchRowLabel, orchEffortLabel, l2Item, l3Item, cesItem]) {
+    env.doc.dispatchEvent?.({ type: 'pointerenter', target: tgt });
+  }
+  env.flushRafs?.();
+  assert.equal(orchRowLabel.textContent, 'Settings');
+  assert.equal(orchEffortLabel.textContent, 'Save');
+  assert.equal(l2Item.textContent, 'Cancel');
+  assert.equal(l3Item.textContent, 'Settings');
+  assert.equal(cesItem.textContent, 'Save');
+
+  inst.destroy();
 });

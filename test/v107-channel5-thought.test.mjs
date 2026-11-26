@@ -423,9 +423,11 @@ test('Channel 5 (3/5): security boundary guards reject subframe, devtools, exter
 test('Channel 5 (4/5): zero-reload hot-plug lifecycle on already-open settings panel, machine toggle, THOUGHT_REMOVE_EXPRESSION, remount, and REMOVE_EXPRESSION cleanup', () => {
   const env = createSimulatedDomSandbox();
   try {
-    // 1. Mount Channel 1 in default off mode and open settings fold panel
+    // 1. Mount Channel 1 in default off mode, load Channel 9 Settings on demand, and open settings fold panel
     const mainRes = vm.runInNewContext(cdp.buildInjectExpression(cdp.DEFAULT_CONFIG), env.sandbox);
     assert.equal(mainRes.status, 'ok');
+    const settingsChRes = vm.runInNewContext(cdp.buildSettingsChannelExpression(), env.sandbox);
+    assert.equal(settingsChRes.ok, true);
     const settingsSec = env.doc.getElementById('ag-cs-settings-sec');
     assert.ok(settingsSec, 'Expected settings section mounted');
     const foldHead = settingsSec.querySelector('.ag-cs-settings-fold-head');
