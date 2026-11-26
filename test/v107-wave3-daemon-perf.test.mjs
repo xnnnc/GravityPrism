@@ -324,17 +324,18 @@ test('Wave3 P1-6b & P2-7a: Channel 2~5 share .bundle-cache.json, detect same-len
     assert.equal(fs.existsSync(cachePath), false, 'deferCacheWrite must hold writes until flushPendingBundleCache');
     assert.equal(cdpCold.getBundleCacheStats().deferredExprHashRuns, 0);
 
-    // Single atomic flush writes Channel 1 + Channel 2~6 + Channel 8~10 + Channel 12 into ONE .bundle-cache.json
+    assert.equal(periodicPickerCold, '');
+    // Single atomic flush writes Channel 1 + Channel 2~6 + Channel 9~10 + Channel 12 into ONE .bundle-cache.json
     assert.equal(cdpCold.flushPendingBundleCache(), true);
     assert.deepEqual(fs.readdirSync(cacheDir), ['.bundle-cache.json'], 'Must reuse ONE .bundle-cache.json with zero extra files');
     assert.equal(cdpCold.getBundleCacheStats().diskWrites, 1);
     assert.equal(cdpCold.getBundleCacheStats().deferredExprHashRuns, 1);
-    assert.equal(cdpCold.getBundleCacheStats().channelCompileRuns, 9);
+    assert.equal(cdpCold.getBundleCacheStats().channelCompileRuns, 8);
 
     const parsed = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
     assert.equal(parsed.schemaVersion, cdpCold.BUNDLE_CACHE_SCHEMA_VERSION);
     assert.ok(parsed.channels && typeof parsed.channels === 'object');
-    for (const ch of ['omni', 'sidebar', 'hostI18n', 'thought', 'inlineDiff', 'periodicPicker', 'settings', 'mascot', 'homeStudio']) {
+    for (const ch of ['omni', 'sidebar', 'hostI18n', 'thought', 'inlineDiff', 'settings', 'mascot', 'homeStudio']) {
       assert.ok(parsed.channels[ch], `Expected channels.${ch} in .bundle-cache.json`);
       assert.match(parsed.channels[ch].sourceHash, /^[0-9a-f]{64}$/);
       assert.match(parsed.channels[ch].payloadSha256, /^[0-9a-f]{64}$/);
@@ -405,10 +406,10 @@ test('Wave3 P1-6b & P2-7a: Channel 2~5 share .bundle-cache.json, detect same-len
     const hitStats = cdpHit.getBundleCacheStats();
     assert.equal(hitStats.diskHits, 1);
     assert.equal(hitStats.compileUnifiedRuns, 0);
-    assert.equal(hitStats.channelDiskHits, 9);
+    assert.equal(hitStats.channelDiskHits, 8);
     assert.equal(hitStats.channelCompileRuns, 0);
-    assert.deepEqual(hitStats.channelHitsByName, { omni: 1, sidebar: 1, hostI18n: 1, thought: 1, inlineDiff: 1, wallpaper: 0, periodicPicker: 1, settings: 1, mascot: 1, suggester: 0, homeStudio: 1 });
-    assert.ok(hitMs < coldMs, `Expected Channel 2~6 + 8~10 + 12 cache hit (${hitMs.toFixed(1)}ms) faster than cold compile (${coldMs.toFixed(1)}ms)`);
+    assert.deepEqual(hitStats.channelHitsByName, { omni: 1, sidebar: 1, hostI18n: 1, thought: 1, inlineDiff: 1, wallpaper: 0, periodicPicker: 0, settings: 1, mascot: 1, suggester: 0, homeStudio: 1 });
+    assert.ok(hitMs < coldMs, `Expected Channel 2~6 + 9~10 + 12 cache hit (${hitMs.toFixed(1)}ms) faster than cold compile (${coldMs.toFixed(1)}ms)`);
 
     // 3) P2-7a: Repeated warm-base-hit config updates defer 676KB exprSha256 until actual flush
     cdpHit.resetBundleCacheStats();

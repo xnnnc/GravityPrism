@@ -526,7 +526,8 @@ test('inject expression mounts cleanly without model-button or telemetry conflic
         .map((b) => b.getAttribute('data-ag-cs-key'))
         .filter(Boolean)
     );
-    assert.equal(settingKeys.size, 39);
+    assert.equal(settingKeys.size, 38);
+    assert.equal(settingKeys.has('periodicModelPicker'), false, 'periodicModelPicker must not render in Settings');
     assert.ok(settingKeys.has('darkAura'), 'Expected darkAura setting key in Appearance panel');
     assert.ok(settingKeys.has('darkAuraStyle'), 'Expected darkAuraStyle setting key in Appearance panel');
     assert.ok(settingKeys.has('effortSliderStyle'), 'Expected effortSliderStyle setting key in Appearance panel');
@@ -543,7 +544,6 @@ test('inject expression mounts cleanly without model-button or telemetry conflic
       'language',
       'hostLocalization',
       'effortMemory',
-      'periodicModelPicker',
       'composerRestyle',
       'placeholderStyle',
       'smoothCaret',
@@ -693,7 +693,7 @@ test('inject expression mounts cleanly without model-button or telemetry conflic
     // Verify sidebarNavFold defaults to 'off', toggles data-ag-cs-sb-fold & getState().cfg, and REMOVE_EXPRESSION cleans it + __agPrismInlineDiffResolve
     assert.equal(html.getAttribute('data-ag-cs-sb-fold'), 'off');
     assert.equal(sandbox.window.__agPrism.getState().cfg.sidebarNavFold, 'off');
-    assert.equal(sandbox.window.__agPrism.getState().cfg.periodicModelPicker, 'on');
+    assert.equal(sandbox.window.__agPrism.getState().cfg.periodicModelPicker, 'off');
     sandbox.window.__agPrism.saveSettingsBatch({ sidebarNavFold: 'on' });
     assert.equal(html.getAttribute('data-ag-cs-sb-fold'), 'on');
     assert.equal(sandbox.window.__agPrism.getState().cfg.sidebarNavFold, 'on');
@@ -4022,10 +4022,12 @@ test('Antigravity v2.33.0+ dual-layer CDP opt-in guard: shortcut lossless patch/
   }
 });
 
-test('Channel 1 budget (< 684,500 B), periodicModelPicker default on, style.css peek rule & 0 top-level :has(', () => {
-  assert.equal(cdp.DEFAULT_CONFIG.periodicModelPicker, 'on');
-  assert.equal(cdp.shouldEnablePeriodicPicker(cdp.DEFAULT_CONFIG), true);
+test('Channel 1 budget (< 684,500 B), periodicModelPicker disabled by default, style.css peek rule & 0 top-level :has(', () => {
+  assert.equal(cdp.DEFAULT_CONFIG.periodicModelPicker, 'off');
+  assert.equal(cdp.shouldEnablePeriodicPicker(cdp.DEFAULT_CONFIG), false);
+  assert.equal(cdp.shouldEnablePeriodicPicker({ periodicModelPicker: 'on' }), false);
   assert.equal(cdp.shouldEnablePeriodicPicker({ periodicModelPicker: 'off' }), false);
+  assert.equal(cdp.buildPeriodicPickerExpression({ ...cdp.DEFAULT_CONFIG, periodicModelPicker: 'on' }), '');
   assert.equal(cdp.buildPeriodicPickerExpression({ ...cdp.DEFAULT_CONFIG, periodicModelPicker: 'off' }), '');
   assert.deepEqual(cdp.PERIODIC_PICKER_MODULE_FILES, [
     'pbr-grain-assets.js',

@@ -1054,8 +1054,8 @@ function loadPeriodicFactoryInSandbox(env) {
   return env.sandbox.__agPrismPeriodicPickerFactory;
 }
 
-test('periodic-picker config defaults, static main-bundle budget isolation (< 690 KiB), fail-closed off mode, and codeHash reuse', () => {
-  assert.equal(cdp.DEFAULT_CONFIG.periodicModelPicker, 'on');
+test('periodic-picker config defaults, static main-bundle budget isolation (< 690 KiB), fail-closed off mode, and disabled Channel 8', () => {
+  assert.equal(cdp.DEFAULT_CONFIG.periodicModelPicker, 'off');
   assert.equal(cdp.DEFAULT_CONFIG.sidebarStudio, 'off');
 
   const mainExpr = cdp.buildInjectExpression(cdp.DEFAULT_CONFIG);
@@ -1065,26 +1065,12 @@ test('periodic-picker config defaults, static main-bundle budget isolation (< 69
   assert.equal(mainExpr.includes('__agPrismPeriodicPickerFactory'), false, 'Periodic picker runtime must stay in 8th channel');
   assert.equal(mainExpr.includes('__agPeriodicBentoUi'), false, 'Bento UI module must stay in 8th channel');
 
+  assert.equal(cdp.shouldEnablePeriodicPicker(cdp.DEFAULT_CONFIG), false);
+  assert.equal(cdp.shouldEnablePeriodicPicker({ periodicModelPicker: 'on' }), false);
+  assert.equal(cdp.buildPeriodicPickerExpression(cdp.DEFAULT_CONFIG), '');
+  assert.equal(cdp.buildPeriodicPickerExpression({ ...cdp.DEFAULT_CONFIG, periodicModelPicker: 'on' }), '');
   assert.equal(cdp.buildPeriodicPickerExpression({ ...cdp.DEFAULT_CONFIG, periodicModelPicker: 'off' }), '');
   assert.equal(cdp.buildPeriodicPickerExpression({ ...cdp.DEFAULT_CONFIG, periodicModelPicker: false }), '');
-
-  const pickerExpr = cdp.buildPeriodicPickerExpression(cdp.DEFAULT_CONFIG);
-  assert.ok(pickerExpr.length > 1000);
-  assert.doesNotThrow(() => new vm.Script(pickerExpr));
-
-  const env = createPeriodicSandbox();
-  const firstRes = vm.runInContext(pickerExpr, env.sandbox);
-  assert.equal(firstRes.ok, true);
-  assert.equal(firstRes.status, 'active');
-  assert.ok(typeof firstRes.codeHash === 'string' && firstRes.codeHash.length >= 4);
-  assert.equal(env.html.getAttribute('data-ag-prism-periodic-picker'), '1');
-
-  const secondRes = vm.runInContext(pickerExpr, env.sandbox);
-  assert.equal(secondRes.ok, true);
-  assert.equal(secondRes.reused, true);
-  assert.equal(secondRes.codeHash, firstRes.codeHash);
-
-  vm.runInContext(cdp.PERIODIC_PICKER_REMOVE_EXPRESSION, env.sandbox);
 });
 
 test('ELEMENTS_90 grid coordinates and strict Google element model matching/exclusion', () => {
@@ -1390,16 +1376,8 @@ test('Security static audit (8 vendor files: 0 innerHTML, 0 setPrefValue, 0 loca
   assert.equal(mainExpr.includes('__agPeriodicBentoUi'), false, 'Channel 1 must not embed __agPeriodicBentoUi');
   assert.equal(mainExpr.includes('__agPrismPeriodicPickerFactory'), false, 'Channel 1 must not embed __agPrismPeriodicPickerFactory');
 
-  const mountExpr = cdp.buildPeriodicPickerExpression(cdp.DEFAULT_CONFIG);
-  assert.doesNotThrow(() => new vm.Script(mountExpr));
-  assert.equal(mountExpr.includes('__agPrismGrainAssets'), true, 'Channel 8 must bundle pbr-grain-assets.js');
-  assert.equal(mountExpr.includes('__agPeriodicAudioFx'), true, 'Channel 8 must bundle audio-fx.js');
-  assert.equal(mountExpr.includes('__agPeriodicModelCatalog'), true, 'Channel 8 must bundle model-catalog.js');
-  assert.equal(mountExpr.includes('__agPeriodicHostBridge'), true, 'Channel 8 must bundle host-bridge.js');
-  assert.equal(mountExpr.includes('__agPrismOledScreen'), true, 'Channel 8 must bundle oled-cyber-screen.js');
-  assert.equal(mountExpr.includes('__agPrismKeyboard3D'), true, 'Channel 8 must bundle keyboard-3d-gl.js');
-  assert.equal(mountExpr.includes('__agPeriodicBentoUi'), true, 'Channel 8 must bundle bento-ui.js');
-  assert.equal(mountExpr.includes('__agPrismPeriodicPickerFactory'), true, 'Channel 8 must bundle periodic-picker.js');
+  assert.equal(cdp.buildPeriodicPickerExpression(cdp.DEFAULT_CONFIG), '');
+  assert.equal(cdp.buildPeriodicPickerExpression({ ...cdp.DEFAULT_CONFIG, periodicModelPicker: 'on' }), '');
 
   for (const cleanupExpr of [cdp.PERIODIC_PICKER_REMOVE_EXPRESSION, cdp.REMOVE_EXPRESSION]) {
     const env = createPeriodicSandbox({ mock2d: true, mockWebGL2: true });
@@ -1414,8 +1392,10 @@ test('Security static audit (8 vendor files: 0 innerHTML, 0 setPrefValue, 0 loca
       setModelConfigByLabelForConversation: () => {},
     };
 
-    const mountRes = vm.runInContext(mountExpr, env.sandbox);
-    assert.equal(mountRes.ok, true);
+    const factory = loadPeriodicFactoryInSandbox(env);
+    const mountRes = factory.mountPeriodicPicker({ window: env.window, document: env.document, codeHash: 'test-hash' });
+    env.window.__agPrismPeriodicPicker = mountRes;
+    assert.equal(mountRes.getStatus().status, 'active');
     assert.equal(typeof env.window.__agPrismGrainAssets?.getGrainTextures, 'function');
     assert.equal(typeof env.window.__agPrismOledScreen?.createOledScreenPainter, 'function');
     assert.equal(typeof env.window.__agPrismKeyboard3D?.createKeyboard3DRenderer, 'function');
@@ -5432,8 +5412,8 @@ test('V13.1 Review Hardening: Daemon hash-level hot-heal upgrade, AUX-06 anti-sm
   assert.deepEqual(removedScripts, ['script-old'], 'Stale NewDocument script handle must be removed before adding updated script');
   assert.equal(addedScripts.length, 1, 'Updated NewDocument script handle must be registered');
   assert.equal(evalCalls.length, 1, 'Updated periodicPickerExpr must be evaluated immediately on live stale window');
-  assert.equal(mockEntry.lastPeriodicPickerSig, 'on:newHash99');
-  assert.equal(mockEntry.lastPeriodicPickerScriptSig, 'on:newHash99');
+  assert.equal(mockEntry.lastPeriodicPickerSig, 'off:newHash99');
+  assert.equal(mockEntry.lastPeriodicPickerScriptSig, 'off:newHash99');
 
   // 2) AUX-06 anti-smear sharpness & main-key top slit isolation
   assert.ok(glSrc.includes("var auxWeight = isAllCaps ? '700 ' : '600 '"), 'AUX-06 lowercase labels must use clean SemiBold 600 weight to prevent mipmap smearing');
@@ -7155,31 +7135,16 @@ test('v1.0.8-beta (g) Closed-state 0 document.body MutationObserver + onHostTrig
   assert.equal(env.getCounts().activeObservers, 0);
 });
 
-test('v1.0.8-beta (h) Channel 8 unified .bundle-cache.json disk cache second hit (channelHitsByName.periodicPicker >= 1)', () => {
+test('v1.0.8-beta (h) Channel 8 disabled: 0 bytes built or cached even with periodicModelPicker=on', () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ag-pp-bundle-cache-'));
   const cachePath = path.join(tmpDir, '.bundle-cache.json');
   try {
     cdp.resetBundleCacheStats();
     const expr1 = cdp.buildPeriodicPickerExpression(cdp.DEFAULT_CONFIG, { cachePath });
-    assert.ok(expr1.length > 1000);
-    const statsAfterFirst = cdp.getBundleCacheStats();
-    assert.equal(statsAfterFirst.channelDiskMisses >= 1, true);
-    assert.equal(statsAfterFirst.channelHitsByName.periodicPicker, 0);
-    assert.equal(fs.existsSync(cachePath), true, '.bundle-cache.json must be persisted to disk');
-
-    const cacheJson = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
-    assert.ok(cacheJson.channels && cacheJson.channels.periodicPicker, 'Cache file must contain periodicPicker channel');
-
-    // Reset memory cache path tracking and rebuild from disk cache
-    cdp.resetBundleCacheStats();
-    const expr2 = cdp.buildPeriodicPickerExpression(cdp.DEFAULT_CONFIG, { cachePath });
-    const statsAfterSecond = cdp.getBundleCacheStats();
-    assert.equal(expr2, expr1, 'Disk-cached Channel 8 payload must match cold-compiled payload identically');
-    assert.ok(
-      statsAfterSecond.channelHitsByName.periodicPicker >= 1,
-      `Expected channelHitsByName.periodicPicker >= 1, got ${statsAfterSecond.channelHitsByName.periodicPicker}`
-    );
-    assert.ok(statsAfterSecond.channelDiskHits >= 1);
+    const exprOn = cdp.buildPeriodicPickerExpression({ ...cdp.DEFAULT_CONFIG, periodicModelPicker: 'on' }, { cachePath });
+    assert.equal(expr1, '');
+    assert.equal(exprOn, '');
+    assert.equal(fs.existsSync(cachePath), false, 'Disabled Channel 8 must not write .bundle-cache.json');
   } finally {
     cdp.resetBundleCacheStats();
     fs.rmSync(tmpDir, { recursive: true, force: true });

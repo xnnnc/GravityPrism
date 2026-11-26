@@ -151,14 +151,14 @@
     out.mascot = out.mascot === 'off' || out.mascot === false ? 'off' : /^(minis|quad(-minis)?|r:[ckdw0-4,+m]+)$/.test(out.mascot) ? out.mascot : 'crab';
     out.convRipple = normConvRipple(out.convRipple);
     for (const k of ['sidebarCompact', 'codeLigatures', 'autoArchiveOnExit']) out[k] = out[k] === true || out[k] === 'on';
-    for (const k of ['sidebarNavFold', 'sidebarStudio', 'autoUpdate']) out[k] = out[k] === 'on' || out[k] === true ? 'on' : 'off';
+    for (const k of ['sidebarNavFold', 'sidebarStudio', 'autoUpdate', 'periodicModelPicker']) out[k] = out[k] === 'on' || out[k] === true ? 'on' : 'off';
     for (const k of ['smoothCaret', 'contextMenu']) out[k] = out[k] === undefined ? true : out[k] !== false && out[k] !== 'off';
     out.accentTone = pickOf(out.accentTone, 'follow|cobalt|iris|amber|mono', 'follow');
     out.cornerStyle = pickOf(out.cornerStyle, 'sharp|balanced|soft', 'balanced');
     out.codeFont = pickOf(out.codeFont, 'default|jetbrains|cascadia|sfmono', 'default');
     out.ambientIntensity = pickOf(String(out.ambientIntensity ?? '100'), '0|35|70|100', '100');
     out.darkAura = pickOf(out.darkAura, 'subtle|balanced|vivid', 'balanced');
-    for (const k of ['omniModule', 'effortMemory', 'periodicModelPicker']) out[k] = out[k] === 'off' || out[k] === false ? 'off' : 'on';
+    for (const k of ['omniModule', 'effortMemory']) out[k] = out[k] === 'off' || out[k] === false ? 'off' : 'on';
     for (const [k, a, b] of [['lightPreset','alabaster','crystal'],['darkAuraStyle','neon','prism'],['thoughtTrigger','expand','preload'],['scrollBottomMotion','instant','smooth'],['thoughtView','bilingual','immersive'],['linkTarget','external','builtin'],['updateChannel','beta','stable']]) out[k] = out[k] === a ? a : b;
     const migrateLegacyLang = (v) => {
       if (typeof v !== 'string') return '';
@@ -3017,6 +3017,12 @@
         cfg = loadSettings(currentBaseConfig);
       }
       if (lifecycleStarted && !destroyed) restartPollTimer();
+      try {
+        W.__agPrismPeriodicPicker?.destroy?.();
+        try { delete W.__agPrismPeriodicPicker; } catch {}
+        qa(D, '#ag-prism-periodic-picker-css,#ag-prism-periodic-picker-root,.ag-pp-hold-ring,.ag-pp-mini-keycap').forEach((n) => n.remove());
+        for (const a of ['data-ag-prism-periodic-picker', 'data-ag-pp-open', 'data-ag-pp-holding']) ra(de(), a);
+      } catch {}
       markAllDirty();
       lastAbsorbedSyncKey = '';
       applyRootAttrs(true);

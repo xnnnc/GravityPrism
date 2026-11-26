@@ -424,7 +424,7 @@ test('settings-panel schema, scene presets, strict apiKey-stripping JSON export,
   assert.deepEqual(PRISM_SETTINGS_SCHEMA.effortMemory.allowed, ['on', 'off']);
   assert.equal(PRISM_SETTINGS_SCHEMA.effortMemory.default, 'on');
   assert.deepEqual(PRISM_SETTINGS_SCHEMA.periodicModelPicker.allowed, ['on', 'off']);
-  assert.equal(PRISM_SETTINGS_SCHEMA.periodicModelPicker.default, 'on');
+  assert.equal(PRISM_SETTINGS_SCHEMA.periodicModelPicker.default, 'off');
   for (const lang of ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de']) {
     const ui = i18nLocales.getUiStrings(lang);
     assert.ok(typeof ui.setPeriodicPickerTitle === 'string' && ui.setPeriodicPickerTitle.trim().length > 0, `Missing setPeriodicPickerTitle for ${lang}`);
@@ -540,7 +540,7 @@ test('settings-panel schema, scene presets, strict apiKey-stripping JSON export,
   assert.equal(defaultPatch.darkAuraStyle, 'prism');
   assert.equal(defaultPatch.autoArchiveOnExit, false);
   assert.equal(defaultPatch.effortMemory, 'on');
-  assert.equal(defaultPatch.periodicModelPicker, 'on');
+  assert.equal(defaultPatch.periodicModelPicker, 'off');
   assert.equal(defaultPatch.sidebarNavFold, 'off');
   assert.equal(defaultPatch.scrollBottomMotion, 'smooth');
 

@@ -1621,3 +1621,49 @@ test('WO-MAIN-001B: pulse-vial-bridge writes data-pv-warn="1" at >=80% and clear
     if (prevDoc !== undefined) globalThis.document = prevDoc;
   }
 });
+
+test('circular __agPulseExternalBridge re-wrapping does not cause infinite recursion or freeze', async () => {
+  const env = createPulseMockEnv();
+  let extCalls = 0;
+  let extPrev = null;
+  const extWrapper = (ev) => {
+    extCalls += 1;
+    if (extCalls > 10) throw new Error('infinite_bridge_recursion');
+    if (typeof extPrev === 'function') extPrev(ev);
+  };
+  env.win.__agPulseExternalBridge = extWrapper;
+
+  const prevDoc = globalThis.document;
+  delete globalThis.document;
+  let bridge;
+  try {
+    bridge = bridgeMod.mountPulseVialBridge({
+      win: env.win,
+      doc: env.doc,
+      storage: env.storage,
+      vialCore,
+      autoPoll: false,
+      allowMultiple: true,
+    });
+    // Simulate external plugin (e.g. account-switcher) re-wrapping our bridge handler after mount
+    const prismHandler = env.win.__agPulseExternalBridge;
+    assert.notEqual(prismHandler, extWrapper);
+    extPrev = prismHandler;
+    env.win.__agPulseExternalBridge = extWrapper;
+
+    const host = env.getPulseHost();
+    // Must complete without RangeError / stack overflow even though extWrapper -> prismHandler -> extWrapper
+    assert.doesNotThrow(() => {
+      env.win.__agPulseExternalBridge({
+        event: 'render',
+        host,
+        data: { speed: { context: { usedTokens: 128000, maxTokens: 512000, usedFraction: 0.25, model: 'Gemini 4 Neon' } } },
+      });
+    });
+    assert.ok(extCalls >= 1 && extCalls <= 2, `Expected bounded external bridge calls (<=2), got ${extCalls}`);
+    assert.equal(Math.round(bridge.getDebugState().usedFraction * 100), 25);
+  } finally {
+    bridge?.destroy();
+    if (prevDoc !== undefined) globalThis.document = prevDoc;
+  }
+});

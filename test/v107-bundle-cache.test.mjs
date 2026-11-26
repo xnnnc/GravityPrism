@@ -546,7 +546,7 @@ test('v107 A2-8: single-pass PrismDaemon.rebuildBundle cold hit parses .bundle-c
     assert.ok(dCold.thoughtExpr.length > 0);
     assert.ok(dCold.inlineDiffExpr.length > 0);
     assert.ok(dCold.wallpaperExpr.length > 0);
-    assert.ok(dCold.periodicPickerExpr.length > 0);
+    assert.equal(dCold.periodicPickerExpr, '');
     assert.ok(dCold.mascotExpr.length > 0);
     assert.ok(dCold.homeStudioExpr.length > 0);
 
@@ -592,14 +592,14 @@ test('v107 A2-8: single-pass PrismDaemon.rebuildBundle cold hit parses .bundle-c
     assert.equal(dHit.periodicPickerExpr, dCold.periodicPickerExpr);
     assert.equal(dHit.mascotExpr, dCold.mascotExpr);
     assert.equal(dHit.homeStudioExpr, dCold.homeStudioExpr);
-    assert.equal(cacheReads, 1, 'rebuildBundle() cold hit across 10 channels must read .bundle-cache.json only once');
-    assert.equal(cacheParses, 1, 'rebuildBundle() cold hit across 10 channels must JSON.parse .bundle-cache.json only once');
+    assert.equal(cacheReads, 1, 'rebuildBundle() cold hit across 9 channels must read .bundle-cache.json only once');
+    assert.equal(cacheParses, 1, 'rebuildBundle() cold hit across 9 channels must JSON.parse .bundle-cache.json only once');
 
     const hitStats = dHit.cdp.getBundleCacheStats();
     assert.equal(hitStats.diskHits, 1);
-    assert.equal(hitStats.channelDiskHits, 10);
+    assert.equal(hitStats.channelDiskHits, 9);
     assert.equal(hitStats.channelHitsByName.wallpaper, 1);
-    assert.equal(hitStats.channelHitsByName.periodicPicker, 1);
+    assert.equal(hitStats.channelHitsByName.periodicPicker, 0);
     assert.equal(hitStats.channelHitsByName.mascot, 1);
     assert.equal(hitStats.channelHitsByName.suggester, 1);
     assert.equal(hitStats.channelHitsByName.homeStudio, 1);

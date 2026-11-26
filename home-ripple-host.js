@@ -588,7 +588,7 @@
         lastTs = now;
         const rawGap = M.max(0, Number(getMinFrameGapMs?.() ?? 0) || 0);
         const minGap =
-          (state.mode === 'home' || state.convLevel === 'full') && (state.waves?.active?.() || (auraState.active && lsa > 0 && now - lsa < 650) || (tideAt > 0 && now - tideAt < 480))
+          (state.mode === 'home' || state.convLevel === 'full') && (state.waves?.active?.() || (auraState.active && lsa > 0 && now - lsa < 180) || (tideAt > 0 && now - tideAt < 480))
             ? rawGap
             : M.max(33, rawGap);
         if (!still && drawn && !force1 && minGap > 0 && lastDraw > 0 && now - lastDraw < minGap && !hP()) {

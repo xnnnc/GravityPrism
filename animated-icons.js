@@ -54,21 +54,24 @@
       );
     }
 
-    // 饱满四色单层合并柔光：零固定 ID 冲突，单个合并层 1 次滤镜替代 4 次独立高斯模糊（直降 75% 光栅开销）
+    // 预柔化多层叠色光斑（零 SMIL 属性突变、零运行时 filter:blur，纯 CSS 合成层微动效）
     const smil = Boolean(anim);
-    const a = (k, v, kt = '') => (smil ? `<animate attributeName="${k}" values="${v}"${kt ? ` keyTimes="${kt}"` : ''} dur="4.2s" repeatCount="indefinite"/>` : '');
-    const e = (x, y, rx, ry, fl, xs, ys) => `<ellipse cx="${x}" cy="${y}" rx="${rx}" ry="${ry}" fill="${fl}">${a('cx', xs) + a('cy', ys)}</ellipse>`;
+    const o = (x, y, rx, ry, fl) =>
+      `<ellipse cx="${x}" cy="${y}" rx="${+(rx * 1.28).toFixed(1)}" ry="${+(ry * 1.28).toFixed(1)}" fill="${fl}" fill-opacity=".2"/>` +
+      `<ellipse cx="${x}" cy="${y}" rx="${rx}" ry="${ry}" fill="${fl}" fill-opacity=".34"/>` +
+      `<ellipse cx="${x}" cy="${y}" rx="${+(rx * 0.62).toFixed(1)}" ry="${+(ry * 0.62).toFixed(1)}" fill="${fl}" fill-opacity=".5"/>`;
     const glint = smil
-      ? `<rect class="ai-sp-glint" x="0" y="-2" width="2.6" height="28" rx="1.3" fill="#FFF" opacity="0" transform="rotate(26 12 12)" style="filter:blur(.7px)">${a('x', '0;0;22;22', '0;.28;.62;1') + a('opacity', '0;0;.4;0;0', '0;.28;.45;.62;1')}</rect>`
+      ? `<rect class="ai-sp-glint" x="-4" y="-2" width="2.8" height="28" rx="1.4" fill="#FFF" opacity="0"/>`
       : '';
     const meshBody =
       `<g style="clip-path:path('${OFFICIAL_GEMINI_SPARK_D}') view-box">` +
       `<path d="${OFFICIAL_GEMINI_SPARK_D}" fill="${GOOGLE_COLORS.blue}"/>` +
-      `<g style="filter:blur(2.7px)">` +
-      e(9.4, 4.4, 7, 6, GOOGLE_COLORS.red, '9.4;11.8;10.6;7.4;9.4', '4.4;6;2.8;5.2;4.4') +
-      e(4.6, 13.2, 6.2, 5.6, GOOGLE_COLORS.yellow, '4.6;6.8;5.6;3.2;4.6', '13.2;14.6;11.4;14;13.2') +
-      e(10.4, 20.2, 6.6, 5.6, GOOGLE_COLORS.green, '10.4;8.2;12;12.4;10.4', '20.2;18.4;18.8;21.2;20.2') +
-      e(18, 10.8, 6.8, 6.4, '#3B82F6', '18;15.8;19.4;19.6;18', '10.8;9.2;9.6;12.4;10.8') +
+      `<g class="${smil ? 'ai-sp-oa' : ''}" style="transform-origin:12px 12px">` +
+      o(9.4, 4.4, 7, 6, GOOGLE_COLORS.red) +
+      o(10.4, 20.2, 6.6, 5.6, GOOGLE_COLORS.green) +
+      `</g><g class="${smil ? 'ai-sp-ob' : ''}" style="transform-origin:12px 12px">` +
+      o(4.6, 13.2, 6.2, 5.6, GOOGLE_COLORS.yellow) +
+      o(18, 10.8, 6.8, 6.4, '#3B82F6') +
       `</g>${glint}</g>`;
 
     const xGlow = tier === 'xhigh'

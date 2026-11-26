@@ -10,7 +10,7 @@
   "effortSliderModule": "auto",
   "effortSliderStyle": "classic",
   "effortMemory": "on",
-  "periodicModelPicker": "on",
+  "periodicModelPicker": "off",
   "thoughtTranslate": "off",
   "thoughtTrigger": "preload",
   "homeLayout": "studio",

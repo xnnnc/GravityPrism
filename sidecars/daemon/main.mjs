@@ -5166,25 +5166,12 @@ export class PrismDaemon {
     }
   }
 
-  _isPeriodicPickerEnabled(cfgOverride = null) {
-    try {
-      const cfg = cfgOverride || this.cdp?.readConfig?.();
-      if (typeof this.cdp?.shouldEnablePeriodicPicker === 'function') {
-        return Boolean(this.cdp.shouldEnablePeriodicPicker(cfg));
-      }
-      return cfg?.periodicModelPicker !== 'off' && cfg?.periodicModelPicker !== false;
-    } catch {
-      return true;
-    }
+  _isPeriodicPickerEnabled(_cfgOverride = null) {
+    return false;
   }
 
-  _getPeriodicPickerCfgSig(cfgOverride = null) {
-    try {
-      const cfg = cfgOverride || this.cdp?.readConfig?.() || {};
-      return cfg.periodicModelPicker === 'off' || cfg.periodicModelPicker === false ? 'off' : 'on';
-    } catch {
-      return 'on';
-    }
+  _getPeriodicPickerCfgSig(_cfgOverride = null) {
+    return 'off';
   }
 
   _extractPeriodicPickerCodeHash(expr) {
