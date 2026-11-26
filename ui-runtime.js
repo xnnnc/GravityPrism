@@ -2,7 +2,7 @@
   if (typeof module === 'object' && module.exports) module.exports = factory;
   else root.__agCsUiMain = factory;
 })(typeof globalThis !== 'undefined' ? globalThis : window, function (initialConfig) {
-  const VERSION = '1.0.7';
+  const VERSION = '1.1.0';
   const D = document, W = window, GT = globalThis, ST = setTimeout, CT = clearTimeout, O = Object, AF = Array.from, LS = typeof localStorage !== 'undefined' ? localStorage : null;
   const LEGACY_API_VERSION = 3;
   const CODE_HASH = initialConfig?.codeHash || '';

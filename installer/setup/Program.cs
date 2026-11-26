@@ -1374,7 +1374,7 @@ namespace AgyClaudeStyle.Installer
                     ),
                     RegistryValueKind.String
                 );
-                key.SetValue("DisplayVersion", version ?? "1.0.7", RegistryValueKind.String);
+                key.SetValue("DisplayVersion", version ?? "1.1.0", RegistryValueKind.String);
                 key.SetValue("Publisher", "Obsidian Prism Contributors", RegistryValueKind.String);
                 key.SetValue("InstallLocation", installDir, RegistryValueKind.String);
                 key.SetValue("DisplayIcon", exePath + ",0", RegistryValueKind.String);

@@ -5,6 +5,18 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 本项目遵循语义化版本（SemVer）规范，记录各正式版本的新增功能、架构变更、安全加固与缺陷修复。
 
+## [1.1.0] - 2026-11-26
+
+> **GravityPrism `v1.1.0`** ([`RMvdesi/obsidian-prism`](https://github.com/RMvdesi/obsidian-prism) `v1.0.7` tabanı üzerinde resmi fork sürümü): Koyu Grafit tema, canlı `5h`/`7d` kota ve kompakt `c %` telemetrisi, **7** animasyonlu HTML5 Canvas effort slider stili, SMIL cam yansımalı Gemini Spark mikro-animasyonu, `getCodeActionDiff` inline diff desteği ve ikiz cam çerçeveli akıcı sohbet arayüzünü sunar.
+
+### Yenilikler & Düzeltmeler
+- **Koyu Grafit Palet & Varsayılan Dil:** Varsayılan eklenti dili `en`, `hostLocalization: off` olarak ayarlandı; arka plan/kart renkleri okunabilir Koyu Grafit tonlarına (`#121318`, `#16171D`, `#191B22`, `#21232C`) yükseltildi.
+- **Alt Bar Canlı Kota & Sadeleştirilmiş Composer:** Seçili model havuzuna göre canlı `5h` / `7d` kalan kota çipleri eklendi, `tok/s` etiketi kaldırılarak `c %` gösterimine geçildi; model seçici metin kırpılması giderildi, Turbo/sağ kontrol butonları `28×28px` simge haplarına hizalandı.
+- **7 Yeni Animasyonlu Effort Slider + Canlı Önizleme:** **Settings → Appearance → Obsidian Prism → Modules → Effort Slider Style** altında `Classic` yanına 7 HTML5 Canvas stili eklendi (`Prism Beam`, `Ferrofluid`, `Gravity Well`, `Oscilloscope`, `Plasma Arc`, `Supernova`, `Firefly Swarm`) ve ayarlar kartına canlı sürüklenebilir önizleme getirildi.
+- **Google 4 Renkli Gemini Spark Mikro-Animasyonu:** `view-box` kırpmalı saf SVG SMIL `<animate>` akışı ve ince cam parıltısı eklendi; model seçici menüsü açılıp kapandığında takılı kalan tooltip hatası giderildi.
+- **Tüm Adımlarda Inline Diff (`getCodeActionDiff`):** Git deposu dışı ve `.gemini` dosyaları dahil satır içi diff önizlemesi ve veri yoksa Antigravity Sidebar'a sorunsuz devir eklendi.
+- **Sohbet Kartı, Canlı ASCII Arka Plan & Otomatik Kaydırma:** Prism hareket motoru ve yan çubuk çalışıyor ikonları OS `prefers-reduced-motion` kilidinden ayrıştırıldı (`motionLevel` ile yönetilir); Studio ana ekran kartı dikey ortalandı; sohbet akışı composer ile birebir ikiz yuvarlatılmış cam kart içine alındı, hover-only arka plan dalgası ve sağ Overview paneli açıldığında composer ile eşzamanlı sola kayma hizalaması eklendi; sohbet geçişlerinde en alta kaydırma ve açık `Worked for` / `Thinking` kutularında akıllı sticky-bottom otomatik takip eklendi.
+
 ## [1.0.7] - 2026-11-24
 
 > **Obsidian Prism `v1.0.7` 正式版**汇总了自 `v1.0.6` 以来的全部 Beta 阶段迭代与最终收口打磨，涵盖 **Smoked Obsidian 视觉大重塑与桌面双宠光学交互**、**7 通道按需架构与 45x 冷启动提速**、**思考过程与新会话标题自动翻译 / 一键诊断**、**100% 双语 Windows & macOS 安装器与更新持久性根治**、**10 个社区 PR 融合**以及**全量 CodeQL 安全告警清零**。

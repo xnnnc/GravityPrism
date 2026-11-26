@@ -6,11 +6,12 @@
 
 **Google Antigravity için özelleştirilmiş Obsidian Prism arayüz, tema ve üretkenlik paketi**
 
-Koyu Grafit tema · Alt barda canlı `5h` / `7d` kota ve kompakt `c %` göstergesi · Kırpılmayan model seçici · Minimal simge butonları · Tüm adımlarda çalışan sohbet içi (inline) Diff
+Koyu Grafit tema · Alt barda canlı `5h` / `7d` kota ve kompakt `c %` göstergesi · 7 animasyonlu Effort Slider · Cam yansımalı Gemini Spark · İkiz sohbet kartı & canlı ASCII arka plan · Tüm adımlarda inline Diff
 
 [**Türkçe**](./README.md) · [**English**](./README.en.md) · [**简体中文**](./README.zh-CN.md) · [**Değişiklik Günlüğü (CHANGELOG)**](./CHANGELOG.md)
 
 <p>
+  <img src="https://img.shields.io/badge/GravityPrism-v1.1.0-2563eb?style=flat-square" alt="GravityPrism v1.1.0" />
   <img src="https://img.shields.io/badge/Base-Obsidian%20Prism%20v1.0.7-0f172a?style=flat-square" alt="Base Version v1.0.7" />
   <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS-1e293b?style=flat-square" alt="Platform" />
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-GPL--3.0-2563eb?style=flat-square" alt="License: GPL-3.0" /></a>
@@ -56,14 +57,22 @@ Bu depo, [`RMvdesi/obsidian-prism`](https://github.com/RMvdesi/obsidian-prism) `
 5. **Tüm Adımlarda Çalışan Sohbet İçi (Inline) Diff ([`vendor/inline-diff/inline-diff-client.js`](./vendor/inline-diff/inline-diff-client.js)):**
    - Yalnızca Git deposu içindeki dosyalarla sınırlı kalmak yerine, adım etiketlerindeki `diffContext` (`cascadeId`, `stepIndex`) üzerinden Antigravity'nin dahili `getCodeActionDiff` servisiyle Git dışı ve `.gemini` dahil tüm adımların satır içi diff önizlemesi açılır.
    - Eğer bir adımın diff verisi gerçekten yoksa hata kutusu göstermek yerine otomatik olarak Antigravity'nin kendi **Sidebar** diff/dosya görünümüne devreder.
-6. **Seçilebilir Akıl Yürütme (Effort) Slider Stilleri ([`vendor/effort-slider/`](./vendor/effort-slider/upstream-client.js), [`settings-panel.js`](./settings-panel.js)):**
-   - **Settings → Appearance → Obsidian Prism → Modules** altında **Effort Slider Style** ayarı ile klasik kaydırıcıya ek olarak **5 özgün animasyonlu HTML5 Canvas stili** seçilebilir: `Classic`, `Prism Beam` (01), `Ferrofluid` (02), `Gravity Well` (03), `Oscilloscope` (05) ve `Plasma Arc` (06).
+6. **7 Seçilebilir Animasyonlu Effort Slider + Canlı Ayar Önizlemesi ([`vendor/effort-slider/`](./vendor/effort-slider/upstream-client.js), [`settings-panel.js`](./settings-panel.js)):**
+   - **Settings → Appearance → Obsidian Prism → Modules → Effort Slider Style** altında klasik kaydırıcıya ek olarak **7 animasyonlu HTML5 Canvas stili** canlı önizlemeyle seçilebilir: `Classic`, `Prism Beam`, `Ferrofluid`, `Gravity Well`, `Oscilloscope`, `Plasma Arc`, `Supernova` ve `Firefly Swarm`.
+7. **Google 4 Renkli Gemini Spark & İkiz Sohbet Kartı ([`animated-icons.js`](./animated-icons.js), [`style.css`](./style.css), [`host-workbench-enhancer.js`](./host-workbench-enhancer.js)):**
+   - Composer'daki 4 renkli Gemini ikonuna `view-box` kırpmalı ipeksi SMIL renk akışı ve cam yansıması parıltısı eklendi; menü sonrası takılan tooltip düzeltildi.
+   - Studio ana ekran kartı dikey ortalanıp composer genişliğine hizalandı; sohbet akışı composer ile aynı Koyu Grafit cam çerçeveye alındı, çevresinde hover-only canlı ASCII arka plan dalgası ve sağ Overview paneli açıkken composer ile senkron kayma sağlandı.
+   - Sohbet geçişlerinde otomatik en alta kaydırma ve açık `Worked for` / `Thinking` kutularında manuel müdahaleye saygılı sticky-bottom otomatik takip eklendi.
 
 ---
 
 ## Kurulum
 
-### Kaynaktan Kurulum (Önerilen)
+### Tek Tık Windows Kurulum Uygulaması (Önerilen)
+
+- [Releases](https://github.com/xnnnc/GravityPrism/releases) sayfasından **`gravity-prism-installer.exe`** dosyasını indirip çalıştırabilirsiniz (kendi `.exe` paketinizi derlemek için `npm run build:installer` komutunu kullanabilirsiniz).
+
+### Kaynaktan Kurulum
 
 > Ön koşul: Sistemde **Node.js `>= 22.0.0`** kurulu olmalıdır.
 

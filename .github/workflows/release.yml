@@ -71,11 +71,11 @@ jobs:
           ' CHANGELOG.md)"
 
           {
-            printf '## Obsidian Prism %s\n\n' "${TAG_NAME}"
+            printf '## GravityPrism %s\n\n' "${TAG_NAME}"
             if [ -n "${SECTION_BODY}" ]; then
               printf '%s\n\n' "${SECTION_BODY}"
             else
-              printf 'Release %s of Obsidian Prism. See CHANGELOG.md for details.\n\n' "${TAG_NAME}"
+              printf 'Release %s of GravityPrism. See CHANGELOG.md for details.\n\n' "${TAG_NAME}"
             fi
             cat <<'EOF'
           ### Standalone Installers / 独立安装包
@@ -115,7 +115,7 @@ jobs:
             gh release edit "${TAG_NAME}" \
               --repo "${REPO_SLUG}" \
               --target "${COMMIT_SHA}" \
-              --title "Obsidian Prism ${TAG_NAME}" \
+              --title "GravityPrism ${TAG_NAME}" \
               --notes-file release-notes.md \
               "${PRERELEASE_EDIT_ARGS[@]}"
           else
@@ -125,7 +125,7 @@ jobs:
               artifacts/windows-installer/* \
               artifacts/macos-dmg/* \
               artifacts/SHA256SUMS.txt \
-              --title "Obsidian Prism ${TAG_NAME}" \
+              --title "GravityPrism ${TAG_NAME}" \
               --notes-file release-notes.md \
               "${PRERELEASE_CREATE_ARGS[@]}"
           fi

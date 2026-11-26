@@ -245,14 +245,14 @@ function createLightweightDom() {
 test('Obsidian Prism brand compliance, GPL-3.0 LICENSE, NOTICE, CITATION.cff, THIRD_PARTY_NOTICES.md, plugin.json, and sidecar.json contract', () => {
   const pkgJson = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, 'package.json'), 'utf8'));
   assert.equal(pkgJson.name, 'obsidian-prism');
-  assert.equal(pkgJson.version, '1.0.7');
+  assert.equal(pkgJson.version, '1.1.0');
   assert.equal(pkgJson.license, 'GPL-3.0-only');
 
   const pluginJson = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, 'plugin.json'), 'utf8'));
   assert.deepEqual(Object.keys(pluginJson).sort(), ['description', 'displayName', 'logo', 'name', 'version']);
   assert.equal(pluginJson.name, 'obsidian-prism');
   assert.equal(pluginJson.displayName, 'Obsidian Prism');
-  assert.equal(pluginJson.version, '1.0.7');
+  assert.equal(pluginJson.version, '1.1.0');
   assert.equal(pluginJson.logo, 'assets/logo.svg');
   assert.ok(fs.existsSync(path.join(ROOT_DIR, 'assets', 'logo.svg')));
 
@@ -942,9 +942,9 @@ test('PrismDaemon & install-plugin.cjs: obsidian-prism target, legacy antigravit
                       ready: true,
                       hasPrism: true,
                       hasRepoBridge: true,
-                      prismAttr: '1.0.7',
+                      prismAttr: '1.1.0',
                       hasStyle: true,
-                      version: '1.0.7',
+                      version: '1.1.0',
                       status: 'ok',
                     },
                   },
