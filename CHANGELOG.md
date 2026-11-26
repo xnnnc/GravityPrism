@@ -5,6 +5,14 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 本项目遵循语义化版本（SemVer）规范，记录各正式版本的新增功能、架构变更、安全加固与缺陷修复。
 
+## [1.2.1] - 2026-11-26
+
+> **GravityPrism `v1.2.1`**: Yan panel ve sohbet içi diff önizlemelerindeki alt kırpılma/kararma sorununu giderir ve kalın yatay kaydırma çubuklarını inceltir.
+
+### Düzeltmeler
+- **İnce Yatay Kaydırma Çubukları ([style.css](./style.css)):** `min-height: 28px` kuralı yalnızca dikey kaydırma çubuklarına kısıtlandı; `[data-testid="overlay-scrollbar"][data-orientation="horizontal"]` (`3.5px` / `4.5px` üzerine gelince) ve `[data-testid="horizontal-scrollbar-thumb"]` (`4px`) hem yan panelde hem sohbet panelinde ince görünüme kavuşturuldu.
+- **Okunabilir Araç Grubu Diff Önizlemeleri ([vendor/inline-diff/inline-diff-client.js](./vendor/inline-diff/inline-diff-client.js)):** `syncDiffHostMask()` ile açık satır içi diff önizlemesi barındıran araç grubu/katlanır kapsayıcılardaki (`l4`/`n4`) alttan kararma maskesi (`mask-image`) ve `max-height` kısıtı geçici olarak kaldırılıp (`data-ag-has-inline-diff="1"`) kart görünür alana kaydırıldı; kapatma ve `destroy()` sırasında temizlenir.
+
 ## [1.2.0] - 2026-11-26
 
 > **GravityPrism `v1.2.0`** ([`RMvdesi/obsidian-prism`](https://github.com/RMvdesi/obsidian-prism) `v1.0.8-beta.3` tabanı ile birleştirildi): Tüm `v1.0.8-beta.1..3` yeniliklerini (8 dil tam yerelleştirme, `-136 KB` Channel 1 mimari sadeleştirme, 3D Periyodik Tablo model seçici, Split View çoklu bölme desteği, koyu aura presetleri, Linux taşınabilir kurulum, `klif.sys` / WMI / PowerShell temizliği ile `10.5×` hızlı antivirüs-temiz kurulum ve `Antigravity v2.35.2` uyumluluğu) GravityPrism'in tüm özelleştirmeleriyle birleştirir.
