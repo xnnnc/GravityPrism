@@ -5,6 +5,15 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 本项目遵循语义化版本（SemVer）规范，记录各正式版本的新增功能、架构变更、安全加固与缺陷修复。
 
+## [1.2.2] - 2026-11-26
+
+> **GravityPrism `v1.2.2`**: Yan panel sekme geçişlerinde kaydırma konumunu korur, alt ajan dosya listesinin yanlışlıkla HTML önizlemeye düşmesini engeller ve eski watcher CSS çakışmalarına karşı koruma ekler.
+
+### Düzeltmeler
+- **Yan Panel Kaydırma Belleği ([host-workbench-enhancer.js](./host-workbench-enhancer.js), [vendor/inline-diff/inline-diff-client.js](./vendor/inline-diff/inline-diff-client.js)):** Alt ajan sekmelerindeki (`[data-testid="subagent-tab-conversation"]`) dosya tıklamaları ve satır içi diff menüsündeki **Open in Sidebar** geçişleri öncesinde kaydırma konumu (`auxScrollMemory` / `window.__agPrismPreserveScroll`) kaydedilir; sekmeye dönüldüğünde veya yeniden bağlandığında kademeli olarak geri yüklenir (kullanıcı etkileşiminde anında iptal edilir).
+- **Alt Ajan Dosya Kartı Önizleme Koruması ([vendor/omni-viewer/omni-client.js](./vendor/omni-viewer/omni-client.js)):** `changed-files-card` içindeki `<button data-uri="...html">` satırlarının `subagent-tab-conversation` panelini Omni HTML önizleme iframe'i ile değiştirmesi (`AUX_EXCLUDED_CONTAINER_SELECTOR` + `extractAuxFileRef` / `isValidAuxShell` / `isAutoPreviewAuxShell` güncellemeleri) engellendi; normal `.html`/`.svg` File Pane otomatik önizlemesi korundu.
+- **Eski Düzleştirilmiş CSS Koruması ([cdp.js](./cdp.js)):** `applyStyle()`, CSS Nesting destekleyen Chromium'da `data-ag-cs-flat` bulunmamasını ve `data-ag-cs-css-len` uzunluğunun eşleşmesini zorunlu kılarak dış müdahale sonrası GravityPrism stillerini otomatik onarır.
+
 ## [1.2.1] - 2026-11-26
 
 > **GravityPrism `v1.2.1`**: Yan panel ve sohbet içi diff önizlemelerindeki alt kırpılma/kararma sorununu giderir ve kalın yatay kaydırma çubuklarını inceltir.
