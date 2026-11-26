@@ -34,6 +34,7 @@
     '& .ag-cs-inline-diff-box{display:block;box-sizing:border-box;width:100%;max-width:100%;align-self:stretch;margin:0;padding:0;transform-origin:50% 0%;contain:layout style;&[data-ag-diff-anim="1"]{will-change:transform,opacity;animation:ag-cs-diff-unfold 150ms var(--ag-ease-out,cubic-bezier(.16,1,.3,1)) both;}&[data-ag-diff-state="closing"]{will-change:transform,opacity;pointer-events:none;animation:ag-cs-diff-fold 120ms cubic-bezier(.32,0,.67,0) forwards;}}',
     '& .ag-cs-inline-diff-card{position:relative;margin:6px 0 12px 0;padding:0;border-radius:10px;border:1px solid rgba(255,255,255,.082);background-color:rgba(10,11,14,.90);background-image:radial-gradient(85% 48px at 50% 0%,rgba(255,255,255,.036),transparent);box-shadow:inset 0 1px 0 rgba(255,255,255,.095),0 14px 34px -12px rgba(0,0,0,.62);overflow:hidden;}',
     '& .ag-cs-inline-diff-body{max-height:320px;overflow:auto;padding:6px 0;font-family:var(--ag-cs-mono-stack);font-size:12px;line-height:1.64;tab-size:2;}',
+    '& [data-ag-has-inline-diff="1"]{-webkit-mask-image:none !important;mask-image:none !important;max-height:none !important;overflow-y:visible !important;}',
     '& .ag-cs-inline-diff-note{padding:4px 14px 6px;margin-bottom:4px;border-bottom:1px solid rgba(255,255,255,.06);font-family:var(--font-sans);font-size:11px;line-height:1.45;color:var(--muted-foreground);opacity:.78;}',
     '& .ag-cs-inline-diff-wrap-tag{display:inline-flex;align-items:center;height:15px;padding:0 5px;margin:auto 12px auto 4px;border-radius:3px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.09);color:var(--muted-foreground);font-family:var(--font-sans);font-size:10px;line-height:1;flex-shrink:0;}',
     '& .ag-cs-inline-diff-more-bar{appearance:none;display:flex;align-items:center;justify-content:center;width:100%;padding:6px 12px 2px;margin-top:4px;border:0;border-top:1px solid rgba(255,255,255,.055);background:transparent;color:var(--muted-foreground);font-family:var(--font-sans);font-size:11px;cursor:pointer;transition:color 120ms ease;&:hover{color:var(--foreground);}}',
@@ -1110,6 +1111,22 @@
       return inner || chipOrBadge;
     }
 
+    function syncDiffHostMask(el) {
+      let cur = el?.parentElement || null;
+      while (cur) {
+        const tid = ga(cur, 'data-testid');
+        if (tid === 'autoscroll-viewport' || tid === 'conversation-view') break;
+        if (cur.classList?.contains('overflow-y-auto') || cur.classList?.contains('bleed-contain')) {
+          const hasOpen = Array.from(qa(cur, '.ag-cs-inline-diff-box[data-ag-cs-inline-diff="1"]')).some(
+            (b) => (ga(b, 'data-ag-diff-state') || 'open') !== 'closing'
+          );
+          if (hasOpen) sa(cur, 'data-ag-has-inline-diff', '1');
+          else ra(cur, 'data-ag-has-inline-diff');
+        }
+        cur = cur.parentElement;
+      }
+    }
+
     function toggleInlineDiffPreview(chipOrBadge, opts = null) {
       if (isDead() || !doc || !chipOrBadge) return false;
       const badgeEl = normalizeBadgeEl(chipOrBadge);
@@ -1143,6 +1160,7 @@
             sa(badgeEl, AO, '1');
             if (chipEl) sa(chipEl, AO, '1');
             sa(rowEl, AH, '1');
+            syncDiffHostMask(rowEl);
           });
           if (allowAnim) schedSettle(nextSib, false);
           stats.inlineDiffToggleCount++;
@@ -1157,6 +1175,7 @@
             if (chipEl) ra(chipEl, AO);
             sa(nextSib, AA, '1');
             sa(nextSib, AS, 'closing');
+            syncDiffHostMask(rowEl);
           });
           const tid = setTimeout(() => {
             inlineDiffAnimTimers.delete(tid);
@@ -1165,6 +1184,7 @@
               mut(() => {
                 if (nextSib.parentNode) nextSib.remove();
                 if (!rowEl.nextElementSibling?.classList?.contains(BC)) ra(rowEl, AH);
+                syncDiffHostMask(rowEl);
               });
             }
           }, 130);
@@ -1176,6 +1196,7 @@
             ra(badgeEl, AO);
             if (chipEl) ra(chipEl, AO);
             ra(rowEl, AH);
+            syncDiffHostMask(rowEl);
           });
         }
         stats.inlineDiffToggleCount++;
@@ -1231,7 +1252,13 @@
         ra(badgeEl, AO);
         if (chipEl) ra(chipEl, AO);
         if (!rowEl.nextElementSibling?.classList?.contains(BC)) ra(rowEl, AH);
+        syncDiffHostMask(rowEl);
         return false;
+      };
+      const scrollDiffIntoView = () => {
+        try {
+          box.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
+        } catch {}
       };
       if (payload.lines.length) {
         renderInlineDiffBody(body, payload.lines, 'lines', null, stepStats, null, openSb);
@@ -1255,7 +1282,9 @@
         sa(badgeEl, AO, '1');
         if (chipEl) sa(chipEl, AO, '1');
         sa(rowEl, AH, '1');
+        syncDiffHostMask(rowEl);
       });
+      if (!pendingRpc && box.isConnected !== false) scrollDiffIntoView();
       if (allowAnim) schedSettle(box, true);
       if (pendingRpc) {
         const expId = pendingRpc.reqId;
@@ -1265,7 +1294,8 @@
             mut(() => {
               rendered = applyResp(resp);
             });
-            if (!rendered) openSb();
+            if (rendered) scrollDiffIntoView();
+            else openSb();
           }
         });
       }
@@ -1534,7 +1564,7 @@
             delete el._agSyncedTxt;
             delete el._agSyncedChip;
           });
-          for (const k of 'diff-chip|diff-chip-file|diff-chip-row|diff-stat|inline-diff-open|inline-diff-host|diff-anim|diff-state|cs-inline-diff'.split(
+          for (const k of 'diff-chip|diff-chip-file|diff-chip-row|diff-stat|inline-diff-open|inline-diff-host|has-inline-diff|diff-anim|diff-state|cs-inline-diff'.split(
             '|'
           )) {
             const a = 'data-ag-' + k;

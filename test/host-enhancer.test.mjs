@@ -2202,3 +2202,23 @@ test('Navigator outline mounts dedicated trigger, yields to Base UI turn tooltip
     assert.equal(rail.querySelector('.ag-cs-nav-outline-trigger'), null, 'destroy() must remove .ag-cs-nav-outline-trigger');
   }
 });
+
+test('Horizontal overlay/diff scrollbars stay slim (no 28px min-height) and collapsible diff hosts clear mask/max-height cleanly', () => {
+  const css = fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8');
+  const vMinRule =
+    css.split('\n').find((l) => l.includes('[data-testid="overlay-scrollbar"]:not([data-orientation="horizontal"])')) || '';
+  assert.ok(vMinRule.includes('min-height:28px;'), 'Vertical scrollbar thumbs keep 28px min-height');
+
+  const hThumbRule = css.split('\n').find((l) => l.startsWith('& [data-testid="horizontal-scrollbar-thumb"]{')) || '';
+  assert.ok(hThumbRule.includes('min-height:0 !important;') && hThumbRule.includes('height:4px !important;'));
+
+  const hOverlayRule =
+    css.split('\n').find((l) => l.includes('[data-testid="overlay-scrollbar"][data-orientation="horizontal"]{')) || '';
+  assert.ok(hOverlayRule.includes('height:9px !important;') && hOverlayRule.includes('min-height:0 !important;'));
+  assert.ok(hOverlayRule.includes('height:3.5px !important;') && hOverlayRule.includes('height:4.5px !important;'));
+
+  assert.ok(
+    inlineDiffMod.INLINE_DIFF_CSS.includes('[data-ag-has-inline-diff="1"]{-webkit-mask-image:none !important;mask-image:none !important;max-height:none !important;overflow-y:visible !important;}'),
+    'Channel 6 must clear collapsible fade mask and max-height while inline diff is open'
+  );
+});
