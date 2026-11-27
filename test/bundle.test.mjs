@@ -1560,7 +1560,9 @@ test('v3.5.1 mounts dual mascot stage, brand optical glyphs, Orchestrator crysta
     sandbox.window.__agClaudeStyle.refreshConfig(cdp.DEFAULT_CONFIG);
     assert.equal(glyph.getAttribute('data-brand'), 'gemini');
     assert.equal(glyph.getAttribute('data-tier'), 'xhigh');
+    assert.ok(glyph.innerHTML.includes('ag-spark-orbit-svg'), 'Gemini trigger glyph must use custom 4-color Google Spark SVG');
     assert.equal(hydrogenRowGlyph.getAttribute('data-selected'), 'true');
+    assert.ok(hydrogenRowGlyph.innerHTML.includes('ag-spark-orbit-svg'), 'Selected Gemini row glyph must use custom 4-color Google Spark SVG');
     assert.equal(orchRowGlyph.getAttribute('data-selected'), 'false');
     assert.equal(modelPanel.hasAttribute('data-ag-cs-orch-active'), false);
     assert.equal(orchBar.getAttribute('data-row-hidden'), 'true');

@@ -249,12 +249,12 @@
 
     const buildBrandMarkSvg = (brand, size = 14, tier = 'auto', monochrome = false) => {
       const useMono = !!(monochrome || readRootAccentTone() === 'mono');
-      if (brand === 'antigravity') return renderSparkSvg(size, tier, useMono, '');
+      if (brand === 'antigravity' || brand === 'gemini') return renderSparkSvg(size, tier, useMono, '');
       return svgW('', size, '0 0 24 24', `<path d="${BRAND_PATHS[brand] || BRAND_PATHS.gemini}" fill="currentColor" fill-rule="evenodd"/>`);
     };
 
     const buildModelGlyphInnerSvg = (brand, tier, isMono = false) => {
-      if (brand === 'antigravity') return renderSparkSvg(16, tier || 'auto', isMono, 'ag-cs-model-glyph-svg');
+      if (brand === 'antigravity' || brand === 'gemini') return renderSparkSvg(16, tier || 'auto', isMono, 'ag-cs-model-glyph-svg');
       const d = BRAND_PATHS[brand] || BRAND_PATHS.gemini;
       const fixedLock =
         tier === 'fixed'
@@ -303,7 +303,7 @@
     };
 
     const buildPanelRowGlyphSvg = (brand, tier, isSelected, isMono = false) => {
-      if (brand === 'antigravity') {
+      if (brand === 'antigravity' || brand === 'gemini') {
         return renderSparkSvg(15, isSelected ? tier || 'auto' : 'low', !isSelected || isMono, 'ag-cs-model-glyph-svg');
       }
       const fillAttr = isSelected && !isMono
