@@ -7,7 +7,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 
-export const GITHUB_REPO = 'xnnnc/GravityPrism';
+export const GITHUB_REPO = 'hypsunk/GravityPrism';
 export const LATEST_RELEASE_API = `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`;
 export const RELEASES_LIST_API = `https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=15`;
 export const RELEASES_PAGE_URL = `https://github.com/${GITHUB_REPO}/releases`;

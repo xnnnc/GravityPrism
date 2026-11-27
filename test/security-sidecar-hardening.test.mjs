@@ -787,11 +787,11 @@ test('security-sidecar 4: update-service verifies SHA-256 in memory before disk 
               tag_name: 'v1.0.6',
               draft: false,
               prerelease: false,
-              html_url: 'https://github.com/xnnnc/GravityPrism/releases/tag/v1.0.6',
+              html_url: 'https://github.com/hypsunk/GravityPrism/releases/tag/v1.0.6',
               assets: [
                 {
                   name: 'gravity-prism-installer.exe',
-                  browser_download_url: 'https://github.com/xnnnc/GravityPrism/releases/download/v1.0.6/gravity-prism-installer.exe',
+                  browser_download_url: 'https://github.com/hypsunk/GravityPrism/releases/download/v1.0.6/gravity-prism-installer.exe',
                   digest: `sha256:${expectedSha}`,
                 },
               ],
@@ -836,15 +836,15 @@ test('security-sidecar 4: update-service verifies SHA-256 in memory before disk 
               tag_name: 'v1.0.6',
               draft: false,
               prerelease: false,
-              html_url: 'https://github.com/xnnnc/GravityPrism/releases/tag/v1.0.6',
+              html_url: 'https://github.com/hypsunk/GravityPrism/releases/tag/v1.0.6',
               assets: [
                 {
                   name: 'gravity-prism-installer.exe',
-                  browser_download_url: 'https://github.com/xnnnc/GravityPrism/releases/download/v1.0.6/gravity-prism-installer.exe',
+                  browser_download_url: 'https://github.com/hypsunk/GravityPrism/releases/download/v1.0.6/gravity-prism-installer.exe',
                 },
                 {
                   name: 'SHA256SUMS.txt',
-                  browser_download_url: 'https://github.com/xnnnc/GravityPrism/releases/download/v1.0.6/SHA256SUMS.txt',
+                  browser_download_url: 'https://github.com/hypsunk/GravityPrism/releases/download/v1.0.6/SHA256SUMS.txt',
                 },
               ],
             }),
@@ -878,11 +878,11 @@ test('security-sidecar 4: update-service verifies SHA-256 in memory before disk 
               tag_name: 'v1.0.6',
               draft: false,
               prerelease: false,
-              html_url: 'https://github.com/xnnnc/GravityPrism/releases/tag/v1.0.6',
+              html_url: 'https://github.com/hypsunk/GravityPrism/releases/tag/v1.0.6',
               assets: [
                 {
                   name: 'gravity-prism-installer.exe',
-                  browser_download_url: 'https://github.com/xnnnc/GravityPrism/releases/download/v1.0.6/gravity-prism-installer.exe',
+                  browser_download_url: 'https://github.com/hypsunk/GravityPrism/releases/download/v1.0.6/gravity-prism-installer.exe',
                   digest: `sha256:${'b'.repeat(64)}`,
                 },
               ],
@@ -926,15 +926,15 @@ test('security-sidecar 4: update-service verifies SHA-256 in memory before disk 
               tag_name: 'v1.0.6',
               draft: false,
               prerelease: false,
-              html_url: 'https://github.com/xnnnc/GravityPrism/releases/tag/v1.0.6',
+              html_url: 'https://github.com/hypsunk/GravityPrism/releases/tag/v1.0.6',
               assets: [
                 {
                   name: 'gravity-prism-installer.exe',
-                  browser_download_url: 'https://github.com/xnnnc/GravityPrism/releases/download/v1.0.6/gravity-prism-installer.exe',
+                  browser_download_url: 'https://github.com/hypsunk/GravityPrism/releases/download/v1.0.6/gravity-prism-installer.exe',
                 },
                 {
                   name: 'SHA256SUMS.txt',
-                  browser_download_url: 'https://github.com/xnnnc/GravityPrism/releases/download/v1.0.6/SHA256SUMS.txt',
+                  browser_download_url: 'https://github.com/hypsunk/GravityPrism/releases/download/v1.0.6/SHA256SUMS.txt',
                 },
               ],
             }),
@@ -1585,11 +1585,11 @@ test('security-sidecar 6: red-team hardening for NT device/mixed-slash UNC white
               tag_name: 'v1.0.7',
               draft: false,
               prerelease: false,
-              html_url: 'https://github.com/xnnnc/GravityPrism/releases/tag/v1.0.7',
+              html_url: 'https://github.com/hypsunk/GravityPrism/releases/tag/v1.0.7',
               assets: [
                 {
                   name: 'gravity-prism-installer.exe',
-                  browser_download_url: 'https://github.com/xnnnc/GravityPrism/releases/download/v1.0.7/gravity-prism-installer.exe',
+                  browser_download_url: 'https://github.com/hypsunk/GravityPrism/releases/download/v1.0.7/gravity-prism-installer.exe',
                   digest: `sha256:${sha}`,
                 },
               ],

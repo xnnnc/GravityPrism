@@ -62,7 +62,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ### Yenilikler & Birleştirme Özeti
 - **Upstream `v1.0.8-beta.3` Tabanı:** 8 dil (zh-CN/zh-TW/en/ja/ko/es/fr/de), Channel 8 3D Periyodik Tablo model seçici, Channel 11 Prompt Suggester (Beta), Split View çoklu bölme uyumu, `darkAura` / `darkAuraStyle` ve `convRipple` ayarları, `language_server` bellek koruması + arşiv çalışma tezgâhı ve antivirüs dostu (`MoveFileExW` + saf Win32/Node) Windows kurulum iyileştirmeleri entegre edildi.
 - **GravityPrism Özellikleri Korundu:** `en` / `hostLocalization: off` varsayılanları, Koyu Grafit palet, alt bar canlı `5h`/`7d` kota ve `c %` telemetrisi, `effortSliderStyle` için 7 animasyonlu HTML5 Canvas stili ve canlı ayar önizlemesi, 4 renkli SMIL Gemini Spark mikro-animasyonu, `getCodeActionDiff` satır içi diff desteği, ikiz cam çerçeveli sohbet akışı (Overview hizalaması dahil), hover-only ASCII arka plan dalgası ve akıllı sticky-bottom otomatik kaydırma `v1.0.8-beta.3` üzerine taşındı.
-- **Sürüm & Dağıtım:** Sürüm `1.2.0` (`1.2.0.0`) olarak güncellendi; Windows kurulum çıktısı `gravity-prism-installer.exe` ve otomatik güncelleme hedefi `xnnnc/GravityPrism` olarak korundu.
+- **Sürüm & Dağıtım:** Sürüm `1.2.0` (`1.2.0.0`) olarak güncellendi; Windows kurulum çıktısı `gravity-prism-installer.exe` ve otomatik güncelleme hedefi `hypsunk/GravityPrism` olarak korundu.
 
 ## [1.1.0] - 2026-11-26
 
