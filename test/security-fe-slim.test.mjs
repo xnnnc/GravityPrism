@@ -942,7 +942,7 @@ test('Main bundle budget <= 704,000 B (< 690 KiB / 706,560 B CI hard limit), sid
   const bugTpl = fs.readFileSync(path.join(ROOT, '.github/ISSUE_TEMPLATE/bug_report.md'), 'utf8');
   assert.ok(bugTpl.includes('`v1.0.8-beta.3`'));
   const manifest = fs.readFileSync(path.join(ROOT, 'installer/setup/app.manifest'), 'utf8');
-  assert.ok(manifest.includes('version="1.2.2.0"'));
+  assert.ok(manifest.includes('version="1.2.3.0"'));
   for (const rel of [
     'vendor/omni-viewer/omni-client.js',
     'vendor/thought-translator/thought-client.js',

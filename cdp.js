@@ -8,7 +8,7 @@ const { execFile, execFileSync, spawn } = require('child_process');
 
 const STYLE_ID = 'ag-prism-css';
 const LEGACY_STYLE_ID = 'ag-claude-style-css';
-const PLUGIN_VERSION = '1.2.2';
+const PLUGIN_VERSION = '1.2.3';
 const SETTING_BINDING = '__agPrismSetting';
 const LEGACY_SETTING_BINDING = '__agClaudeStyleSetting';
 const OMNI_BINDING = '__agPrismOmniCall';
@@ -12194,6 +12194,7 @@ const REMOVE_EXPRESSION = `(() => {
   try { delete window.__prismMountSuggesterUi; } catch {}
   try { delete window.__agPrismSuggesterBridge; } catch {}
   try { delete window.__agPrismSuggesterResolve; } catch {}
+  try { delete window.__agPrismSidebarProjectsApply; delete window.__agPrismSidebarProjectsInit; } catch {}
   delete window.__agPrismBrandLogoSvg;
   delete window.__agPrismHostI18n;
   delete window.__agPrismHostI18nFactory;
@@ -12331,6 +12332,7 @@ const REMOVE_EXPRESSION = `(() => {
       'data-ag-prism-wallpaper',
       'data-ag-prism-wallpaper-hole',
       'data-ag-prism-suggester',
+      'data-ag-proj-dragging',
     ].forEach((attr) => root.removeAttribute(attr));
     if (root.getAttribute('data-ag-cjk') === '1') root.removeAttribute('data-ag-cjk');
     if (root.style && typeof root.style.removeProperty === 'function') {
@@ -12444,10 +12446,27 @@ const REMOVE_EXPRESSION = `(() => {
     'data-ag-cs-home-sheet',
     'data-ag-cs-input-layer',
     'data-ag-cs-vp-wrap',
+    'data-ag-proj-pinned',
+    'data-ag-proj-hidden',
+    'data-ag-proj-id',
+    'data-ag-proj-menu-id',
+    'data-ag-proj-drag-src',
   ].forEach((attr) => {
     document.querySelectorAll('[' + attr + ']').forEach((el) => el.removeAttribute(attr));
   });
-  document.querySelectorAll('.ag-cs-inline-diff-box, .ag-cs-diff-ctx-menu, .ag-cs-sb-more-wrap').forEach((n) => n.remove());
+  document
+    .querySelectorAll(
+      '.ag-cs-inline-diff-box, .ag-cs-diff-ctx-menu, .ag-cs-sb-more-wrap, .ag-cs-proj-act-btn, .ag-cs-proj-pin-badge, .ag-cs-proj-hidden-btn, .ag-cs-proj-hidden-pop, .ag-cs-proj-ctx-menu, .ag-cs-proj-native-item, .ag-cs-proj-ctx-sep, .ag-cs-proj-drag-ghost, .ag-cs-proj-drop-line'
+    )
+    .forEach((n) => n.remove());
+  const _sbProjList = document.querySelector?.('[data-testid="conversation-list-sidebar"]')?.firstElementChild;
+  if (_sbProjList) {
+    if (_sbProjList.style?.maxHeight) _sbProjList.style.maxHeight = '';
+    if (_sbProjList.style?.overflow === 'hidden') _sbProjList.style.overflow = '';
+    Array.from(_sbProjList.children || []).forEach((ch) => {
+      if (ch?.style?.translate) ch.style.translate = '';
+    });
+  }
   document.querySelectorAll('[data-ag-cs-prism-box]').forEach((el) => {
     el.removeAttribute('data-ag-cs-prism-box');
     if (el.style && typeof el.style.removeProperty === 'function') {

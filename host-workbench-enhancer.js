@@ -408,6 +408,12 @@
         addNode('circle', { cx: '6', cy: '12', r: '1.2', fill: 'currentColor', stroke: 'none' });
         addNode('circle', { cx: '12', cy: '12', r: '1.2', fill: 'currentColor', stroke: 'none' });
         addNode('circle', { cx: '18', cy: '12', r: '1.2', fill: 'currentColor', stroke: 'none' });
+      } else if (kind === 'pin') {
+        addNode('path', { d: 'M12 17v5M9 11l-3 3v2h12v-2l-3-3V6l1-2H8l1 2z' });
+      } else if (kind === 'eyeOff') {
+        addNode('path', { d: 'M9.9 9.9a3 3 0 1 0 4.2 4.2M10.7 5.1A10.4 10.4 0 0 1 12 5c7 0 10 7 10 7a13 13 0 0 1-1.7 2.7M6.6 6.6A13.5 13.5 0 0 0 2 12s3 7 10 7a9.7 9.7 0 0 0 5.4-1.6M2 2l20 20' });
+      } else if (kind === 'folder') {
+        addNode('path', { d: 'M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2z' });
       }
       return svg;
     }
@@ -2298,10 +2304,817 @@
       return tid;
     }
 
+    // Sidebar Projects: Pin, Hide, Hidden Popover & Smooth Reorder Drag
+    const P_KEY = 'ag-prism:sidebarProjects.v1';
+    const P = 'ag-cs-proj-';
+    const DA = 'data-ag-proj-';
+    const S_SB = '[data-testid="conversation-list-sidebar"]';
+    const S_PHC = '[data-testid="project-header-container"]';
+    const S_PH = '[data-testid="project-header"]';
+    const S_PHA = '[data-testid="project-header-actions"]';
+    const S_SH = '[data-testid="section-header"]';
+    const D_DROP = 'data-sidebar-section-drop-id';
+    const D_SEC = 'data-sidebar-section-id';
+    const P_ORD = 'projectsOrder';
+    const P_SORT = 'projectsFolderSortBy';
+    const onE = (e, t, f, o) => e?.addEventListener?.(t, f, o);
+    const offE = (e, t, f) => e?.removeEventListener?.(t, f);
+    const rOf = (e) => e?.getBoundingClientRect?.();
+    const stO = (e) => e?.stopPropagation?.();
+    const stP = (e) => { e?.preventDefault?.(); stO(e); };
+    const sAs = (e, o) => { for (const k in o) setA(e, k, o[k]); };
+    const rmA = (a, v) => { const i = a.indexOf(v); if (i >= 0) a.splice(i, 1); return i >= 0; };
+    const moveInOrd = (arr, id, nx, pv) => {
+      const out = arr.slice();
+      rmA(out, id);
+      const nIdx = nx ? out.indexOf(nx) : -1;
+      const pIdx = pv ? out.indexOf(pv) : -1;
+      if (nIdx >= 0) out.splice(nIdx, 0, id);
+      else if (pIdx >= 0) out.splice(pIdx + 1, 0, id);
+      else out.push(id);
+      return out;
+    };
+    const parsePS = (raw) => {
+      try {
+        if (!raw) return null;
+        const d = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        if (!d || typeof d !== 'object') return null;
+        const u = (a) => (Array.isArray(a) ? [...new Set(a.filter((x) => typeof x === 'string' && x))] : []);
+        return { pinned: u(d.pinned), hidden: u(d.hidden), baseOrder: u(d.baseOrder), labels: d.labels && typeof d.labels === 'object' ? { ...d.labels } : {} };
+      } catch {
+        return null;
+      }
+    };
+    let projState = parsePS(win?.__agPrismSidebarProjectsInit) || parsePS(win?.localStorage?.getItem?.(P_KEY)) || { pinned: [], hidden: [], baseOrder: [], labels: {} };
+    let pSS = options.storageService || null;
+    let pSSUnsub = null;
+    let pHydrated = Boolean(win?.__agPrismSidebarProjectsInit);
+    let pPullRequested = false;
+    let pLastSaved = '';
+    let pStore = options.reduxStore || null;
+    let pSb = null;
+    let pList = null;
+    let pMo = null;
+    let pRaf = 0;
+    let pInLayout = false;
+    let pHidBtn = null;
+    let pHidPop = null;
+    let pCtxMenu = null;
+    let pLastCtx = null;
+    let pDrag = null;
+    let pSkipClickUntil = 0;
+    const pZeroedKeys = new Set();
+
+    const savePS = () => {
+      const raw = JSON.stringify(projState);
+      pLastSaved = raw;
+      try { win?.localStorage?.setItem?.(P_KEY, raw); } catch {}
+      try {
+        if (win) win.__agPrismSidebarProjectsInit = { ...projState, pinned: projState.pinned.slice(), hidden: projState.hidden.slice(), baseOrder: projState.baseOrder.slice(), labels: { ...projState.labels } };
+      } catch {}
+      try {
+        if (typeof win?.__agPrismSetting === 'function') {
+          win.__agPrismSetting(JSON.stringify({ action: 'sidebar-projects-save', state: projState }));
+        }
+      } catch {}
+    };
+    const applyDaemonPS = (raw) => {
+      if (isDead()) return;
+      const parsed = parsePS(raw);
+      if (!parsed) return;
+      pHydrated = true;
+      const hasIncoming = parsed.pinned.length || parsed.hidden.length || parsed.baseOrder.length;
+      const hasLocal = projState.pinned.length || projState.hidden.length || projState.baseOrder.length;
+      if (!hasIncoming && hasLocal && !pLastSaved) {
+        savePS();
+        return;
+      }
+      const nextJson = JSON.stringify(parsed);
+      if (nextJson === pLastSaved) return;
+      projState = parsed;
+      pLastSaved = nextJson;
+      try { win?.localStorage?.setItem?.(P_KEY, nextJson); } catch {}
+      syncSidebarProjects(true);
+    };
+    if (win) {
+      try { win.__agPrismSidebarProjectsApply = applyDaemonPS; } catch {}
+    }
+    const requestDaemonPS = () => {
+      if (pHydrated) return;
+      if (win?.__agPrismSidebarProjectsInit) {
+        applyDaemonPS(win.__agPrismSidebarProjectsInit);
+      }
+    };
+    const findSvcs = () => {
+      if (pSS && pStore) return;
+      try {
+        const r = doc?.getElementById?.('root') || doc?.body?.firstElementChild;
+        const fk = r && Object.keys(r).find((k) => k.startsWith('__reactContainer$') || k.startsWith('__reactFiber$'));
+        if (!fk) return;
+        const q = [r[fk]];
+        const seen = new Set();
+        for (let n = 0; q.length && n < 900 && (!pSS || !pStore); n++) {
+          const f = q.shift();
+          if (!f || seen.has(f)) continue;
+          seen.add(f);
+          const mp = f.memoizedProps;
+          const v = mp?.value;
+          const st = mp?.store || f.stateNode?.store;
+          if (!pSS) pSS = v?.core?.storageService || (v?.get && v?.store && v?.onDidChange ? v : null);
+          if (!pStore && st?.getState && st?.dispatch) pStore = st;
+          if (f.child) q.push(f.child);
+          if (f.sibling) q.push(f.sibling);
+        }
+      } catch {}
+    };
+    const getSS = () => {
+      if (!pSS) findSvcs();
+      if (pSS && !pSSUnsub && pSS.onDidChange) {
+        try {
+          const d = pSS.onDidChange((c) => {
+            if (!isDead() && c && (P_ORD in c || P_SORT in c)) schedPSync(true);
+          });
+          pSSUnsub = typeof d === 'function' ? d : d?.dispose ? () => d.dispose() : null;
+        } catch {}
+      }
+      return pSS;
+    };
+    const getRProjs = () => {
+      if (!pStore) findSvcs();
+      const m = new Map();
+      try {
+        for (const x of pStore?.getState?.()?.sidebarProjects?.projects || []) {
+          if (x?.id && x.id !== 'outside-of-project') m.set(x.id, String(x.name || x.id));
+        }
+      } catch {}
+      return m;
+    };
+    const getRfd = (sb) => {
+      try {
+        const fk = sb && Object.keys(sb).find((k) => k.startsWith('__reactFiber$'));
+        for (let f = fk && sb[fk], i = 0; f && i < 8; f = f.return, i++) {
+          if (Array.isArray(f.memoizedProps?.items)) {
+            let virt = null;
+            for (let h = f.memoizedState, j = 0; h && j < 45; h = h.next, j++) {
+              const ms = h.memoizedState;
+              if (ms && typeof ms === 'object' && typeof ms.measureElement === 'function' && ms.itemSizeCache) { virt = ms; break; }
+            }
+            return { items: f.memoizedProps.items, virt };
+          }
+        }
+      } catch {}
+      return null;
+    };
+    const rfdItemPid = (it) => {
+      if (!it || it.type === 'section-header' || it.type === 'spacer') return '';
+      if (it.type === 'header') {
+        const s = String(it.id || '');
+        return s.startsWith('header-') ? s.slice(7) : s;
+      }
+      const g = String(it.groupId || it.sectionId || it.projectId || '');
+      return g && !/^(?:standalone|main-section-header|pinned|all)$/.test(g) ? g : '';
+    };
+    const syncVirtSizes = (sb, hSet) => {
+      if (!sb || (typeof sb.offsetHeight === 'number' && sb.offsetHeight <= 0)) return;
+      const rfd = getRfd(sb);
+      const v = rfd?.virt;
+      const its = rfd?.items;
+      if (!v || !its || !(v.itemSizeCache instanceof Map)) return;
+      let dirty = false;
+      let minI = null;
+      for (let i = 0; i < its.length; i++) {
+        const it = its[i];
+        const k = it?.id ?? i;
+        const pid = rfdItemPid(it);
+        if (pid && hSet.has(pid)) {
+          pZeroedKeys.add(k);
+          if (v.itemSizeCache.get(k) !== 0) {
+            v.itemSizeCache.set(k, 0);
+            if (minI === null || i < minI) minI = i;
+            dirty = true;
+          }
+        } else if (v.itemSizeCache.get(k) === 0 && (pZeroedKeys.has(k) || pid)) {
+          pZeroedKeys.delete(k);
+          v.itemSizeCache.delete(k);
+          if (minI === null || i < minI) minI = i;
+          dirty = true;
+        }
+      }
+      if (dirty) {
+        if (v.pendingMin === null || (minI !== null && minI < v.pendingMin)) v.pendingMin = minI;
+        if ('itemSizeCacheVersion' in v) v.itemSizeCacheVersion = (v.itemSizeCacheVersion || 0) + 1;
+        try { v.notify?.(false); } catch {}
+      }
+    };
+    const getProjId = (c) => {
+      if (!c) return '';
+      const id = ga(cl(c, `[${D_DROP}]`), D_DROP);
+      if (id && !/^(?:standalone|main-section-header|all)$/.test(id)) return id;
+      try {
+        const fk = Object.keys(c).find((k) => k.startsWith('__reactFiber$'));
+        for (let u = fk && c[fk], i = 0; i < 6 && u; i++, u = u.return) {
+          const p = u.memoizedProps?.projectId || u.memoizedProps?.brandedProjectId;
+          if (p) return p;
+        }
+      } catch {}
+      return ga(qs(c, S_PH), 'data-project-label') || '';
+    };
+    const getProjLbl = (c, fb = '') => {
+      const b = qs(c, S_PH);
+      return ga(b, 'data-project-label') || (b?.textContent || '').trim() || getRProjs().get(fb) || projState.labels[fb] || fb;
+    };
+    const readOrd = (ss) => {
+      try {
+        const a = JSON.parse(ss?.get?.(P_ORD) || '[]');
+        return Array.isArray(a) ? a.filter((x) => typeof x === 'string' && x) : [];
+      } catch { return []; }
+    };
+    const getSort = (ss) => { try { return ss?.get?.(P_SORT) || 'custom'; } catch { return 'custom'; } };
+    const domIds = () => {
+      const sb = qs(doc, S_SB);
+      const rfd = getRfd(sb);
+      if (rfd?.items?.length) {
+        const fromItems = rfd.items.filter((it) => it?.type === 'header').map(rfdItemPid).filter(Boolean);
+        if (fromItems.length) return [...new Set(fromItems)];
+      }
+      return [...new Set(Array.from(qa(sb, S_PHC)).map(getProjId).filter(Boolean))];
+    };
+    const captureBaseOrd = (ss, ids = []) => {
+      const merged = [...new Set([...readOrd(ss), ...ids].filter(Boolean))];
+      if (!projState.baseOrder.length) projState.baseOrder = merged;
+      else {
+        const seen = new Set(projState.baseOrder);
+        for (const x of merged) if (!seen.has(x)) { projState.baseOrder.push(x); seen.add(x); }
+      }
+    };
+    const writeOrd = (ss, nxt) => {
+      const cur = readOrd(ss);
+      if (nxt.length !== cur.length || nxt.some((id, i) => cur[i] !== id)) try { ss.store(P_ORD, JSON.stringify(nxt)); } catch {}
+    };
+    const enfPinOrd = (ids = [], forceRestore = false) => {
+      const ss = getSS();
+      if (!ss?.store) return;
+      const cur = readOrd(ss);
+      if (!projState.pinned.length) {
+        if ((forceRestore || projState.baseOrder.length) && projState.baseOrder.length) {
+          const nxt = [...new Set([...projState.baseOrder, ...cur, ...ids].filter(Boolean))];
+          projState.baseOrder = [];
+          savePS();
+          writeOrd(ss, nxt);
+        }
+        return;
+      }
+      if (getSort(ss) !== 'custom') return;
+      const pSet = new Set(projState.pinned);
+      if (!projState.baseOrder.length) {
+        if (!projState.pinned.every((id, i) => cur[i] === id)) { captureBaseOrd(ss, ids); savePS(); }
+      } else {
+        captureBaseOrd(ss, ids);
+      }
+      const rest = projState.baseOrder.length ? projState.baseOrder.filter((x) => !pSet.has(x)) : [...cur, ...ids].filter((x) => x && !pSet.has(x));
+      writeOrd(ss, [...new Set([...projState.pinned, ...rest, ...cur, ...ids].filter(Boolean))]);
+    };
+    const hidItems = () => {
+      const rm = getRProjs();
+      const hr = rm.size > 0;
+      return projState.hidden.filter((id) => !hr || rm.has(id)).map((id) => ({ id, label: rm.get(id) || projState.labels[id] || id }));
+    };
+    const emitCtx = (source) => {
+      try {
+        const C = win?.CustomEvent;
+        win?.dispatchEvent?.(C ? new C('ag-prism:ctx-open', { detail: { source } }) : { type: 'ag-prism:ctx-open', detail: { source } });
+      } catch {}
+    };
+    const closeProjHiddenPop = () => {
+      if (pHidPop) { mut(() => pHidPop?.remove?.()); pHidPop = null; }
+      if (pHidBtn) mut(() => setA(pHidBtn, 'aria-expanded', 'false'));
+    };
+    const closeProjCtxMenu = () => { if (!pCtxMenu) return false; mut(() => pCtxMenu?.remove?.()); pCtxMenu = null; return true; };
+    const own = (e, r) => { markNoTr(e); sAs(e, { 'data-ag-owned': '1', 'data-ag-no-i18n': '' }); if (r) sa(e, 'role', r); return e; };
+    const mkBtn = (c, ico, sz, txt, fn) => {
+      const b = own(mk('button', c));
+      b.type = 'button';
+      sa(b, 'data-no-press-spring', '1');
+      if (ico) b.appendChild(mkSvgIcon(ico, sz));
+      if (txt != null) b.appendChild(mk('span', null, txt));
+      if (fn) onE(b, 'click', (e) => { stP(e); fn(e, b); });
+      return b;
+    };
+    const clampPos = (el, x, y, w, h) => Object.assign(el.style, {
+      left: `${Math.round(Math.max(8, Math.min((win?.innerWidth || 1280) - w - 8, x)))}px`,
+      top: `${Math.round(Math.max(8, Math.min((win?.innerHeight || 800) - h - 8, y)))}px`,
+    });
+    function togglePinProject(id, l = '') {
+      if (!id) return false;
+      if (l) projState.labels[id] = l;
+      const ss = getSS();
+      const ids = domIds();
+      const w = rmA(projState.pinned, id);
+      if (!w) {
+        if (ss && getSort(ss) === 'custom') captureBaseOrd(ss, ids);
+        rmA(projState.hidden, id);
+        projState.pinned.push(id);
+      }
+      savePS();
+      enfPinOrd(ids, w);
+      syncSidebarProjects(false);
+      return !w;
+    }
+    function hideProject(id, l = '') {
+      if (!id) return false;
+      getSS();
+      if (l) projState.labels[id] = l;
+      const w = rmA(projState.pinned, id);
+      if (!projState.hidden.includes(id)) projState.hidden.push(id);
+      savePS();
+      if (w) enfPinOrd(domIds(), true);
+      syncSidebarProjects(false);
+      return true;
+    }
+    function unhideProject(id) {
+      getSS();
+      if (!rmA(projState.hidden, id)) return false;
+      savePS();
+      syncSidebarProjects(false);
+      if (pHidPop) { if (!hidItems().length) closeProjHiddenPop(); else renderHidPop(); }
+      return true;
+    }
+    function unhideAllProjects() {
+      getSS();
+      if (!projState.hidden.length) return false;
+      projState.hidden = [];
+      savePS();
+      closeProjHiddenPop();
+      syncSidebarProjects(false);
+      return true;
+    }
+    const renderHidPop = () => {
+      if (!pHidPop || !doc) return;
+      const its = hidItems();
+      const H = P + 'hidden-';
+      mut(() => {
+        pHidPop.textContent = '';
+        const hd = mk('div', H + 'head', null, mk('span', H + 'title', `Hidden Projects (${its.length})`));
+        if (its.length) hd.appendChild(mkBtn(H + 'all', null, 0, 'Show all', unhideAllProjects));
+        const lst = mk('div', H + 'list');
+        for (const it of its) lst.appendChild(mk('div', H + 'row', null, mk('span', H + 'ico', null, mkSvgIcon('folder', 13)), mk('span', H + 'lbl', it.label), mkBtn(H + 'show', null, 0, 'Show', () => unhideProject(it.id))));
+        pHidPop.appendChild(hd);
+        pHidPop.appendChild(lst);
+      });
+    };
+    const openHidPop = (btn) => {
+      if (!doc?.body || !btn) return;
+      if (pHidPop) return closeProjHiddenPop();
+      closeProjCtxMenu();
+      emitCtx('sidebar-proj-hidden');
+      const pop = own(mk('div', P + 'hidden-pop'), 'dialog');
+      mut(() => { doc.body.appendChild(pop); setA(btn, 'aria-expanded', 'true'); });
+      pHidPop = pop;
+      renderHidPop();
+      const ar = rOf(btn);
+      clampPos(pop, ar ? ar.right - 236 : 16, ar ? ar.bottom + 6 : 64, 236, Math.min(320, 46 + hidItems().length * 34));
+    };
+    const addMenuActs = (ct, ref, cls, id, l, pre) => {
+      for (const [ico, txt, fn] of [['pin', projState.pinned.includes(id) ? 'Unpin Project' : 'Pin Project', () => togglePinProject(id, l)], ['eyeOff', 'Hide Project', () => hideProject(id, l)]]) {
+        const b = mkBtn(cls, ico, 14, txt, () => { pre(); fn(); });
+        sa(b, 'role', 'menuitem');
+        onE(b, 'pointerdown', stO);
+        ct.insertBefore(b, ref || null);
+      }
+    };
+    const openProjCtx = (x, y, id, l) => {
+      if (!doc?.body || !id) return false;
+      closeProjHiddenPop();
+      closeProjCtxMenu();
+      emitCtx('sidebar-proj-ctx');
+      const m = own(mk('div', P + 'ctx-menu'), 'menu');
+      addMenuActs(m, null, P + 'ctx-item', id, l, closeProjCtxMenu);
+      mut(() => doc.body.appendChild(m));
+      pCtxMenu = m;
+      clampPos(m, Number(x) || 120, Number(y) || 120, 180, 84);
+      return true;
+    };
+    const injectNativeMenu = () => {
+      if (!doc || !pLastCtx || Date.now() - pLastCtx.ts > 450) return false;
+      const pops = Array.from(qa(doc, '[data-testid="context-menu-popup"], [role="menu"]')).filter((e) => e && !e.hidden && ![P + 'ctx-menu', 'ag-cs-diff-ctx-menu', 'ag-cs-ctx-menu'].some((c) => e.classList?.contains?.(c)) && ga(e, 'data-testid') !== 'model-selector-panel');
+      if (!pops.length) return false;
+      const pop = pops[pops.length - 1];
+      const { id, label } = pLastCtx;
+      if (ga(pop, DA + 'menu-id') === id && qs(pop, '.' + P + 'native-item')) return true;
+      const ct = qs(pop, '[role="menuitem"]')?.parentElement || pop;
+      const f = qs(ct, '[role="menuitem"]') || ct.firstElementChild;
+      mut(() => {
+        qa(pop, `.${P}native-item, .${P}ctx-sep`).forEach((n) => n.remove());
+        const sep = own(mk('div', P + 'ctx-sep'), 'separator');
+        ct.insertBefore(sep, f || null);
+        addMenuActs(ct, sep, P + 'native-item', id, label, () => { try { const K = win?.KeyboardEvent; if (K) doc?.dispatchEvent?.(new K('keydown', { key: 'Escape', code: 'Escape', bubbles: true })); } catch {} });
+        setA(pop, DA + 'menu-id', id);
+      });
+      return true;
+    };
+    const scanRows = (sb, useR) => {
+      const list = sb?.firstElementChild;
+      const out = [];
+      if (!list) return out;
+      const kids = Array.from(list.children || []);
+      for (let k = 0; k < kids.length; k++) {
+        const ch = kids[k];
+        if (ch?.nodeType !== 1 || (ch.style?.position !== 'absolute' && !(ga(ch, 'style') || '').includes('position: absolute'))) continue;
+        let y;
+        let rect = null;
+        if (useR) {
+          if (ga(ch, DA + 'hidden') === '1') continue;
+          rect = rOf(ch);
+          if (!rect || rect.height <= 0) continue;
+          y = rect.top;
+        } else {
+          const m = String(ch.style?.transform || ga(ch, 'style') || '').match(/translateY\(\s*(-?\d+(?:\.\d+)?)px\s*\)/);
+          if (!m) continue;
+          y = parseFloat(m[1]);
+        }
+        const phc = qs(ch, S_PHC);
+        const sh = qs(ch, S_SH);
+        const dId = ga(ch, D_DROP) || '';
+        const sId = ga(ch, D_SEC) || '';
+        const rawIdx = ga(ch, 'data-index');
+        const idx = rawIdx != null && rawIdx !== '' ? parseInt(rawIdx, 10) : NaN;
+        out.push({ el: ch, y, idx, ord: k, rect, isH: Boolean(phc), isSH: Boolean(sh), isSp: !phc && !sh && !sId && !dId && !qs(ch, '[data-testid="conversation-row-sidebar"], button, a'), hId: phc ? (dId || getProjId(phc)) : '', dId, sId, oId: '', h: 0 });
+      }
+      return out.sort((a, b) => (!useR && Number.isFinite(a.idx) && Number.isFinite(b.idx) ? a.idx - b.idx : (a.y - b.y) || (a.ord - b.ord)));
+    };
+    const applyProjLayout = (sb) => {
+      if (!sb || pInLayout) return;
+      const list = sb.firstElementChild;
+      const rows = scanRows(sb, false);
+      if (!list || !rows.length) return;
+      const hSet = new Set(projState.hidden);
+      const pLst = projState.pinned;
+      const rfd = getRfd(sb);
+      const rIts = rfd?.items;
+      const rMeas = rfd?.virt?.measurementsCache;
+      const bh = parseFloat(list.style?.height || '') || 0;
+      let curP = '';
+      for (let i = 0; i < rows.length; i++) {
+        const r = rows[i];
+        const rIt = rIts && Number.isFinite(r.idx) ? rIts[r.idx] : null;
+        if (rIt) {
+          curP = rfdItemPid(rIt);
+        } else {
+          curP = r.isH ? r.hId : (r.isSH || r.isSp) ? '' : r.sId ? (/^(?:standalone|main-section-header|pinned|all)$/.test(r.sId) ? '' : r.sId) : r.dId ? (/^(?:standalone|main-section-header|pinned|all)$/.test(r.dId) ? '' : r.dId) : curP;
+        }
+        r.oId = curP;
+        const isHid = Boolean(r.oId && hSet.has(r.oId));
+        const nxt = i + 1 < rows.length ? rows[i + 1] : null;
+        const adj = Boolean(nxt && (!(Number.isFinite(r.idx) && Number.isFinite(nxt.idx)) || nxt.idx === r.idx + 1));
+        const g = adj ? nxt.y - r.y : -1;
+        const defH = r.isH ? 33 : r.isSH ? 23 : r.isSp ? 16 : 31;
+        if (isHid) {
+          if (adj) r.h = g > 0 ? g : 0;
+          else if (rMeas && Number.isFinite(r.idx) && typeof rMeas[r.idx]?.size === 'number') r.h = rMeas[r.idx].size;
+          else if (bh > 0) r.h = bh <= r.y + 0.5 ? 0 : Math.min(bh - r.y, r.el._agProjSlotH || defH);
+          else r.h = 0;
+        } else {
+          r.h = g > 0 ? g : (r.el.offsetHeight || (!adj && bh > r.y && bh - r.y <= 80 ? bh - r.y : 0) || r.el._agProjSlotH || defH);
+          if (r.h > 0) r.el._agProjSlotH = r.h;
+        }
+      }
+      let ord = rows;
+      if (pLst.length && getSort(getSS()) !== 'custom') {
+        const pre = [];
+        const blks = [];
+        const suf = [];
+        let cur = null;
+        let sOn = false;
+        for (const r of rows) {
+          if (r.isH) { cur = { id: r.hId, pi: pLst.indexOf(r.hId), rs: [r] }; blks.push(cur); }
+          else if (!blks.length) pre.push(r);
+          else if (!sOn && cur && r.oId === cur.id) cur.rs.push(r);
+          else { sOn = true; cur = null; suf.push(r); }
+        }
+        if (blks.some((b) => b.pi >= 0)) ord = [...pre, ...blks.filter((b) => b.pi >= 0).sort((a, b) => a.pi - b.pi).flatMap((b) => b.rs), ...blks.filter((b) => b.pi < 0).flatMap((b) => b.rs), ...suf];
+      }
+      const reord = ord !== rows;
+      let curY = rows[0].y;
+      let endY = curY;
+      let rem = 0;
+      pInLayout = true;
+      try {
+        mut(() => {
+          for (const r of ord) {
+            if (r.oId && hSet.has(r.oId)) {
+              setA(r.el, DA + 'hidden', '1');
+              if (r.el.style?.translate) r.el.style.translate = '';
+              rem += r.h;
+            } else {
+              if (ha(r.el, DA + 'hidden')) ra(r.el, DA + 'hidden');
+              const d = Math.round((reord ? curY - r.y : -rem) * 100) / 100;
+              const tr = d ? `0px ${d}px` : '';
+              if (r.el.style && (r.el.style.translate || '') !== tr) r.el.style.translate = tr;
+              if (reord) { curY += r.h; endY = curY; }
+              else { endY = Math.max(endY, r.y - rem + r.h); }
+            }
+          }
+          if (rem > 0 && bh > 0) {
+            const mhNum = Math.max(Math.ceil(endY), Math.round(bh - rem));
+            if (mhNum < Math.round(bh)) {
+              const mh = `${mhNum}px`;
+              if (list.style.maxHeight !== mh) list.style.maxHeight = mh;
+              if (list.style.overflow !== 'hidden') list.style.overflow = 'hidden';
+            } else {
+              if (list.style?.maxHeight) list.style.maxHeight = '';
+              if (list.style?.overflow === 'hidden') list.style.overflow = '';
+            }
+          } else {
+            if (list.style?.maxHeight) list.style.maxHeight = '';
+            if (list.style?.overflow === 'hidden') list.style.overflow = '';
+          }
+        });
+      } finally { pInLayout = false; }
+      syncVirtSizes(sb, hSet);
+    };
+    const decorateProjHeaders = (sb) => {
+      if (!sb || !doc) return [];
+      const pSet = new Set(projState.pinned);
+      const ids = [];
+      for (const c of qa(sb, S_PHC)) {
+        const id = getProjId(c);
+        if (!id) continue;
+        ids.push(id);
+        const l = getProjLbl(c, id);
+        const pin = pSet.has(id);
+        if (l) projState.labels[id] = l;
+        mut(() => {
+          setA(c, DA + 'id', id);
+          if (pin) setA(c, DA + 'pinned', '1');
+          else if (ha(c, DA + 'pinned')) ra(c, DA + 'pinned');
+          let bg = qs(c, '.' + P + 'pin-badge');
+          if (pin && !bg) { bg = own(mk('span', P + 'pin-badge', null, mkSvgIcon('pin', 12))); sa(bg, 'aria-hidden', 'true'); c.appendChild(bg); }
+          else if (!pin && bg) bg.remove();
+          const acts = qs(c, S_PHA);
+          if (acts) {
+            const mkA = (cls, ico, fn, ref) => {
+              let b = qs(acts, '.' + cls);
+              if (!b) {
+                b = mkBtn(P + 'act-btn ' + cls, ico, 13, null, (_, el) => { const pid = ga(el, DA + 'target') || getProjId(c); fn(pid, getProjLbl(c, pid)); });
+                sa(b, 'data-no-drag', '');
+                onE(b, 'pointerdown', stO);
+                acts.insertBefore(b, ref || null);
+              }
+              return b;
+            };
+            const pB = mkA(P + 'pin-btn', 'pin', togglePinProject, acts.firstElementChild);
+            const hB = mkA(P + 'hide-btn', 'eyeOff', hideProject, pB.nextElementSibling);
+            const pt = pin ? 'Unpin project' : 'Pin project';
+            sAs(pB, { [DA + 'target']: id, 'data-pinned': pin ? '1' : '0', 'aria-pressed': String(pin), 'aria-label': pt, title: pt });
+            sAs(hB, { [DA + 'target']: id, 'aria-label': 'Hide project', title: 'Hide project' });
+          }
+        });
+      }
+      const hIts = hidItems();
+      const pSec = qs(sb, `${S_SH}[data-section-id="main-section-header"]`) || Array.from(qa(sb, S_SH)).find((e) => /projects|workspaces/i.test(ga(e, 'data-title') || e.textContent || ''));
+      if (pSec) {
+        const slot = qs(pSec, 'div > div:last-child > span') || qs(pSec, 'div > div:last-child') || pSec;
+        if (hIts.length) {
+          mut(() => {
+            let b = qs(pSec, '.' + P + 'hidden-btn');
+            if (!b) {
+              b = mkBtn(P + 'hidden-btn', 'eyeOff', 12, null, (_, el) => openHidPop(el));
+              b.appendChild(mk('span', P + 'hidden-cnt', String(hIts.length)));
+              sa(b, 'aria-expanded', 'false');
+              onE(b, 'pointerdown', stO);
+              slot.insertBefore(b, slot.firstElementChild || null);
+            } else {
+              const cnt = qs(b, '.' + P + 'hidden-cnt');
+              if (cnt && cnt.textContent !== String(hIts.length)) cnt.textContent = String(hIts.length);
+            }
+            const l = `${hIts.length} hidden project${hIts.length === 1 ? '' : 's'}`;
+            sAs(b, { title: l, 'aria-label': l });
+            pHidBtn = b;
+          });
+        } else {
+          mut(() => qa(pSec, '.' + P + 'hidden-btn').forEach((n) => n.remove()));
+          pHidBtn = null;
+          closeProjHiddenPop();
+        }
+      }
+      return ids;
+    };
+    const onProjSbScroll = () => { if (!isDead()) schedPSync(false); };
+    const schedPSync = (enf = false) => {
+      if (isDead() || pRaf) return;
+      const run = () => { pRaf = 0; if (!isDead()) syncSidebarProjects(enf); };
+      pRaf = win?.requestAnimationFrame ? win.requestAnimationFrame(run) : (run(), 0);
+    };
+    function syncSidebarProjects(enf = true) {
+      if (isDead() || !doc) return;
+      requestDaemonPS();
+      getSS();
+      const sb = qs(doc, S_SB);
+      if (!sb) return;
+      const list = sb.firstElementChild;
+      if (pSb !== sb) {
+        try { offE(pSb, 'scroll', onProjSbScroll); } catch {}
+        pSb = sb;
+        try { onE(sb, 'scroll', onProjSbScroll, { passive: true }); } catch {}
+      }
+      if (pList !== list) {
+        try { pMo?.disconnect?.(); } catch {}
+        pMo = null;
+        pList = list || null;
+        if (list && win?.MutationObserver) {
+          try {
+            pMo = new win.MutationObserver(() => { if (!isDead() && !pInLayout) schedPSync(false); });
+            pMo.observe(list, { childList: true, subtree: true, attributes: true, attributeFilter: ['style'] });
+          } catch {}
+        }
+      }
+      const ids = decorateProjHeaders(sb) || [];
+      if (enf && (projState.pinned.length || projState.baseOrder.length)) enfPinOrd(ids, !projState.pinned.length);
+      applyProjLayout(sb);
+    }
+    const cleanupProjDrag = () => {
+      if (!pDrag) return;
+      const d = pDrag;
+      pDrag = null;
+      if (d.raf) try { win?.cancelAnimationFrame?.(d.raf); } catch {}
+      try { offE(win, 'pointermove', d.mv); offE(win, 'pointerup', d.up); offE(win, 'pointercancel', d.cn); } catch {}
+      mut(() => {
+        d.ghost?.remove?.();
+        d.line?.remove?.();
+        if (doc?.documentElement && ha(doc.documentElement, DA + 'dragging')) ra(doc.documentElement, DA + 'dragging');
+        if (d.src && ha(d.src, DA + 'drag-src')) ra(d.src, DA + 'drag-src');
+      });
+    };
+    const commitReorder = (id, isPin, zIds, di) => {
+      const from = zIds.indexOf(id);
+      const clp = Math.max(0, Math.min(zIds.length, di));
+      if (from < 0 || clp === from || clp === from + 1) return;
+      const nz = zIds.slice();
+      nz.splice(from, 1);
+      nz.splice(clp > from ? clp - 1 : clp, 0, id);
+      const ni = nz.indexOf(id);
+      const nx = nz[ni + 1];
+      const pv = nz[ni - 1];
+      if (isPin) {
+        projState.pinned = moveInOrd(projState.pinned, id, nx, pv);
+        savePS();
+        enfPinOrd(domIds());
+        syncSidebarProjects(false);
+        return;
+      }
+      const ss = getSS();
+      if (!ss?.store) return;
+      const wasCustom = getSort(ss) === 'custom';
+      const curOrd = readOrd(ss);
+      const allIds = domIds();
+      const fullIds = wasCustom ? [...new Set([...curOrd, ...allIds])] : [...new Set([...allIds, ...curOrd])];
+      if (projState.pinned.length && !projState.baseOrder.length) projState.baseOrder = fullIds.slice();
+      if (projState.baseOrder.length) {
+        projState.baseOrder = moveInOrd(projState.baseOrder, id, nx, pv);
+        savePS();
+      }
+      const pSet = new Set(projState.pinned);
+      const nextUnpinned = moveInOrd(fullIds.filter((x) => !pSet.has(x)), id, nx, pv);
+      try {
+        if (!wasCustom) ss.store(P_SORT, 'custom');
+        writeOrd(ss, [...projState.pinned, ...nextUnpinned]);
+      } catch {}
+      schedPSync(false);
+    };
+    function onProjPointerDownCapture(ev) {
+      try {
+        if (isDead() || !ev || ev.button !== 0 || pDrag || !ev.target?.closest || cl(ev.target, `${S_PHA}, .${P}act-btn`)) return;
+        const btn = cl(ev.target, S_PH);
+        const sb = btn && cl(btn, S_SB);
+        const c = btn && cl(btn, S_PHC);
+        const id = c && cl(btn, `[${D_DROP}]`) ? getProjId(c) : '';
+        if (!id) return;
+        ev.stopImmediatePropagation?.();
+        stO(ev);
+        const r = rOf(btn) || { left: 8, top: ev.clientY - 14, width: 220, height: 28 };
+        const st = { id, lbl: getProjLbl(c, id), pin: projState.pinned.includes(id), sb, src: c, y0: ev.clientY, ly: ev.clientY, off: Math.max(4, Math.min((r.height || 28) - 4, ev.clientY - r.top)), cl: r.left, cw: r.width, ch: Math.max(26, Math.round(r.height || 28)), on: false, ghost: null, line: null, zIds: [], drop: -1, spd: 0, raf: 0 };
+        const upd = (cy) => {
+          const sbr = rOf(sb) || { top: 40, bottom: 720 };
+          const pSet = new Set(projState.pinned);
+          const hSet = new Set(projState.hidden);
+          const zb = [];
+          let cur = null;
+          for (const e of scanRows(sb, true)) {
+            if (e.isH) {
+              cur = e.hId && !hSet.has(e.hId) && pSet.has(e.hId) === st.pin ? { id: e.hId, top: e.rect.top, bot: e.rect.bottom } : null;
+              if (cur) zb.push(cur);
+            } else if (e.isSH || e.isSp) cur = null;
+            else if (cur && (!e.sId || e.sId === cur.id) && e.rect.bottom > cur.bot) cur.bot = e.rect.bottom;
+          }
+          st.zIds = zb.map((b) => b.id);
+          if (!zb.length) return;
+          if (st.ghost) st.ghost.style.top = `${Math.round(Math.max(Math.max(sbr.top, zb[0].top) - 4, Math.min(Math.min(sbr.bottom - st.ch, zb[zb.length - 1].bot), cy - st.off)))}px`;
+          let di = zb.length;
+          for (let i = 0; i < zb.length; i++) if (cy < (zb[i].top + zb[i].bot) / 2) { di = i; break; }
+          st.drop = di;
+          if (st.line) {
+            const fi = st.zIds.indexOf(st.id);
+            const y = di < zb.length ? zb[di].top : zb[zb.length - 1].bot;
+            Object.assign(st.line.style, { top: `${Math.round(y - 1)}px`, opacity: di === fi || di === fi + 1 ? '0.25' : '1' });
+          }
+        };
+        const tick = () => {
+          if (pDrag !== st || !st.spd) { st.raf = 0; return; }
+          sb.scrollTop = (sb.scrollTop || 0) + st.spd;
+          upd(st.ly);
+          st.raf = win?.requestAnimationFrame?.(tick) || 0;
+        };
+        st.mv = (mv) => {
+          if (isDead() || pDrag !== st) return;
+          st.ly = mv.clientY;
+          if (!st.on) {
+            if (Math.abs(mv.clientY - st.y0) < 5) return;
+            st.on = true;
+            closeProjHiddenPop();
+            closeProjCtxMenu();
+            const g = own(mk('div', P + 'drag-ghost', null, mkSvgIcon(st.pin ? 'pin' : 'folder', 14), mk('span', null, st.lbl)));
+            const ln = own(mk('div', P + 'drop-line'));
+            sa(g, 'aria-hidden', 'true');
+            sa(ln, 'aria-hidden', 'true');
+            Object.assign(g.style, { left: `${Math.round(st.cl)}px`, width: `${Math.round(st.cw)}px`, height: `${st.ch}px`, top: `${Math.round(mv.clientY - st.off)}px` });
+            Object.assign(ln.style, { left: `${Math.round(st.cl + 4)}px`, width: `${Math.max(40, Math.round(st.cw - 8))}px` });
+            mut(() => {
+              doc.body?.appendChild?.(g);
+              doc.body?.appendChild?.(ln);
+              if (doc.documentElement) setA(doc.documentElement, DA + 'dragging', '1');
+              if (st.src) setA(st.src, DA + 'drag-src', '1');
+            });
+            st.ghost = g;
+            st.line = ln;
+          }
+          mv.preventDefault?.();
+          upd(mv.clientY);
+          const sbr = rOf(sb);
+          if (sbr) {
+            st.spd = mv.clientY < sbr.top + 28 ? -6 : mv.clientY > sbr.bottom - 28 ? 6 : 0;
+            if (st.spd && !st.raf && win?.requestAnimationFrame) st.raf = win.requestAnimationFrame(tick);
+          }
+        };
+        st.up = () => {
+          const { on, zIds, drop, id: pid, pin } = st;
+          cleanupProjDrag();
+          if (on) { pSkipClickUntil = Date.now() + 350; commitReorder(pid, pin, zIds, drop); }
+        };
+        st.cn = () => { const on = st.on; cleanupProjDrag(); if (on) pSkipClickUntil = Date.now() + 250; };
+        pDrag = st;
+        onE(win, 'pointermove', st.mv);
+        onE(win, 'pointerup', st.up);
+        onE(win, 'pointercancel', st.cn);
+      } catch {}
+    }
+    function onProjContextMenuCapture(ev) {
+      try {
+        if (isDead() || !ev?.target?.closest) return;
+        const c = cl(ev.target, S_PHC);
+        if (!c || !cl(c, S_SB)) return closeProjCtxMenu();
+        const id = getProjId(c);
+        if (!id) return;
+        const l = getProjLbl(c, id);
+        const cx = ev.clientX;
+        const cy = ev.clientY;
+        pLastCtx = { id, label: l, ts: Date.now() };
+        win?.requestAnimationFrame?.(() => { if (!isDead()) injectNativeMenu(); });
+        schedNonDiffTimer(injectNativeMenu, 40);
+        schedNonDiffTimer(() => { if (!injectNativeMenu() && pLastCtx?.id === id) openProjCtx(cx, cy, id, l); }, 130);
+      } catch {}
+    }
+    function onProjCtxOpenBus(ev) {
+      const s = ev?.detail?.source;
+      if (s !== 'sidebar-proj-hidden') closeProjHiddenPop();
+      if (s !== 'sidebar-proj-ctx') closeProjCtxMenu();
+    }
+
     function onDocClickCapture(ev) {
       try {
         const t = ev?.target;
         if (isDead() || !t?.closest) return;
+        if (pSkipClickUntil && Date.now() <= pSkipClickUntil && cl(t, '[data-testid="project-header"]')) {
+          pSkipClickUntil = 0;
+          ev.preventDefault?.();
+          ev.stopImmediatePropagation?.();
+          ev.stopPropagation?.();
+          return;
+        }
+        if (pHidPop && !cl(t, '.ag-cs-proj-hidden-pop, .ag-cs-proj-hidden-btn')) closeProjHiddenPop();
+        if (pCtxMenu && !cl(t, '.ag-cs-proj-ctx-menu')) closeProjCtxMenu();
+        const projOptsBtn = cl(t, '[data-testid="project-header-actions"] button[aria-label="Project options"]');
+        if (projOptsBtn) {
+          const pCont = cl(projOptsBtn, '[data-testid="project-header-container"]');
+          const pid = getProjId(pCont);
+          if (pid) {
+            pLastCtx = { id: pid, label: getProjLbl(pCont, pid), ts: Date.now() };
+            win?.requestAnimationFrame?.(() => {
+              if (!isDead()) injectNativeMenu();
+            });
+            schedNonDiffTimer(() => injectNativeMenu(), 45);
+            schedNonDiffTimer(() => injectNativeMenu(), 120);
+          }
+        }
         const subRoot = cl(t, S_SUB);
         if (subRoot) {
           const subVp = cl(t, S_VP) || qs(subRoot, S_VP);
@@ -2346,6 +3159,11 @@
       try {
         if (isDead() || !ev) return;
         if (ev.key === 'Escape') {
+          if (pHidPop) {
+            closeProjHiddenPop();
+            return;
+          }
+          if (closeProjCtxMenu()) return;
           if (win?.__agPrismInlineDiff?.closeMenuIfOpen?.()) return;
           if (outlineOpen) return closeNavOutline();
         }
@@ -2364,6 +3182,9 @@
 
     if (win && typeof win.addEventListener === 'function') {
       win.addEventListener('click', onDocClickCapture, true);
+      win.addEventListener('pointerdown', onProjPointerDownCapture, true);
+      win.addEventListener('contextmenu', onProjContextMenuCapture, true);
+      win.addEventListener('ag-prism:ctx-open', onProjCtxOpenBus);
       win.addEventListener('keydown', onWinKeyDown);
     }
 
@@ -2390,6 +3211,7 @@
       }
       if (isFull || flags.s || flags.r || flags.t || langChanged) {
         syncSidebarOverflowTools();
+        syncSidebarProjects(true);
       }
       if (isFull || flags.o || flags.c || flags.b || flags.r) {
         syncPermissionsMenuState();
@@ -2450,9 +3272,32 @@
         win?.__agPrismInlineDiff?.unbindHooks?.();
       } catch {}
 
+      cleanupProjDrag();
+      closeProjHiddenPop();
+      closeProjCtxMenu();
+      if (win && win.__agPrismSidebarProjectsApply === applyDaemonPS) {
+        try { delete win.__agPrismSidebarProjectsApply; } catch { try { win.__agPrismSidebarProjectsApply = undefined; } catch {} }
+      }
+      if (pRaf) {
+        try { win?.cancelAnimationFrame?.(pRaf); } catch {}
+        pRaf = 0;
+      }
+      try { pSSUnsub?.(); } catch {}
+      pSSUnsub = null;
+      try { pMo?.disconnect?.(); } catch {}
+      pMo = null;
+      if (pSb) {
+        try { pSb.removeEventListener('scroll', onProjSbScroll); } catch {}
+      }
+      pSb = null;
+      pList = null;
+
       if (win && typeof win.removeEventListener === 'function') {
         try {
           win.removeEventListener('click', onDocClickCapture, true);
+          win.removeEventListener('pointerdown', onProjPointerDownCapture, true);
+          win.removeEventListener('contextmenu', onProjContextMenuCapture, true);
+          win.removeEventListener('ag-prism:ctx-open', onProjCtxOpenBus);
           win.removeEventListener('keydown', onWinKeyDown);
         } catch {}
       }
@@ -2470,15 +3315,43 @@
 
       if (doc && typeof doc.querySelectorAll === 'function') {
         mut(() => {
-          for (const sel of ['.ag-cs-code-fold-btn', '.ag-cs-nav-outline-popover', '.ag-cs-nav-outline-trigger', '.ag-cs-sb-more-wrap']) {
+          for (const sel of [
+            '.ag-cs-code-fold-btn',
+            '.ag-cs-nav-outline-popover',
+            '.ag-cs-nav-outline-trigger',
+            '.ag-cs-sb-more-wrap',
+            '.ag-cs-proj-act-btn',
+            '.ag-cs-proj-pin-badge',
+            '.ag-cs-proj-hidden-btn',
+            '.ag-cs-proj-hidden-pop',
+            '.ag-cs-proj-ctx-menu',
+            '.ag-cs-proj-native-item',
+            '.ag-cs-proj-ctx-sep',
+            '.ag-cs-proj-drag-ghost',
+            '.ag-cs-proj-drop-line',
+          ]) {
             qa(doc, sel).forEach((n) => n.remove());
           }
-          for (const k of 'cs-code-folded|cs-code-sticky|perm-selected|perm-sandbox-sep|sub-running|sub-sec-running|overview-running|sp-running|sb-more-hidden|sb-more-item|scrolling|ov-sec-anim|cs-settings-dlg|cs-settings-nav|cs-nav-active'.split(
+          const sb = qs(doc, '[data-testid="conversation-list-sidebar"]');
+          if (sb?.firstElementChild) {
+            const list = sb.firstElementChild;
+            if (list.style?.maxHeight) list.style.maxHeight = '';
+            if (list.style?.overflow === 'hidden') list.style.overflow = '';
+            for (const ch of Array.from(list.children || [])) {
+              if (ch?.style?.translate) ch.style.translate = '';
+            }
+          }
+          if (doc.documentElement && ha(doc.documentElement, 'data-ag-proj-dragging')) {
+            ra(doc.documentElement, 'data-ag-proj-dragging');
+          }
+          for (const k of 'cs-code-folded|cs-code-sticky|perm-selected|perm-sandbox-sep|sub-running|sub-sec-running|overview-running|sp-running|sb-more-hidden|sb-more-item|scrolling|ov-sec-anim|cs-settings-dlg|cs-settings-nav|cs-nav-active|proj-pinned|proj-hidden|proj-id|proj-menu-id|proj-drag-src'.split(
             '|'
           )) {
             const a = 'data-ag-' + k;
             qa(doc, `[${a}]`).forEach((el) => ra(el, a));
           }
+          if (sb) syncVirtSizes(sb, new Set());
+          pZeroedKeys.clear();
           qa(doc, '[data-ag-queued-act]').forEach((el) => {
             ra(el, 'data-ag-queued-act');
             delete el._agQueuedActTimer;
@@ -2517,12 +3390,19 @@
       toggleInlineDiffPreview: (...a) => win?.__agPrismInlineDiff?.toggleInlineDiffPreview?.(...a) ?? false,
       runFastScrollToBottom,
       syncSidebarOverflowTools,
+      syncSidebarProjects,
+      togglePinProject,
+      hideProject,
+      unhideProject,
+      unhideAllProjects,
       getDebugState: () => ({
         ...stats,
         inlineDiffToggleCount: win?.__agPrismInlineDiff?.getDebugState?.()?.inlineDiffToggleCount ?? 0,
         outlineOpen,
         lastCascadeId,
         sidebarMoreExpanded,
+        pinnedProjects: projState.pinned.slice(),
+        hiddenProjects: projState.hidden.slice(),
         cachedThemeSig: cachedThemeSample?.sig || null,
       }),
       destroy,

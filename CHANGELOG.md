@@ -5,6 +5,20 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 本项目遵循语义化版本（SemVer）规范，记录各正式版本的新增功能、架构变更、安全加固与缺陷修复。
 
+## [1.2.3] - 2026-11-27
+
+> **GravityPrism `v1.2.3`**: Sol kenar çubuğuna kalıcı **Proje Pinleme & Gizleme**, `900px` geniş sohbet/mesaj düzeni, Gemini 4 Neon + Orchestrator ortak 4 renkli Spark simgesi ve pürüzsüz proje sürükle-bırak sıralama düzeltmesi ekler.
+
+### Yenilikler
+- **Kalıcı Proje Pinleme & Gizleme ([host-workbench-enhancer.js](./host-workbench-enhancer.js), [sidecars/daemon/main.mjs](./sidecars/daemon/main.mjs), [style.css](./style.css)):**
+  - Her proje başlığında hem hover aksiyon butonları (**Pin / Hide**) hem sağ tık / `...` menüsü öğeleri eklendi; pinlenen projeler kendi sohbetleri ve aç/kapa davranışlarıyla en üste sabitlenir, pin kaldırılınca tam eski sırasına (`baseOrder`) geri döner.
+  - Gizlenen projeler ve alt sohbetleri TanStack Virtual `itemSizeCache` entegrasyonuyla `Conversations` bölümünü veya görünür projeleri kırpmadan 0px boşlukla gizlenir; `Projects` başlığındaki `👁 N` düğmesinden tek tıkla geri açılabilir.
+  - Kalıcı kayıt Antigravity'nin `app_storage.json` dosyasına dokunmadan doğrudan GravityPrism eklenti klasöründeki `sidebar-projects.json` dosyasına (`__agPrismSetting` daemon köprüsü üzerinden, atomik yazım + çoklu pencere senkronizasyonuyla) yapılır.
+- **900px Sohbet Genişliği & Ortak 4 Renkli Gemini Spark ([style.css](./style.css), [model-glyph-crystal.js](./model-glyph-crystal.js)):** Geniş tabloların sığması için sohbet alanı ve alt konuşma çubuğu `900px` genişliğe çıkarıldı; Gemini modelleri de Orchestrator ile aynı 4 renkli Google Spark simgesini kullanır.
+
+### Düzeltmeler
+- **Proje Sürükle-Bırak Sıralama Düzeltmesi ([host-workbench-enhancer.js](./host-workbench-enhancer.js)):** Antigravity'nin açık projeleri sürüklerken yüksekliği kapanma öncesi ölçüp projeleri kaybetmesine ve dev boşluk bırakmasına yol açan yerel sürükleme hatası, yüzen cam kart + bırakma çizgisi + kenar otomatik kaydırmalı ve komşu-korumalı (`moveInOrd`) yeni sürükle-bırak motoruyla giderildi.
+
 ## [1.2.2] - 2026-11-26
 
 > **GravityPrism `v1.2.2`**: Yan panel sekme geçişlerinde kaydırma konumunu korur, alt ajan dosya listesinin yanlışlıkla HTML önizlemeye düşmesini engeller ve eski watcher CSS çakışmalarına karşı koruma ekler.

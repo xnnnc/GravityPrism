@@ -2300,3 +2300,632 @@ test('Preserves and restores side-panel subagent scrollTop across unmount/remoun
     assert.equal(env.win.__agPrismPreserveScroll, undefined, 'destroy() must clean up __agPrismPreserveScroll');
   }
 });
+
+test('Sidebar projects: pin/unpin reorders projectsOrder, hide/unhide compacts virtualizer without gaps, context menus + smooth drag work, and destroy cleans up', async () => {
+  const env = createMockEnv();
+  const cdp = require(path.join(__dirname, '..', 'cdp.js'));
+
+  const lsMap = new Map();
+  env.win.localStorage = {
+    getItem: (k) => (lsMap.has(k) ? lsMap.get(k) : null),
+    setItem: (k, v) => lsMap.set(k, String(v)),
+    removeItem: (k) => lsMap.delete(k),
+  };
+
+  const storageMap = new Map([
+    ['projectsOrder', JSON.stringify(['p1', 'p2', 'p3'])],
+    ['projectsFolderSortBy', 'custom'],
+  ]);
+  const storageListeners = new Set();
+  const mockStorageService = {
+    get: (k) => storageMap.get(k),
+    store: (k, v) => {
+      storageMap.set(k, v);
+      for (const fn of storageListeners) fn({ [k]: v });
+    },
+    onDidChange: (fn) => {
+      storageListeners.add(fn);
+      return () => storageListeners.delete(fn);
+    },
+  };
+  const mockReduxStore = {
+    getState: () => ({
+      sidebarProjects: {
+        projects: [
+          { id: 'p1', name: 'Alpha' },
+          { id: 'p2', name: 'Beta' },
+          { id: 'p3', name: 'Gamma' },
+        ],
+      },
+    }),
+    dispatch: () => {},
+  };
+
+  // Build virtualized sidebar list mirroring Antigravity's exact DOM
+  const sb = env.createElement('div', { 'data-testid': 'conversation-list-sidebar' });
+  sb._rect = { left: 0, top: 40, width: 260, height: 600, bottom: 640, right: 260 };
+  const list = env.createElement('div');
+  list.style.height = '240px';
+  sb.appendChild(list);
+
+  // Sticky Projects section header
+  const projSecWrap = env.createElement('div');
+  projSecWrap.style.position = 'sticky';
+  const projSec = env.createElement('div', { 'data-testid': 'section-header', 'data-section-id': 'main-section-header', 'data-title': 'Projects' });
+  const projSecInner = env.createElement('div');
+  const projSecRight = env.createElement('div');
+  const projSecSpan = env.createElement('span');
+  const nativeAddBtn = env.createElement('button');
+  projSecSpan.appendChild(nativeAddBtn);
+  projSecRight.appendChild(projSecSpan);
+  projSecInner.appendChild(projSecRight);
+  projSec.appendChild(projSecInner);
+  projSecWrap.appendChild(projSec);
+  list.appendChild(projSecWrap);
+
+  const mkProjHeaderRow = (id, label, y) => {
+    const wrap = env.createElement('div', { 'data-sidebar-section-drop-id': id });
+    wrap.style.position = 'absolute';
+    wrap.style.transform = `translateY(${y}px)`;
+    wrap._rect = { left: 8, top: 40 + y, width: 244, height: 33, bottom: 40 + y + 33, right: 252 };
+    const phc = env.createElement('div', { 'data-testid': 'project-header-container' });
+    const btn = env.createElement('button', { 'data-testid': 'project-header', 'data-project-label': label });
+    btn.textContent = label;
+    btn._rect = { left: 8, top: 40 + y, width: 244, height: 28, bottom: 40 + y + 28, right: 252 };
+    const actions = env.createElement('div', { 'data-testid': 'project-header-actions' });
+    const optsBtn = env.createElement('button', { 'aria-label': 'Project options' });
+    actions.appendChild(optsBtn);
+    phc.appendChild(btn);
+    phc.appendChild(actions);
+    wrap.appendChild(phc);
+    list.appendChild(wrap);
+    return { wrap, phc, btn, actions, optsBtn };
+  };
+
+  const mkConvRow = (projId, title, y) => {
+    const wrap = env.createElement('div', { 'data-sidebar-section-id': projId });
+    wrap.style.position = 'absolute';
+    wrap.style.transform = `translateY(${y}px)`;
+    wrap._rect = { left: 8, top: 40 + y, width: 244, height: 31, bottom: 40 + y + 31, right: 252 };
+    const row = env.createElement('a', { 'data-testid': 'conversation-row-sidebar' });
+    row.textContent = title;
+    wrap.appendChild(row);
+    list.appendChild(wrap);
+    return wrap;
+  };
+
+  const p1 = mkProjHeaderRow('p1', 'Alpha', 23);
+  const p1c1 = mkConvRow('p1', 'Alpha Chat 1', 56);
+  const p2 = mkProjHeaderRow('p2', 'Beta', 87);
+  const p2c1 = mkConvRow('p2', 'Beta Chat 1', 120);
+  const p2c2 = mkConvRow('p2', 'Beta Chat 2', 151);
+  const p3 = mkProjHeaderRow('p3', 'Gamma', 182);
+  const convSecWrap = env.createElement('div');
+  convSecWrap.style.position = 'absolute';
+  convSecWrap.style.transform = 'translateY(215px)';
+  convSecWrap._rect = { left: 8, top: 255, width: 244, height: 25, bottom: 280, right: 252 };
+  const convSec = env.createElement('div', { 'data-testid': 'section-header', 'data-section-id': 'standalone', 'data-title': 'Conversations' });
+  convSecWrap.appendChild(convSec);
+  list.appendChild(convSecWrap);
+
+  env.body.appendChild(sb);
+
+  const ctl = enhancerMod.createHostEnhancerController({
+    doc: env.doc,
+    win: env.win,
+    getConfig: () => ({}),
+    getLang: () => 'en',
+    storageService: mockStorageService,
+    reduxStore: mockReduxStore,
+  });
+
+  try {
+    ctl.sync();
+
+    // 1. Hover Pin + Hide buttons injected into every project-header-actions
+    const p3PinBtn = p3.actions.querySelector('.ag-cs-proj-pin-btn');
+    const p2HideBtn = p2.actions.querySelector('.ag-cs-proj-hide-btn');
+    assert.ok(p3PinBtn, 'Pin hover button must be injected into project-header-actions');
+    assert.ok(p2HideBtn, 'Hide hover button must be injected into project-header-actions');
+
+    // 2. Clicking Pin on Gamma moves p3 to top of projectsOrder and adds pinned badge/attr
+    p3PinBtn.click();
+    assert.equal(p3.phc.getAttribute('data-ag-proj-pinned'), '1', 'Pinned project container must be marked');
+    assert.ok(p3.phc.querySelector('.ag-cs-proj-pin-badge'), 'Pinned project must render subtle pin badge');
+    assert.deepEqual(JSON.parse(storageMap.get('projectsOrder')), ['p3', 'p1', 'p2'], 'Pinning p3 must move it to front of projectsOrder');
+
+    // 3. Clicking Hide on Beta hides Beta header AND its 2 child conversations, compacting Gamma & Conversations by exact 95px (33+31+31)
+    p2HideBtn.click();
+    assert.equal(p2.wrap.getAttribute('data-ag-proj-hidden'), '1', 'Hidden project header must be hidden');
+    assert.equal(p2c1.getAttribute('data-ag-proj-hidden'), '1', 'Hidden project child 1 must be hidden');
+    assert.equal(p2c2.getAttribute('data-ag-proj-hidden'), '1', 'Hidden project child 2 must be hidden');
+    assert.equal(p1.wrap.getAttribute('data-ag-proj-hidden'), null, 'Other projects stay visible');
+    assert.equal(p1c1.getAttribute('data-ag-proj-hidden'), null, 'Other project chats stay visible');
+    assert.equal(p3.wrap.style.translate, '0px -95px', 'Rows below hidden project must compact upward by exact removed height (95px)');
+    assert.equal(convSecWrap.style.translate, '0px -95px', 'Conversations section must compact upward by exact 95px');
+    assert.equal(list.style.maxHeight, '145px', 'Virtual list maxHeight must shrink by exact removed height (240 - 95 = 145px)');
+
+    // 4. Hidden (1) button appears in Projects section header and restores Beta on Show click
+    const hidBtn = projSec.querySelector('.ag-cs-proj-hidden-btn');
+    assert.ok(hidBtn, 'Hidden (N) button must appear on Projects section header');
+    assert.equal(hidBtn.querySelector('.ag-cs-proj-hidden-cnt')?.textContent, '1');
+    hidBtn.click();
+    const hidPop = env.body.querySelector('.ag-cs-proj-hidden-pop');
+    assert.ok(hidPop, 'Hidden projects popover must open');
+    assert.ok(hidPop.textContent.includes('Beta'), 'Hidden popover must display Beta project name');
+    hidPop.querySelector('.ag-cs-proj-hidden-show').click();
+    assert.equal(p2.wrap.getAttribute('data-ag-proj-hidden'), null, 'Unhiding Beta must restore project header');
+    assert.equal(p2c1.getAttribute('data-ag-proj-hidden'), null, 'Unhiding Beta must restore child chats');
+    assert.equal(p3.wrap.style.translate, '', 'Compaction translate must clear when nothing is hidden');
+    assert.equal(list.style.maxHeight, '', 'Virtual list maxHeight must clear when nothing is hidden');
+    assert.equal(projSec.querySelector('.ag-cs-proj-hidden-btn'), null, 'Hidden button must disappear when count reaches 0');
+
+    // 5. Right-click context menu fallback works when no native menu opens
+    env.win.dispatchEvent({ type: 'contextmenu', target: p1.btn, clientX: 80, clientY: 90, preventDefault() {}, stopPropagation() {} });
+    await new Promise((r) => setTimeout(r, 160));
+    const ctxMenu = env.body.querySelector('.ag-cs-proj-ctx-menu');
+    assert.ok(ctxMenu, 'Fallback glass context menu must open on project right-click');
+    const items = ctxMenu.querySelectorAll('.ag-cs-proj-ctx-item');
+    assert.equal(items.length, 2, 'Context menu must offer Pin and Hide actions');
+    items[0].click(); // Pin Alpha
+    assert.deepEqual(JSON.parse(storageMap.get('projectsOrder')), ['p3', 'p1', 'p2'], 'Pinning Alpha keeps Gamma first then Alpha');
+
+    // 6. Native menu injection works when Antigravity opens a native [data-testid="context-menu-popup"]
+    const nativePopup = env.createElement('div', { 'data-testid': 'context-menu-popup', role: 'menu' });
+    const nativeCopy = env.createElement('div', { role: 'menuitem' });
+    nativeCopy.textContent = 'Copy Project Name';
+    nativePopup.appendChild(nativeCopy);
+    env.body.appendChild(nativePopup);
+    env.win.dispatchEvent({ type: 'contextmenu', target: p2.btn, clientX: 80, clientY: 140, preventDefault() {}, stopPropagation() {} });
+    await new Promise((r) => setTimeout(r, 60));
+    assert.equal(nativePopup.querySelectorAll('.ag-cs-proj-native-item').length, 2, 'Must inject Pin + Hide items at top of native project context menu');
+    nativePopup.remove();
+
+    // 7. Smooth project drag-and-drop stops broken native drd on pointerdown and commits clean reorder on pointerup
+    // Unpin p1 and p3 so all 3 are unpinned [p1, p2, p3]
+    ctl.togglePinProject('p3', 'Gamma');
+    ctl.togglePinProject('p1', 'Alpha');
+    mockStorageService.store('projectsOrder', JSON.stringify(['p1', 'p2', 'p3']));
+    let stopped = false;
+    env.win.dispatchEvent({
+      type: 'pointerdown',
+      button: 0,
+      clientY: 235,
+      target: p3.btn,
+      stopImmediatePropagation() { stopped = true; },
+      stopPropagation() { stopped = true; },
+    });
+    assert.equal(stopped, true, 'Capture pointerdown on project-header must stop Antigravity broken drd');
+    env.win.dispatchEvent({ type: 'pointermove', clientY: 65, preventDefault() {} });
+    assert.ok(env.body.querySelector('.ag-cs-proj-drag-ghost'), 'Dragging >= 5px must mount floating drag ghost');
+    assert.ok(env.body.querySelector('.ag-cs-proj-drop-line'), 'Dragging >= 5px must mount drop indicator line');
+    assert.equal(env.doc.documentElement.getAttribute('data-ag-proj-dragging'), '1');
+    env.win.dispatchEvent({ type: 'pointerup', clientY: 65 });
+    assert.equal(env.body.querySelector('.ag-cs-proj-drag-ghost'), null, 'Pointerup must clean up drag ghost');
+    assert.equal(env.body.querySelector('.ag-cs-proj-drop-line'), null, 'Pointerup must clean up drop line');
+    assert.deepEqual(JSON.parse(storageMap.get('projectsOrder')), ['p3', 'p1', 'p2'], 'Dropping Gamma above Alpha must reorder projectsOrder cleanly');
+
+    assert.ok(cdp.REMOVE_EXPRESSION.includes('.ag-cs-proj-act-btn'), 'REMOVE_EXPRESSION must clean project pin/hide nodes');
+    assert.ok(cdp.REMOVE_EXPRESSION.includes('data-ag-proj-hidden'), 'REMOVE_EXPRESSION must clean data-ag-proj-hidden');
+  } finally {
+    ctl.destroy();
+    assert.equal(sb.querySelectorAll('.ag-cs-proj-act-btn').length, 0, 'destroy() must remove injected project action buttons');
+    assert.equal(env.body.querySelector('.ag-cs-proj-hidden-pop'), null, 'destroy() must remove hidden popover');
+    assert.equal(env.body.querySelector('.ag-cs-proj-ctx-menu'), null, 'destroy() must remove context menu');
+    assert.equal(p2.wrap.getAttribute('data-ag-proj-hidden'), null, 'destroy() must clear data-ag-proj-hidden');
+  }
+});
+
+test('Sidebar projects: virtualizer 0px collapse never double-clips Conversations/other projects, and unpin restores original position across reloads/drags/hides', () => {
+  const env = createMockEnv();
+  const lsMap = new Map();
+  env.win.localStorage = {
+    getItem: (k) => (lsMap.has(k) ? lsMap.get(k) : null),
+    setItem: (k, v) => lsMap.set(k, String(v)),
+    removeItem: (k) => lsMap.delete(k),
+  };
+
+  const storageMap = new Map([
+    ['projectsOrder', JSON.stringify(['p1', 'p2', 'p3', 'p4'])],
+    ['projectsFolderSortBy', 'custom'],
+  ]);
+  const storageListeners = new Set();
+  const mockStorageService = {
+    get: (k) => storageMap.get(k),
+    store: (k, v) => {
+      storageMap.set(k, v);
+      for (const fn of storageListeners) fn({ [k]: v });
+    },
+    onDidChange: (fn) => {
+      storageListeners.add(fn);
+      return () => storageListeners.delete(fn);
+    },
+  };
+  const mockReduxStore = {
+    getState: () => ({
+      sidebarProjects: {
+        projects: [
+          { id: 'p1', name: 'Alpha' },
+          { id: 'p2', name: 'Beta' },
+          { id: 'p3', name: 'Gamma' },
+          { id: 'p4', name: 'Delta' },
+        ],
+      },
+    }),
+    dispatch: () => {},
+  };
+
+  const sb = env.createElement('div', { 'data-testid': 'conversation-list-sidebar' });
+  sb._rect = { left: 0, top: 40, width: 260, height: 600, bottom: 640, right: 260 };
+  sb.offsetHeight = 600;
+  const list = env.createElement('div');
+  sb.appendChild(list);
+
+  // Build items matching live Antigravity rfd structure
+  const rfdItems = [
+    { type: 'section-header', id: 'main-section-header', collapseId: 'main-section-header', size: 23 },
+    { type: 'header', id: 'header-p1', label: 'Alpha', size: 33 },
+    { type: 'row', id: 'c-p1-1', groupId: 'p1', label: 'A1', size: 31 },
+    { type: 'header', id: 'header-p2', label: 'Beta', size: 33 },
+    { type: 'row', id: 'c-p2-1', groupId: 'p2', label: 'B1', size: 31 },
+    { type: 'row', id: 'c-p2-2', groupId: 'p2', label: 'B2', size: 31 },
+    { type: 'row', id: 'c-p2-3', groupId: 'p2', label: 'B3', size: 31 },
+    { type: 'header', id: 'header-p3', label: 'Gamma', size: 33 },
+    { type: 'header', id: 'header-p4', label: 'Delta', size: 33 },
+    { type: 'spacer', id: 'spacer-section-standalone', size: 16 },
+    { type: 'section-header', id: 'section-standalone', collapseId: 'standalone', label: 'Conversations', size: 23 },
+    { type: 'row', id: 'c-st-1', groupId: 'standalone', label: 'Standalone 1', size: 31 },
+    { type: 'row', id: 'c-st-2', groupId: 'standalone', label: 'Standalone 2', size: 31 },
+  ];
+
+  let notifyCount = 0;
+  const virt = {
+    itemSizeCache: new Map(rfdItems.map((it) => [it.id, it.size])),
+    measurementsCache: [],
+    pendingMin: null,
+    itemSizeCacheVersion: 0,
+    measureElement() {},
+    notify() {
+      notifyCount += 1;
+    },
+  };
+
+  // Mount DOM elements for all rows (idx 0 sticky, idx 1..12 absolute)
+  const rowEls = new Map();
+  const stickyHead = env.createElement('div', { 'data-index': '0' });
+  stickyHead.style.position = 'sticky';
+  const projSec = env.createElement('div', { 'data-testid': 'section-header', 'data-section-id': 'main-section-header', 'data-title': 'Projects' });
+  stickyHead.appendChild(projSec);
+  list.appendChild(stickyHead);
+
+  for (let i = 1; i < rfdItems.length; i++) {
+    const it = rfdItems[i];
+    const attrs = { 'data-index': String(i) };
+    if (it.type === 'header') attrs['data-sidebar-section-drop-id'] = it.id.slice(7);
+    if (it.type === 'row') attrs['data-sidebar-section-id'] = it.groupId;
+    if (it.type === 'section-header') attrs['data-sidebar-section-drop-id'] = it.collapseId;
+    const wrap = env.createElement('div', attrs);
+    wrap.style.position = 'absolute';
+    if (it.type === 'header') {
+      const phc = env.createElement('div', { 'data-testid': 'project-header-container' });
+      const btn = env.createElement('button', { 'data-testid': 'project-header', 'data-project-label': it.label });
+      btn.textContent = it.label;
+      const acts = env.createElement('div', { 'data-testid': 'project-header-actions' });
+      phc.appendChild(btn);
+      phc.appendChild(acts);
+      wrap.appendChild(phc);
+    } else if (it.type === 'section-header') {
+      const sh = env.createElement('div', { 'data-testid': 'section-header', 'data-section-id': it.collapseId, 'data-title': it.label });
+      sh.textContent = it.label;
+      wrap.appendChild(sh);
+    } else if (it.type === 'row') {
+      const row = env.createElement('a', { 'data-testid': 'conversation-row-sidebar' });
+      row.textContent = it.label;
+      wrap.appendChild(row);
+    }
+    list.appendChild(wrap);
+    rowEls.set(it.id, wrap);
+  }
+
+  // Helper simulating @tanstack/react-virtual layout recalculation after ResizeObserver measures display:none as 0px
+  const runVirtualizerLayout = () => {
+    let y = 0;
+    virt.measurementsCache = [];
+    for (let i = 0; i < rfdItems.length; i++) {
+      const it = rfdItems[i];
+      const el = rowEls.get(it.id);
+      const isHidden = el?.getAttribute('data-ag-proj-hidden') === '1';
+      const sz = isHidden ? 0 : (virt.itemSizeCache.has(it.id) ? virt.itemSizeCache.get(it.id) : it.size);
+      if (isHidden) virt.itemSizeCache.set(it.id, 0);
+      virt.measurementsCache.push({ index: i, key: it.id, start: y, size: sz, end: y + sz });
+      if (el) {
+        el.style.transform = `translateY(${y}px)`;
+        el._rect = { left: 8, top: 40 + y, width: 244, height: sz, bottom: 40 + y + sz, right: 252 };
+        el.offsetHeight = sz;
+      }
+      y += sz;
+    }
+    list.style.height = `${y}px`;
+  };
+
+  // Attach mock React fiber pointing to rfd component with items + virt hook
+  const rfdFiber = {
+    memoizedProps: { items: rfdItems },
+    memoizedState: { memoizedState: null, next: { memoizedState: virt, next: null } },
+    return: null,
+  };
+  sb.__reactFiber$test = { return: { return: rfdFiber } };
+
+  runVirtualizerLayout();
+  env.body.appendChild(sb);
+
+  const mkCtl = () =>
+    enhancerMod.createHostEnhancerController({
+      doc: env.doc,
+      win: env.win,
+      getConfig: () => ({}),
+      getLang: () => 'en',
+      storageService: mockStorageService,
+      reduxStore: mockReduxStore,
+    });
+
+  let ctl = mkCtl();
+  try {
+    ctl.sync();
+
+    // 1. Hide expanded Beta (4 rows, 126px) + Gamma (1 row, 33px) = 159px hidden
+    ctl.hideProject('p2', 'Beta');
+    ctl.hideProject('p3', 'Gamma');
+    // Simulate ResizeObserver firing in real Chromium and virtualizer collapsing hidden rows to 0px
+    runVirtualizerLayout();
+    assert.equal(list.style.height, '221px', 'Virtualizer shrinks list.style.height natively by 159px (380 -> 221)');
+    // Now enhancer re-syncs (as MutationObserver triggers after virtualizer update)
+    ctl.sync();
+
+    assert.equal(list.style.maxHeight, '', 'Must NOT double-subtract hidden height into maxHeight after virtualizer already collapsed rows to 0px');
+    assert.equal(list.style.overflow, '', 'Must NOT set overflow:hidden that clips Delta and Conversations');
+    assert.equal(rowEls.get('header-p4').getAttribute('data-ag-proj-hidden'), null, 'Non-hidden Delta must remain visible');
+    assert.equal(rowEls.get('header-p4').style.translate, '', 'Non-hidden Delta must not double-shift');
+    assert.equal(rowEls.get('section-standalone').getAttribute('data-ag-proj-hidden'), null, 'Conversations section must remain visible');
+    assert.equal(rowEls.get('c-st-1').getAttribute('data-ag-proj-hidden'), null, 'Standalone chat 1 must remain visible');
+    assert.equal(rowEls.get('c-st-2').getAttribute('data-ag-proj-hidden'), null, 'Standalone chat 2 must remain visible');
+    assert.equal(rowEls.get('section-standalone').style.translate, '', 'Conversations section must not double-shift');
+
+    // 2. Hide ALL projects -> Conversations section and its chats must STILL remain visible
+    ctl.hideProject('p1', 'Alpha');
+    ctl.hideProject('p4', 'Delta');
+    runVirtualizerLayout();
+    ctl.sync();
+    assert.equal(list.style.maxHeight, '', 'Hiding all projects must not clip Conversations');
+    assert.equal(rowEls.get('section-standalone').getAttribute('data-ag-proj-hidden'), null, 'Conversations section must survive hiding all projects');
+    assert.equal(rowEls.get('c-st-1').getAttribute('data-ag-proj-hidden'), null, 'Standalone chats must survive hiding all projects');
+
+    // 3. Unhide all -> virt.itemSizeCache 0 entries cleared and notify() triggered
+    const beforeNotify = notifyCount;
+    ctl.unhideAllProjects();
+    assert.ok(notifyCount > beforeNotify, 'Unhiding must notify virtualizer after clearing 0px cached sizes');
+    assert.equal(virt.itemSizeCache.has('header-p2'), false, '0px itemSizeCache entry for unhidden project header must be cleared');
+    assert.equal(virt.itemSizeCache.has('c-p2-1'), false, '0px itemSizeCache entry for unhidden project chat must be cleared');
+    runVirtualizerLayout();
+    ctl.sync();
+
+    // 4. Pin single project (p3) then unpin -> MUST return to original position [p1, p2, p3, p4]
+    ctl.togglePinProject('p3', 'Gamma');
+    assert.deepEqual(JSON.parse(storageMap.get('projectsOrder')), ['p3', 'p1', 'p2', 'p4'], 'Pinning p3 moves it to top');
+    ctl.togglePinProject('p3', 'Gamma');
+    assert.deepEqual(JSON.parse(storageMap.get('projectsOrder')), ['p1', 'p2', 'p3', 'p4'], 'Unpinning p3 must restore it to its original position');
+
+    // 5. Pin multiple projects (p4, then p2), unpin in any order -> each returns to exact original slot
+    ctl.togglePinProject('p4', 'Delta');
+    ctl.togglePinProject('p2', 'Beta');
+    assert.deepEqual(JSON.parse(storageMap.get('projectsOrder')), ['p4', 'p2', 'p1', 'p3']);
+    ctl.togglePinProject('p4', 'Delta');
+    assert.deepEqual(JSON.parse(storageMap.get('projectsOrder')), ['p2', 'p1', 'p3', 'p4'], 'Unpinning p4 while p2 stays pinned restores p4 to bottom');
+    ctl.togglePinProject('p2', 'Beta');
+    assert.deepEqual(JSON.parse(storageMap.get('projectsOrder')), ['p1', 'p2', 'p3', 'p4'], 'Unpinning p2 restores full original order');
+
+    // 6. Pin p3, then hide p3 (which auto-unpins) -> restores p3 to original order so unhide puts it back where it belonged
+    ctl.togglePinProject('p3', 'Gamma');
+    assert.deepEqual(JSON.parse(storageMap.get('projectsOrder')), ['p3', 'p1', 'p2', 'p4']);
+    ctl.hideProject('p3', 'Gamma');
+    assert.deepEqual(JSON.parse(storageMap.get('projectsOrder')), ['p1', 'p2', 'p3', 'p4'], 'Hiding a pinned project must restore its pre-pin order');
+    ctl.unhideProject('p3');
+    assert.deepEqual(JSON.parse(storageMap.get('projectsOrder')), ['p1', 'p2', 'p3', 'p4']);
+
+    // 7. Pin p3, simulate page reload (new controller instance), then unpin -> STILL restores original order from localStorage
+    ctl.togglePinProject('p3', 'Gamma');
+    assert.deepEqual(JSON.parse(storageMap.get('projectsOrder')), ['p3', 'p1', 'p2', 'p4']);
+    ctl.destroy();
+    ctl = mkCtl();
+    ctl.sync();
+    ctl.togglePinProject('p3', 'Gamma');
+    assert.deepEqual(JSON.parse(storageMap.get('projectsOrder')), ['p1', 'p2', 'p3', 'p4'], 'Unpinning after reload must still restore original position');
+
+    // 8. Pin p3, drag unpinned p4 above p1, then unpin p3 -> preserves drag of p4 AND restores p3 after p2
+    ctl.togglePinProject('p3', 'Gamma');
+    assert.deepEqual(JSON.parse(storageMap.get('projectsOrder')), ['p3', 'p1', 'p2', 'p4']);
+    // Refresh mock rects for [p3, p1, p2, p4] visual order so drag hit-testing sees p1, p2, p4 unpinned
+    const p4Btn = rowEls.get('header-p4').querySelector('[data-testid="project-header"]');
+    p4Btn._rect = { left: 8, top: 260, width: 244, height: 28, bottom: 288, right: 252 };
+    env.win.dispatchEvent({
+      type: 'pointerdown',
+      button: 0,
+      clientY: 274,
+      target: p4Btn,
+      stopImmediatePropagation() {},
+      stopPropagation() {},
+    });
+    env.win.dispatchEvent({ type: 'pointermove', clientY: 65, preventDefault() {} });
+    env.win.dispatchEvent({ type: 'pointerup', clientY: 65 });
+    assert.deepEqual(JSON.parse(storageMap.get('projectsOrder')), ['p3', 'p4', 'p1', 'p2'], 'Dragging p4 above p1 while p3 is pinned updates unpinned zone');
+    ctl.togglePinProject('p3', 'Gamma');
+    assert.deepEqual(JSON.parse(storageMap.get('projectsOrder')), ['p4', 'p1', 'p2', 'p3'], 'Unpinning p3 after dragging p4 preserves p4 drag and restores p3 after p2');
+
+    // Reset order to [p1, p2, p3, p4] for remaining edge-case scenarios
+    storageMap.set('projectsOrder', JSON.stringify(['p1', 'p2', 'p3', 'p4']));
+    ctl.sync();
+
+    // 9. Hide p2, drag unpinned p4 above p3, then unhide p2 -> p2 must stay at index 1 (NOT shoved to bottom)
+    ctl.hideProject('p2', 'Beta');
+    runVirtualizerLayout();
+    ctl.sync();
+    // Set visual rects matching [p1, p3, p4] visible headers
+    rowEls.get('header-p1')._rect = { left: 8, top: 63, width: 244, height: 33, bottom: 96, right: 252 };
+    rowEls.get('header-p3')._rect = { left: 8, top: 127, width: 244, height: 33, bottom: 160, right: 252 };
+    rowEls.get('header-p4')._rect = { left: 8, top: 160, width: 244, height: 33, bottom: 193, right: 252 };
+    p4Btn._rect = { left: 8, top: 160, width: 244, height: 28, bottom: 188, right: 252 };
+    env.win.dispatchEvent({
+      type: 'pointerdown',
+      button: 0,
+      clientY: 174,
+      target: p4Btn,
+      stopImmediatePropagation() {},
+      stopPropagation() {},
+    });
+    env.win.dispatchEvent({ type: 'pointermove', clientY: 130, preventDefault() {} });
+    env.win.dispatchEvent({ type: 'pointerup', clientY: 130 });
+    assert.deepEqual(
+      JSON.parse(storageMap.get('projectsOrder')),
+      ['p1', 'p2', 'p4', 'p3'],
+      'Dragging unpinned p4 above p3 while p2 is hidden must keep hidden p2 at index 1 instead of shoving it to the end'
+    );
+    ctl.unhideProject('p2');
+    runVirtualizerLayout();
+    ctl.sync();
+
+    // 10. Pin in custom -> switch sort to last_updated -> unpin in last_updated -> switch back to custom:
+    //     projectsOrder must be restored and NOT leave p3 stranded at top
+    storageMap.set('projectsOrder', JSON.stringify(['p1', 'p2', 'p3', 'p4']));
+    storageMap.set('projectsFolderSortBy', 'custom');
+    ctl.sync();
+    ctl.togglePinProject('p3', 'Gamma');
+    assert.deepEqual(JSON.parse(storageMap.get('projectsOrder')), ['p3', 'p1', 'p2', 'p4']);
+    storageMap.set('projectsFolderSortBy', 'last_updated');
+    ctl.togglePinProject('p3', 'Gamma');
+    storageMap.set('projectsFolderSortBy', 'custom');
+    ctl.sync();
+    assert.deepEqual(
+      JSON.parse(storageMap.get('projectsOrder')),
+      ['p1', 'p2', 'p3', 'p4'],
+      'Unpinning while in non-custom sort mode must still restore custom projectsOrder so switching back to custom does not strand p3 at top'
+    );
+
+    // 11. Pin in last_updated -> drag unpinned p4 above p1 (switches to custom) -> unpin p3:
+    //     p3 must return to its pre-pin slot instead of staying at top
+    storageMap.set('projectsFolderSortBy', 'last_updated');
+    ctl.sync();
+    ctl.togglePinProject('p3', 'Gamma');
+    rowEls.get('header-p1')._rect = { left: 8, top: 96, width: 244, height: 33, bottom: 129, right: 252 };
+    rowEls.get('header-p2')._rect = { left: 8, top: 160, width: 244, height: 33, bottom: 193, right: 252 };
+    rowEls.get('header-p4')._rect = { left: 8, top: 260, width: 244, height: 33, bottom: 293, right: 252 };
+    p4Btn._rect = { left: 8, top: 260, width: 244, height: 28, bottom: 288, right: 252 };
+    env.win.dispatchEvent({
+      type: 'pointerdown',
+      button: 0,
+      clientY: 274,
+      target: p4Btn,
+      stopImmediatePropagation() {},
+      stopPropagation() {},
+    });
+    env.win.dispatchEvent({ type: 'pointermove', clientY: 98, preventDefault() {} });
+    env.win.dispatchEvent({ type: 'pointerup', clientY: 98 });
+    assert.equal(storageMap.get('projectsFolderSortBy'), 'custom', 'Dragging in last_updated switches sort mode to custom');
+    assert.deepEqual(JSON.parse(storageMap.get('projectsOrder')), ['p3', 'p4', 'p1', 'p2']);
+    ctl.togglePinProject('p3', 'Gamma');
+    assert.deepEqual(
+      JSON.parse(storageMap.get('projectsOrder')),
+      ['p4', 'p1', 'p2', 'p3'],
+      'Unpinning p3 after pinning in last_updated and dragging p4 must restore p3 to its pre-pin slot instead of leaving it at top'
+    );
+
+    // 12. Non-contiguous virtualized rows (gap in data-index) must NOT accumulate curY drift on visible rows
+    const detached = rowEls.get('header-p2');
+    list.removeChild(detached);
+    ctl.sync();
+    assert.equal(
+      rowEls.get('header-p3').style.translate,
+      '',
+      'Visible row after a virtualizer index gap must not get shifted upward by curY accumulation'
+    );
+    assert.equal(
+      rowEls.get('section-standalone').style.translate,
+      '',
+      'Conversations section after a virtualizer index gap must not drift'
+    );
+
+    // 13. Persistence across Antigravity restarts (new random localhost port -> brand-new empty localStorage):
+    //     Pinned, hidden, and baseOrder state must persist via GravityPrism's own daemon bridge (sidebar-projects.json),
+    //     leaving ZERO custom keys inside Antigravity's app_storage.json (storageService).
+    list.appendChild(detached);
+    storageMap.set('projectsFolderSortBy', 'custom');
+    storageMap.set('projectsOrder', JSON.stringify(['p1', 'p2', 'p3', 'p4']));
+    let daemonDiskState = null;
+    env.win.__agPrismSetting = (raw) => {
+      const msg = JSON.parse(raw);
+      if (msg.action === 'sidebar-projects-save') daemonDiskState = msg.state;
+      else if (msg.action === 'sidebar-projects-get' && daemonDiskState) {
+        env.win.__agPrismSidebarProjectsApply?.(daemonDiskState);
+      }
+    };
+    ctl.sync();
+    ctl.togglePinProject('p3', 'Gamma');
+    ctl.hideProject('p2', 'Beta');
+    assert.equal(storageMap.get('ag_prism_sidebar_projects_v1'), undefined, 'Must NEVER write custom keys into Antigravity app_storage.json');
+    assert.ok(daemonDiskState, 'Pin/hide state must be persisted via GravityPrism daemon bridge');
+    assert.deepEqual(daemonDiskState.pinned, ['p3']);
+    assert.deepEqual(daemonDiskState.hidden, ['p2']);
+    assert.deepEqual(daemonDiskState.baseOrder, ['p1', 'p2', 'p3', 'p4']);
+
+    // Simulate client restart on a new port: destroy old controller, wipe localStorage, daemon pushes sidebar-projects.json on attach
+    ctl.destroy();
+    const emptyLs = new Map();
+    env.win.localStorage = {
+      getItem: (k) => (emptyLs.has(k) ? emptyLs.get(k) : null),
+      setItem: (k, v) => emptyLs.set(k, String(v)),
+      removeItem: (k) => emptyLs.delete(k),
+    };
+    env.win.__agPrismSidebarProjectsInit = JSON.parse(JSON.stringify(daemonDiskState));
+    const ctl2 = enhancerMod.createHostEnhancerController({
+      doc: env.doc,
+      win: env.win,
+      getConfig: () => ({}),
+      getLang: () => 'en',
+      storageService: mockStorageService,
+      reduxStore: mockReduxStore,
+    });
+    try {
+      ctl2.sync();
+      const dbg = ctl2.getDebugState();
+      assert.deepEqual(dbg.pinnedProjects, ['p3'], 'Fresh session after restart must hydrate pinned projects from daemon sidebar-projects.json');
+      assert.deepEqual(dbg.hiddenProjects, ['p2'], 'Fresh session after restart must hydrate hidden projects from daemon sidebar-projects.json');
+      assert.equal(rowEls.get('header-p2').getAttribute('data-ag-proj-hidden'), '1', 'Hydrated hidden project must stay hidden after restart');
+      assert.equal(
+        rowEls.get('header-p3').querySelector('[data-testid="project-header-container"]').getAttribute('data-ag-proj-pinned'),
+        '1',
+        'Hydrated pinned project must stay pinned after restart'
+      );
+      // Unpinning after restart must still restore pre-pin baseOrder!
+      ctl2.togglePinProject('p3', 'Gamma');
+      assert.deepEqual(
+        JSON.parse(storageMap.get('projectsOrder')),
+        ['p1', 'p2', 'p3', 'p4'],
+        'Unpinning after restart must restore persisted baseOrder'
+      );
+      // Cross-window daemon push must update live state automatically
+      env.win.__agPrismSidebarProjectsApply({
+        pinned: ['p4'],
+        hidden: ['p1'],
+        baseOrder: ['p1', 'p2', 'p3', 'p4'],
+        labels: { p1: 'Alpha', p4: 'Delta' },
+      });
+      assert.deepEqual(ctl2.getDebugState().pinnedProjects, ['p4'], 'Cross-window daemon push must sync pinned projects');
+      assert.deepEqual(ctl2.getDebugState().hiddenProjects, ['p1'], 'Cross-window daemon push must sync hidden projects');
+    } finally {
+      ctl2.destroy();
+      assert.equal(env.win.__agPrismSidebarProjectsApply, undefined, 'destroy() must clean up __agPrismSidebarProjectsApply');
+      delete env.win.__agPrismSetting;
+    }
+  } finally {
+    ctl.destroy();
+  }
+});

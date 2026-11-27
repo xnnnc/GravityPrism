@@ -8675,8 +8675,90 @@ export class PrismDaemon {
       entry.healthyStreak = 1;
       entry.verifyDirty = false;
       entry.lastVerifiedCodeHash = this.codeHash || '';
+      void this._pushSidebarProjectsToEntry(entry, this.readSidebarProjectsState()).catch(() => {});
       return mainRes;
     });
+  }
+
+  _sanitizeSidebarProjectsState(raw) {
+    const empty = { pinned: [], hidden: [], baseOrder: [], labels: {} };
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return empty;
+    const normArr = (a) => {
+      if (!Array.isArray(a)) return [];
+      const out = [];
+      const seen = new Set();
+      for (const item of a) {
+        if (typeof item !== 'string') continue;
+        const s = item.trim();
+        if (!s || s.length > 128 || seen.has(s)) continue;
+        seen.add(s);
+        out.push(s);
+        if (out.length >= 200) break;
+      }
+      return out;
+    };
+    const labels = {};
+    if (raw.labels && typeof raw.labels === 'object' && !Array.isArray(raw.labels)) {
+      let n = 0;
+      for (const [k, v] of Object.entries(raw.labels)) {
+        if (typeof k !== 'string' || !k || k.length > 128 || typeof v !== 'string') continue;
+        labels[k] = v.slice(0, 160);
+        if (++n >= 300) break;
+      }
+    }
+    return {
+      pinned: normArr(raw.pinned),
+      hidden: normArr(raw.hidden),
+      baseOrder: normArr(raw.baseOrder),
+      labels,
+    };
+  }
+
+  _getSidebarProjectsPath() {
+    return path.join(this.rootDir, 'sidebar-projects.json');
+  }
+
+  readSidebarProjectsState() {
+    const empty = { pinned: [], hidden: [], baseOrder: [], labels: {} };
+    try {
+      const fp = this._getSidebarProjectsPath();
+      if (!fs.existsSync(fp)) return empty;
+      const st = fs.lstatSync(fp);
+      if (st.isSymbolicLink() || !st.isFile() || st.size > 32768) return empty;
+      return this._sanitizeSidebarProjectsState(JSON.parse(fs.readFileSync(fp, 'utf8')));
+    } catch {
+      return empty;
+    }
+  }
+
+  writeSidebarProjectsState(raw) {
+    try {
+      const clean = this._sanitizeSidebarProjectsState(raw);
+      const fp = this._getSidebarProjectsPath();
+      if (fs.existsSync(fp) && fs.lstatSync(fp).isSymbolicLink()) return null;
+      const tmp = `${fp}.tmp.${process.pid}.${Date.now()}`;
+      fs.writeFileSync(tmp, JSON.stringify(clean, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 });
+      fs.renameSync(tmp, fp);
+      return clean;
+    } catch {
+      return null;
+    }
+  }
+
+  async _pushSidebarProjectsToEntry(entry, state, executionContextId = null) {
+    if (!entry || !entry.session || entry.session.closed) return;
+    const json = serializeJsonForEval(this._sanitizeSidebarProjectsState(state));
+    const expr = `(() => { try { const s = ${json}; window.__agPrismSidebarProjectsInit = s; if (typeof window.__agPrismSidebarProjectsApply === 'function') window.__agPrismSidebarProjectsApply(s); } catch {} })()`;
+    const params = { expression: expr, returnByValue: false };
+    if (typeof executionContextId === 'number') params.contextId = executionContextId;
+    await entry.session.send('Runtime.evaluate', params, 2500).catch(() => {});
+  }
+
+  async _broadcastSidebarProjects(state, excludeEntry = null) {
+    for (const other of this.sessions.values()) {
+      if (!other || other === excludeEntry || other.session?.closed) continue;
+      await this._pushSidebarProjectsToEntry(other, state);
+    }
   }
 
   async handleBindingCall(entry, { name, payload, executionContextId }) {
@@ -8689,10 +8771,20 @@ export class PrismDaemon {
       if (!this._isTrustedMainFrameBindingCall(entry, executionContextId)) return;
     }
     if (name === this.cdp.SETTING_BINDING || name === this.cdp.LEGACY_SETTING_BINDING) {
-      if (typeof payload !== 'string' || payload.length > 8192) return;
+      if (typeof payload !== 'string' || payload.length > 24576) return;
       try {
         const parsed = JSON.parse(payload);
         if (!parsed || typeof parsed !== 'object') return;
+        if (parsed.action === 'sidebar-projects-get') {
+          await this._pushSidebarProjectsToEntry(entry, this.readSidebarProjectsState(), executionContextId);
+          return;
+        }
+        if (parsed.action === 'sidebar-projects-save') {
+          const saved = this.writeSidebarProjectsState(parsed.state);
+          if (saved) await this._broadcastSidebarProjects(saved, entry);
+          return;
+        }
+        if (payload.length > 8192) return;
         if (parsed.action === 'request-settings-panel') {
           await this._deliverSettingsChannelToEntry(entry, executionContextId);
           return;
