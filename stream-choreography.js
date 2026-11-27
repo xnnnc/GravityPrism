@@ -1313,6 +1313,9 @@
         }
         if (!d) return;
         for (const el of qsa(d, '[data-ag-cs-thought-streaming]')) ra(el, 'data-ag-cs-thought-streaming');
+        if ((isDestroyed() || typeof isConvRunning !== 'function' || !isConvRunning()) && d.documentElement && ha(d.documentElement, 'data-ag-cs-stream-active')) {
+          ra(d.documentElement, 'data-ag-cs-stream-active');
+        }
         if (!isMotionUltra()) {
           for (const el of qsa(d, '.ag-cs-liftoff-veil')) el.remove();
           for (const attr of [
@@ -1540,7 +1543,13 @@
     };
 
     const syncDualStreamEngine = () => {
-      const active = canStreamMotion() && isConvRunning();
+      const running = isConvRunning();
+      const rootEl = docOf()?.documentElement;
+      if (rootEl) {
+        if (running) setAttrIfChanged(rootEl, 'data-ag-cs-stream-active', '1');
+        else if (ha(rootEl, 'data-ag-cs-stream-active')) ra(rootEl, 'data-ag-cs-stream-active');
+      }
+      const active = canStreamMotion() && running;
       const views = active ? findFormalConvViews() : [];
       if (!active || views.length === 0) {
         if (streamObs) {
@@ -1714,6 +1723,8 @@
         streamObs = null;
         streamRoots.clear();
       }
+      const rootEl = docOf()?.documentElement;
+      if (rootEl && ha(rootEl, 'data-ag-cs-stream-active')) runGuardedMut(() => ra(rootEl, 'data-ag-cs-stream-active'));
       flushAllStreamArtifacts(true);
     };
 

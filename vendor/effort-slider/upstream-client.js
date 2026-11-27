@@ -2543,6 +2543,7 @@ if (tr && doc.activeElement === tr && !(tr.matches && tr.matches(":hover"))) tr.
 }
 function onTrigLeave(ev) {
 try {
+if (!doc.activeElement || doc.activeElement === doc.body) return;
 var tr = ev?.target?.closest?.('[data-testid="model-selector-trigger"],button[aria-label^="Select model"]');
 if (tr && doc.activeElement === tr && (!ev.relatedTarget || !tr.contains(ev.relatedTarget))) tr.blur?.();
 } catch {}
@@ -2738,7 +2739,7 @@ scan();
 var MO = opts.MutationObserver || win?.MutationObserver || (typeof MutationObserver === "function" ? MutationObserver : null);
 if (typeof MO === "function") {
 var ctrlSel = '[data-testid="model-selector-trigger"],button[aria-label^="Select model"],[data-testid="model-selector-panel"],[role="menu"]';
-var noiseSel = '[data-testid="autoscroll-viewport"],.toast-viewport,[data-testid="sidebar-split"]>div:first-child,aside,[data-hover-card-popup]';
+var noiseSel = '[data-testid="autoscroll-viewport"],.toast-viewport,[data-testid="sidebar-split"]>div:first-child,aside,[data-hover-card-popup],[data-testid="conversation-list-sidebar"],[data-testid="conversation-row-sidebar"],[data-lexical-editor="true"],[contenteditable="true"],[data-testid="subagent-tab-conversation"],[data-side-panel-body]';
 observer = new MO((recs) => {
 if (_intMut) return;
 if (Array.isArray(recs) && recs.length) {

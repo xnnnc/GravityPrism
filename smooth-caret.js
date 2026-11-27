@@ -424,6 +424,7 @@
       applyMutations,
       sync,
       queue,
+      isQueued: () => Boolean(caretRaf),
     };
   }
 

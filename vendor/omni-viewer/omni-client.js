@@ -2804,14 +2804,14 @@
         if (!sawExplicitScan && cur.getAttribute?.('role') === 'dialog') {
           return true;
         }
-        if (cur.hasAttribute?.('data-hover-card-popup') || cur.tagName === 'ASIDE') return true;
+        if (cur.hasAttribute?.('data-hover-card-popup') || cur.tagName === 'ASIDE' || cur.isContentEditable || cur.getAttribute?.('contenteditable') === 'true' || cur.getAttribute?.('data-lexical-editor') === 'true' || cur.hasAttribute?.('data-floating-composer')) return true;
         if (d === 0) {
           const f = cur.firstElementChild;
           if (f?.hasAttribute?.('data-hover-card-popup') || f?.firstElementChild?.hasAttribute?.('data-hover-card-popup')) return true;
           if (cur.hasAttribute?.('data-base-ui-portal') && cur.querySelector?.('[data-hover-card-popup]')) return true;
         }
         const tid = cur.getAttribute?.('data-testid');
-        if (tid === 'agent-input-box' || tid === 'conversation-row-sidebar' || tid === 'conversation-list-sidebar' || tid === 'project-header') return true;
+        if (tid === 'agent-input-box' || tid === 'conversation-row-sidebar' || tid === 'conversation-list-sidebar' || tid === 'project-header' || (tid && tid.indexOf('floating-composer') !== -1)) return true;
         if (cur.parentElement?.getAttribute?.('data-testid') === 'sidebar-split' && cur === cur.parentElement.firstElementChild) return true;
         const cls = typeof cur.className === 'string' ? cur.className : '';
         if (

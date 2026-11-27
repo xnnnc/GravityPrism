@@ -2,7 +2,7 @@
   if (typeof module === 'object' && module.exports) module.exports = factory;
   else root.__agCsUiMain = factory;
 })(typeof globalThis !== 'undefined' ? globalThis : window, function (initialConfig) {
-  const VERSION = '1.2.3';
+  const VERSION = '1.2.4';
   const D = document, W = window, GT = globalThis, ST = setTimeout, CT = clearTimeout, O = Object, AF = Array.from, SJ = JSON.stringify, LS = typeof localStorage !== 'undefined' ? localStorage : null;
   const LEGACY_API_VERSION = 3;
   const CODE_HASH = initialConfig?.codeHash || '';
@@ -1257,10 +1257,19 @@
     if (p.og) { const h = de(); if (p.tko) setAttrIfChanged(h, A_TKO, '1'); else if (ha(h, A_TKO)) ra(h, A_TKO); }
   };
 
-  const S_CV = '[data-testid="conversation-view"]', S_CC = '.surface-composer-card';
+  const S_CV = '[data-testid="conversation-view"]', S_CC = '.surface-composer-card', S_FLT = '[data-testid="floating-composer"],[data-testid="floating-composer-pill"],[data-testid="floating-composer-card"],[data-floating-composer],[data-side-panel-body],[data-side-panel-focus-scope="true"]', S_AUX_C = `${S_SUB},${S_FLT}`;
   let activePaneCard = null, activeConvView = null, lastNotifiedPaneCard = null, lastNotifiedConvView = null;
   const lastModelByCard = new WeakMap();
-  const isLiveMainCard = (c) => !!(c && c[K_IC] !== false && !cl(c, S_SUB) && !c.hidden && c.style?.display !== 'none');
+  const isFloatingCard = (c) => {
+    if (!c || cl(c, S_SUB)) return false;
+    if (cl(c, S_FLT)) return true;
+    for (let cur = c, d = 0; cur && d < 6; d++, cur = cur[K_PE]) {
+      const tid = ga(cur, 'data-testid');
+      if (tid && tid.indexOf('floating-composer') !== -1) return true;
+    }
+    return false;
+  };
+  const isLiveMainCard = (c) => !!(c && c[K_IC] !== false && !cl(c, S_AUX_C) && !isFloatingCard(c) && !c.hidden && c.style?.display !== 'none');
   const isLiveMainConv = (v) => !!(v && v[K_IC] !== false && !cl(v, S_SUB) && !v.hidden && v.style?.display !== 'none' && !cl(v, '.agy-home') && !qs(v, '.agy-home'));
   const findCardForTarget = (t) => {
     if (!t?.closest) return null;
@@ -1306,8 +1315,8 @@
     if (!cards?.length) { activePaneCard = null; if (activeConvView && !isLiveMainConv(activeConvView)) activeConvView = null; return null; }
     if (activePaneCard && cards.includes(activePaneCard) && isLiveMainCard(activePaneCard)) return activePaneCard;
     const ac = findCardForTarget(D.activeElement);
-    const pick = (ac && cards.includes(ac) ? ac : null) || cards.find((c) => !cl(c, S_SUB)) || cards[0] || null;
-    activePaneCard = pick && !cl(pick, S_SUB) ? pick : null;
+    const pick = (ac && cards.includes(ac) ? ac : null) || cards.find((c) => !cl(c, S_AUX_C)) || cards[0] || null;
+    activePaneCard = pick && !cl(pick, S_AUX_C) ? pick : null;
     const cv = findConvForTarget(activePaneCard, activePaneCard);
     if (cv) activeConvView = cv; else if (activeConvView && !isLiveMainConv(activeConvView)) activeConvView = null;
     return pick;
@@ -1369,27 +1378,29 @@
   function syncComposers(measured, skipSparks = false) {
     const cPlan = measured?.cPlan || measureCrabClearanceAll(), { cards, primaryCard, primaryConv } = cPlan, ui = uiText(getLang()), mascotOn = isMascotEnabled(), hs = streamChoreoCtl.heroState;
     if (!measured) syncModelMenuRootAttrs(qs(D, MODEL_PANEL_SEL));
-    if (!primaryCard || cl(primaryCard, S_SUB)) { const h = de(); if (ha(h, A_TKO)) ra(h, A_TKO); }
+    if (!primaryCard || cl(primaryCard, S_AUX_C)) { const h = de(); if (ha(h, A_TKO)) ra(h, A_TKO); }
     const inHomeCtx = !!qs(D, '.agy-home'), basePathCtx = (inHomeCtx ? 'H:' : 'C:') + (W.location?.pathname || ''), paneModelMap = new Map();
     let primaryModelInfo = null;
     for (const card of cards) {
-      const inputBox = cl(card, S_IB), zLayer = cl(inputBox, '.z-10'), isPrimary = card === primaryCard, inSubCard = !!cl(card, S_SUB);
-      if (zLayer) setAttrIfChanged(zLayer, 'data-ag-cs-input-layer', '1');
-      const wantPrismBox = !inSubCard && cfg.composerRestyle !== false && !card.hidden && card.style?.display !== 'none';
+      const inputBox = cl(card, S_IB), zLayer = cl(inputBox, '.z-10'), isPrimary = card === primaryCard, inSubCard = !!cl(card, S_SUB), inFloatCard = !inSubCard && isFloatingCard(card), inAuxCard = inSubCard || inFloatCard;
+      if (inFloatCard) setAttrIfChanged(card, 'data-ag-cs-floating-composer', '1');
+      else if (ha(card, 'data-ag-cs-floating-composer')) ra(card, 'data-ag-cs-floating-composer');
+      if (zLayer && !inFloatCard) setAttrIfChanged(zLayer, 'data-ag-cs-input-layer', '1');
+      const wantPrismBox = !inAuxCard && cfg.composerRestyle !== false && !card.hidden && card.style?.display !== 'none';
       if (wantPrismBox) {
         if (ga(card, A_PB) !== '1') prismRimCtl.markDirty();
         setAttrIfChanged(card, A_PB, '1');
       } else if (ha(card, A_PB)) {
         ra(card, A_PB); rp(card, '--ag-px'); rp(card, '--ag-py'); invRim();
       }
-      syncCrabClearance(card, inputBox, mascotOn && isPrimary, isPrimary, cPlan.byCard.get(card) || null);
+      if (!inFloatCard) syncCrabClearance(card, inputBox, mascotOn && isPrimary, isPrimary, cPlan.byCard.get(card) || null);
       const p = qs(card, 'div.relative.w-full p.pointer-events-none');
       if (p) {
-        if (cfg.composerRestyle !== false && cfg.placeholderStyle === 'studio') setAttrIfChanged(p, 'data-ag-cs-placeholder', ui.studioPlaceholder || 'How can I help you today?');
+        if (!inFloatCard && cfg.composerRestyle !== false && cfg.placeholderStyle === 'studio') setAttrIfChanged(p, 'data-ag-cs-placeholder', ui.studioPlaceholder || 'How can I help you today?');
         else if (ha(p, 'data-ag-cs-placeholder')) ra(p, 'data-ag-cs-placeholder');
       }
       const modelBtn = qs(card, '[data-testid="model-selector-trigger"]'), mInfo = modelGlyphCtl.syncModelGlyphOnButton(modelBtn);
-      if (mInfo && !inSubCard) {
+      if (mInfo && !inAuxCard) {
         if (isPrimary) primaryModelInfo = mInfo;
         const cardCv = cl(card, S_CV), cardPane = cl(card, '[data-tiling-pane]'), paneBrand = mInfo.brand || 'gemini';
         if (cardCv) { setAttrIfChanged(cardCv, 'data-ag-cs-pane-camp', paneBrand); paneModelMap.set(cardCv, mInfo); }
@@ -2004,6 +2015,13 @@
 
     if (isHcEl(el) || (!parentCtx && cl(el, HC_S))) return;
 
+    if (parentCtx?.inSR && tid !== 'conversation-row-sidebar' && tid !== 'breadcrumb-segment' && tid !== 'conversation-row-history') {
+      if (tid === 'status-loading-spinner' || tid.includes('stop') || tid.includes('cancel') || cls.includes('lucide-square') || cls.includes('lucide-circle-stop') || q('[data-testid="status-loading-spinner"],.lucide-square,.lucide-circle-stop')) {
+        dirtyFlags.s = true;
+      }
+      return;
+    }
+
     if (tid === 'aux-pane-split' || q('[data-testid="aux-pane-split"]')) dirtyFlags.a = true;
 
     if (tid === 'background-task-command') {
@@ -2051,7 +2069,7 @@
       }
 
       if (COMP_TIDS.has(tid) || cls.includes('surface-composer-card') || ancComp || q(`${S_IB}, [data-testid="input-cancel-button"], ${TK_SEL}, [data-testid="queued-messages-card"], .surface-composer-card`)) {
-        dirtyFlags.c = dirtyFlags.r = true;
+        dirtyFlags.c = true;
         if (isAdded) touchedButtons = true;
       }
 
@@ -2163,7 +2181,7 @@
     const sidebarSnap = flags.f || flags.s || flags.r ? streamChoreoCtl.measureSidebarSelectionSnapshot() : null;
     const visibleChangedHeaders = !isAsyncConvEntry && (flags.f || flags.cf || flags.r) ? streamChoreoCtl.measureVisibleChangedHeaders() : [];
     const lensOverlays = (flags.f || flags.o) && isMotionStandardOrUltra() ? streamChoreoCtl.measureNewLensOverlays() : [];
-    const caretList = !isAsyncConvEntry && (flags.f || flags.c) && cfg.smoothCaret !== false ? smoothCaretCtl.measureSnapshot(false, false) : null;
+    const caretList = !isAsyncConvEntry && (flags.f || flags.c) && cfg.smoothCaret !== false && !smoothCaretCtl.isQueued?.() ? smoothCaretCtl.measureSnapshot(false, false) : null;
     const modelPanelNow = isFullSync || flags.c || flags.o ? qs(D, MODEL_PANEL_SEL) : null;
     const modelOverlayChanged = !!(flags.o) && (!!modelPanelNow || hadModelPanelOpen);
     const cPlan = isFullSync || flags.c || modelOverlayChanged ? measureCrabClearanceAll() : null;
@@ -2324,7 +2342,7 @@
         syncPopupOverlayMirrors();
       }
 
-      if (routeJumped || flags.r || flags.c || flags.o) {
+      if (routeJumped || flags.r || flags.o) {
         prismRimCtl.markDirty();
       }
 
@@ -2822,7 +2840,7 @@
             pCtx = ctxCache.get(tgt);
             if (!pCtx) {
               pCtx =
-                isThoughtIsolatedNode(tgt) || isOwnPluginNode(tgt) || isHoverCardNode(tgt)
+                isThoughtIsolatedNode(tgt) || isOwnPluginNode(tgt) || isHoverCardNode(tgt) || cl(tgt, '[data-lexical-editor="true"],[contenteditable="true"],textarea,input')
                   ? { skip: true }
                   : {
                       skip: false,
@@ -2838,7 +2856,6 @@
             if (pCtx.skip) continue;
             if (tidOf(tgt) === 'aux-pane-split') dirtyFlags.a = anyRelevant = true;
           }
-          const inComposerBox = !!(pCtx && pCtx.inComp);
           const scanList = (list, isAdd) => {
             if (!list || !list.length) return;
             for (let j = 0; j < list.length; j++) {
@@ -2848,7 +2865,6 @@
                 streamChoreoCtl.stampSidebarRowRunningImmediate?.(node);
               }
               classifyDirtySubtree(node, isAdd, pCtx);
-              if (inComposerBox) dirtyFlags.c = dirtyFlags.r = true;
               anyRelevant = true;
             }
           };
@@ -3084,7 +3100,7 @@
       qa(D, `[${A_Q}],[${A_TK}]`).forEach((e) => { ra(e, A_Q); ra(e, A_TK); rp(e, 'margin-bottom'); });
       qa(D, '[data-ag-row-stagger]').forEach((e) => { ra(e, 'data-ag-row-stagger'); rp(e, '--ag-row-i'); });
       qa(D, '.agy-overlay,.agy-fastpick,[data-testid="context-menu-popup"],[data-testid="context-menu-submenu-popup"],[data-ag-cs-overview-shell]').forEach((e) => { rp(e, '--ag-origin-x'); rp(e, '--ag-origin-y'); });
-      for (const s of 'placeholder|orch-active|model-overlay|aux-dual|overview-shell|prism-mirror|prism-reflect|settings-dlg|settings-nav|nav-active|conv-seat|conv-ripple-host|vp-wrap|home-sheet|row-running|menu-open|auto-unfolded|outer-open|caustic|fiber-camp|pane-camp|sonar|stage-glide|liftoff-bubble|thought-streaming|spark-streaming|prism-cv|code-folded|bg-cmd-wrap|input-layer|hdr-open|rich-pre|glide-item|crab-anchor|bleed'.split('|')) {
+      for (const s of 'placeholder|orch-active|model-overlay|aux-dual|overview-shell|prism-mirror|prism-reflect|settings-dlg|settings-nav|nav-active|conv-seat|conv-ripple-host|vp-wrap|home-sheet|row-running|menu-open|auto-unfolded|outer-open|caustic|fiber-camp|pane-camp|sonar|stage-glide|liftoff-bubble|thought-streaming|spark-streaming|prism-cv|code-folded|bg-cmd-wrap|input-layer|hdr-open|rich-pre|glide-item|crab-anchor|bleed|floating-composer'.split('|')) {
         const a = 'data-ag-cs-' + s;
         qa(D, `[${a}]`).forEach((e) => ra(e, a));
       }
@@ -3092,7 +3108,7 @@
       qa(D, '#ag-prism-settings-v101-css,#ag-prism-studio-v101-css,#ag-prism-omni-css,#ag-prism-motion-off-css,#ag-prism-periodic-picker-css,#ag-prism-periodic-picker-root,.ag-pp-hold-ring,.ag-pp-mini-keycap,#ag-prism-wallpaper-root,#ag-prism-wallpaper-css,#ag-prism-suggester-css,.ag-omni-dock,.ag-omni-menu,.ag-prism-omni-menu,.ag-prism-omni-pane,.ag-cs-ctx-menu,.ag-cs-ctx-toast,.ag-cs-sb-more-wrap,[data-ag-prism-omni-owned="1"],.ag-cs-home-panel,.ag-cs-home-panel-seat,.ag-cs-liftoff-veil,.ag-cs-sidebar-glide-pill,.ag-cs-pill-glide,.ag-cs-conv-aura-host,.ag-cs-conv-glow,.ag-cs-prism-rim-cv,.ag-cs-code-fold-btn,.ag-cs-nav-outline-popover,.ag-cs-model-glyph,.ag-cs-panel-row-glyph,[data-testid="orchestrator-effort-bar"],.ag-cs-thinking-spark,.ag-cs-orbital-backdrop,.ag-cs-perf-backdrop,.ag-v2-habitat-prop,#' + SETTINGS_SEC_ID).forEach((e) => e.remove());
       const html = de();
       if (html) {
-        for (const s of 'style|theme|palette|light-preset|motion|target-fps|telemetry|effort-slider|thought-translate|home|composer|logo-ink|sidebar|sidebar-compact|sidebar-collapsed|sb-fold|has-crab|model-menu|takeover-open|lang|cjk|accent|corners|code-font|ligatures|ambient|win-blur|scroll-bottom|resizing|mascot-drag|conv-ripple'.split('|')) ra(html, 'data-ag-cs-' + s);
+        for (const s of 'style|theme|palette|light-preset|motion|target-fps|telemetry|effort-slider|thought-translate|home|composer|logo-ink|sidebar|sidebar-compact|sidebar-collapsed|sb-fold|has-crab|model-menu|takeover-open|lang|cjk|accent|corners|code-font|ligatures|ambient|win-blur|scroll-bottom|resizing|mascot-drag|conv-ripple|stream-active'.split('|')) ra(html, 'data-ag-cs-' + s);
         for (const s of '|thought-view|omni|link-target|sidebar-studio|sidebar-host-sync'.split('|')) ra(html, s ? 'data-ag-prism-' + s : 'data-ag-prism');
         rp(html, '--ag-spring-sidebar-ease'); rp(html, '--ag-spring-sidebar-dur');
       }

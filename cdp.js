@@ -8,7 +8,7 @@ const { execFile, execFileSync, spawn } = require('child_process');
 
 const STYLE_ID = 'ag-prism-css';
 const LEGACY_STYLE_ID = 'ag-claude-style-css';
-const PLUGIN_VERSION = '1.2.3';
+const PLUGIN_VERSION = '1.2.4';
 const SETTING_BINDING = '__agPrismSetting';
 const LEGACY_SETTING_BINDING = '__agClaudeStyleSetting';
 const OMNI_BINDING = '__agPrismOmniCall';
@@ -4318,7 +4318,7 @@ function packLzssJsExpr(text, protectFirstList = []) {
   const tokStart = bestStart;
   const tokEnd = bestStart + bestLen;
   const BASE = LZSS_SAFE_ASCII.length; // 89
-  const shortSlots = Math.floor(bestLen * 0.72);
+  const shortSlots = Math.floor(bestLen * 0.50);
   const longBase = tokStart + shortSlots;
   const longSlots = bestLen - shortSlots;
   const shortMaxDist = Math.floor((shortSlots * BASE) / 24);
@@ -4387,7 +4387,7 @@ function packLzssJsExpr(text, protectFirstList = []) {
     }
     const c1 = text.charCodeAt(pos + 1);
     const c2 = text.charCodeAt(pos + 2);
-    while (cur >= 0 && pos - cur <= longMaxDist && steps < 384) {
+    while (cur >= 0 && pos - cur <= longMaxDist && steps < 768) {
       steps++;
       if (
         text.charCodeAt(cur) === c0 &&
@@ -5510,7 +5510,7 @@ function mangleSafeLocals(tokens) {
       continue;
     }
     if (JS_KEYWORDS.has(name)) {
-      if (name !== 'in' && name !== 'of' && name !== 'typeof' && name !== 'void' && name !== 'new' && name !== 'await' && name !== 'extends') {
+      if (name !== 'in' && name !== 'of' && name !== 'typeof' && name !== 'void' && name !== 'new' && name !== 'await' && name !== 'extends' && name !== 'null' && name !== 'true' && name !== 'false' && name !== 'this' && name !== 'instanceof' && name !== 'delete') {
         declDepths.delete(bStack.length);
         pendingBraceKind = '';
       }
@@ -5760,7 +5760,9 @@ function mangleSafeLocals(tokens) {
     }
     const closeIdx = j - 1;
     const afterClose = j < sig.length ? sig[j] : null;
-    if (isFnParams || (afterClose && afterClose.val === '=>')) {
+    const enc = scanStack.length >= 2 ? scanStack[scanStack.length - 2] : '';
+    const isMethodParams = Boolean((enc === '{_obj' || enc === '{_cls') && afterClose && afterClose.val === '{' && prev && prev.type === 'id' && !JS_KEYWORDS.has(prev.val));
+    if (isFnParams || isMethodParams || (afterClose && afterClose.val === '=>')) {
       const bodyScopeDepth = scanBlockDepth + 1;
       paramOpenIndices.add(i);
       if (closeIdx > i) paramCloseIndices.add(closeIdx);
@@ -5891,14 +5893,14 @@ function mangleSafeLocals(tokens) {
     if (unsafe.has(name)) continue;
     const c = counts.get(name) || 0;
     const sh = shorthandCounts.get(name) || 0;
-    const estSave = (c - sh) * (name.length - 2) - sh * 3;
-    if (estSave >= 3) candidates.push({ name, c, sh, estSave });
+    const estSave = (c - sh) * (name.length - 1) - sh * 2;
+    if (estSave >= 1) candidates.push({ name, c, sh, estSave });
   }
   candidates.sort((a, b) => (b.c - b.sh) - (a.c - a.sh) || b.estSave - a.estSave);
 
   const renameMap = new Map();
   for (const cand of candidates) {
-    const useSingle = cand.c - cand.sh >= 14;
+    const useSingle = cand.c - cand.sh >= 4;
     const short = useSingle ? nextShortName() : nextTwoCharName();
     const realSave = (cand.c - cand.sh) * (cand.name.length - short.length) - cand.sh * (1 + short.length);
     if (realSave >= 2) {
@@ -12333,6 +12335,7 @@ const REMOVE_EXPRESSION = `(() => {
       'data-ag-prism-wallpaper-hole',
       'data-ag-prism-suggester',
       'data-ag-proj-dragging',
+      'data-ag-cs-stream-active',
     ].forEach((attr) => root.removeAttribute(attr));
     if (root.getAttribute('data-ag-cjk') === '1') root.removeAttribute('data-ag-cjk');
     if (root.style && typeof root.style.removeProperty === 'function') {
@@ -12402,6 +12405,7 @@ const REMOVE_EXPRESSION = `(() => {
     'data-ag-cs-prism-cv',
     'data-ag-cs-prism-mirror',
     'data-ag-cs-prism-reflect',
+    'data-ag-cs-floating-composer',
     'data-ag-cs-settings-dlg',
     'data-ag-cs-settings-nav',
     'data-ag-cs-nav-active',

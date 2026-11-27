@@ -327,6 +327,7 @@
       if (!panel) return;
       for (const row of qa(panel, '[role="menuitem"], [role="option"], button')) {
         if (cl(row, '.ces-ag-section, [data-testid="orchestrator-effort-bar"]') || cl(row[K_PE], '[role="menuitem"], [role="option"], button')) continue;
+        if (ha(row, 'data-base-ui-tooltip-trigger') || /\b(?:info|tooltip|description)\b/i.test(ga(row, 'aria-label') || '')) continue;
         const label = readButtonLabelWithoutGlyph(row);
         if (!PANEL_MODEL_ROW_RE.test(label)) { clearPanelRowGlyphs(row); continue; }
         const info = parseModelLabelInfo(label), isSelected = isPanelRowSelected(row);

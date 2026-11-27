@@ -491,7 +491,14 @@
     const cancelPendingRaf = () => { if (prismRaf) { typeof cancelAnimationFrame === 'function' && cancelAnimationFrame(prismRaf); prismRaf = 0; } };
 
     const SB_SEL = 'aside,[data-testid="sidebar-split"]>div:first-child,[data-testid="conversation-row-sidebar"],[data-testid="project-header"],[data-hover-card-popup]';
-    const inSb = (t) => { try { return !!t?.closest?.(SB_SEL); } catch { return false; } };
+    let lastSbT = null, lastSbR = false;
+    const inSb = (t) => {
+      if (!t) return false;
+      if (t === lastSbT) return lastSbR;
+      lastSbT = t;
+      try { lastSbR = !!t.closest?.(SB_SEL); } catch { lastSbR = false; }
+      return lastSbR;
+    };
 
     const onPointerMove = (ev) => {
       if (isDestroyed() || isWB()) return;

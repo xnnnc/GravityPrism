@@ -2363,6 +2363,7 @@
     let pLastCtx = null;
     let pDrag = null;
     let pSkipClickUntil = 0;
+    let pHasAppliedLayout = false;
     const pZeroedKeys = new Set();
 
     const savePS = () => {
@@ -2744,6 +2745,7 @@
     };
     const applyProjLayout = (sb) => {
       if (!sb || pInLayout) return;
+      if (!projState.hidden.length && !projState.pinned.length && !pHasAppliedLayout) return;
       const list = sb.firstElementChild;
       const rows = scanRows(sb, false);
       if (!list || !rows.length) return;
@@ -2831,6 +2833,7 @@
         });
       } finally { pInLayout = false; }
       syncVirtSizes(sb, hSet);
+      pHasAppliedLayout = rem > 0 || reord || pZeroedKeys.size > 0;
     };
     const decorateProjHeaders = (sb) => {
       if (!sb || !doc) return [];
@@ -2923,7 +2926,25 @@
         pList = list || null;
         if (list && win?.MutationObserver) {
           try {
-            pMo = new win.MutationObserver(() => { if (!isDead() && !pInLayout) schedPSync(false); });
+            pMo = new win.MutationObserver((recs) => {
+              if (isDead() || pInLayout) return;
+              if (Array.isArray(recs) && recs.length) {
+                const rel = recs.some((r) => {
+                  const t = r?.target;
+                  if (!t) return false;
+                  if (r.type === 'attributes') return t === list || t.parentElement === list;
+                  if (r.type === 'childList') {
+                    if (t === list) return true;
+                    const el = t.nodeType === 1 ? t : t.parentElement;
+                    if (!el || cl(el, '[data-testid="conversation-row-sidebar"]')) return false;
+                    return el.parentElement === list || Boolean(cl(el, S_PHC + ',' + S_SH));
+                  }
+                  return false;
+                });
+                if (!rel) return;
+              }
+              schedPSync(false);
+            });
             pMo.observe(list, { childList: true, subtree: true, attributes: true, attributeFilter: ['style'] });
           } catch {}
         }
@@ -3201,7 +3222,7 @@
       lastSyncedLang = curLang;
       if (isFull || flags.c || flags.l || flags.r || flags.s) syncCascadeChange(true);
       if (isFull || flags.t || flags.r || flags.l) syncSidecarThemeBridge(false);
-      if (isFull || flags.c || flags.l || flags.b || flags.r || flags.t || langChanged) {
+      if (isFull || flags.l || flags.b || flags.r || flags.t || langChanged) {
         syncCodeBlocks();
         syncNavRails();
         syncStickyStreamScroll();
@@ -3219,7 +3240,7 @@
       if (isFull || flags.g || flags.o || flags.r) {
         syncSettingsDialogChrome(doc, mut, setA);
       }
-      if (isFull || flags.c || flags.l || flags.b || flags.r || flags.t || langChanged) {
+      if (isFull || flags.l || flags.b || flags.r || flags.t || langChanged) {
         try {
           win?.__agPrismInlineDiff?.sync?.(getConfig(), {
             t: tFn,
@@ -3291,6 +3312,7 @@
       }
       pSb = null;
       pList = null;
+      pHasAppliedLayout = false;
 
       if (win && typeof win.removeEventListener === 'function') {
         try {

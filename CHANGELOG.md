@@ -5,6 +5,25 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 本项目遵循语义化版本（SemVer）规范，记录各正式版本的新增功能、架构变更、安全加固与缺陷修复。
 
+## [1.2.4] - 2026-11-27
+
+> **GravityPrism `v1.2.4`**: **Antigravity v2.36.0** Maximized Side Panel **Floating Composer** uyumluluğu, iki yan panelde yazarken yaşanan **giriş/kasma gecikmesi** düzeltmeleri ve sol kenar çubuğunda sohbetler üzerinde hızlı gezinirken oluşan **hover kasma** sorunlarının komple çözümü.
+
+### Yenilikler & Uyumluluk
+- **Antigravity v2.36.0 Floating Composer Uyumluluğu ([ui-runtime.js](./ui-runtime.js), [style.css](./style.css), [vendor/pulse-dashboard/inline-fallback.js](./vendor/pulse-dashboard/inline-fallback.js), [vendor/omni-viewer/omni-client.js](./vendor/omni-viewer/omni-client.js), [model-glyph-crystal.js](./model-glyph-crystal.js)):**
+  - Maximized Side Panel'daki yeni Floating Composer pill ve açılır composer kartları (`data-ag-cs-floating-composer="1"`) ana sohbet composer'ından izole edildi; maskot, prizma kenar canvas'ı ve Pulse çubuğu çakışmaları engellenirken mevcut tüm GravityPrism temalarının yüzey değişkenleriyle uyumlu kompakt görünüm eklendi.
+  - v2.36.0 model seçicideki yeni bağımsız bilgi (`info` / `data-base-ui-tooltip-trigger`) düğmelerine yanlışlıkla model glifi eklenmesi engellendi.
+
+### Performans Düzeltmeleri
+- **İki Yan Panelde Yazarken Sıfır Kasma ([ui-runtime.js](./ui-runtime.js), [host-workbench-enhancer.js](./host-workbench-enhancer.js), [smooth-caret.js](./smooth-caret.js), [stream-choreography.js](./stream-choreography.js), [vendor/effort-slider/upstream-client.js](./vendor/effort-slider/upstream-client.js), [vendor/pulse-dashboard/inline-fallback.js](./vendor/pulse-dashboard/inline-fallback.js), [vendor/omni-viewer/omni-client.js](./vendor/omni-viewer/omni-client.js)):**
+  - `[data-lexical-editor="true"]` ve `[contenteditable="true"]` içindeki yazma mutasyonları tüm gözlemcilerde (UI Runtime, Effort Slider, Pulse Fallback, Omni Viewer) erken elenerek her tuş vuruşunda `runSync()` / React Fiber / DOM tarama zinciri tamamen durduruldu.
+  - Composer-only mutasyonlarında gereksiz `prismRimCtl.markDirty()`, kod bloğu/nav-rail/sticky-scroll ve satır içi diff taramaları kaldırıldı; `smooth-caret` aktif yazma geçişi `18ms` olarak hızlandırıldı ve çift ölçüm engellendi.
+  - `stream-choreography.js` akış sırasında `html[data-ag-cs-stream-active="1"]` özniteliğini bağlayarak Omni Viewer'ın akış hız sınırlamasını yeniden etkinleştirdi.
+- **Sol Kenar Çubuğu Hızlı Hover Kasma Düzeltmesi ([host-workbench-enhancer.js](./host-workbench-enhancer.js), [ui-runtime.js](./ui-runtime.js), [motion-engine.js](./motion-engine.js), [prism-rim-canvas.js](./prism-rim-canvas.js), [vendor/inline-diff/inline-diff-client.js](./vendor/inline-diff/inline-diff-client.js), [vendor/effort-slider/upstream-client.js](./vendor/effort-slider/upstream-client.js)):**
+  - Sidebar proje gözlemcisi (`pMo`) `[data-testid="conversation-row-sidebar"]` içi hover buton/stil mutasyonlarını görmezden gelecek şekilde filtrelendi ve pinlenmiş/gizlenmiş proje yokken `applyProjLayout()` sıfır forced-reflow ile erken çıkış yapacak hale getirildi.
+  - `classifyDirtySubtree` sidebar satırları için hızlı çıkışa alındı; `motion-engine`, `prism-rim-canvas`, `inline-diff` ve `effort-slider` pointer dinleyicilerindeki tekrarlı `closest()` yürüyüşleri önbelleklenip sadeleştirildi.
+- **Channel 1 Paket Bütçesi & Derleyici Düzeltmesi ([cdp.js](./cdp.js)):** `mangleSafeLocals` içindeki virgüllü `let/var/const` (`null`/`true`/`false`) ve method parametre tarama eksikleri giderilerek tüm 9 dilde Channel 1 paketi yeniden `< 580,000 B` bütçesine indirildi.
+
 ## [1.2.3] - 2026-11-27
 
 > **GravityPrism `v1.2.3`**: Sol kenar çubuğuna kalıcı **Proje Pinleme & Gizleme**, `900px` geniş sohbet/mesaj düzeni, Gemini 4 Neon + Orchestrator ortak 4 renkli Spark simgesi ve pürüzsüz proje sürükle-bırak sıralama düzeltmesi ekler.

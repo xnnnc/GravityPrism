@@ -1305,13 +1305,20 @@
       return true;
     }
 
+    const DIFF_HIT_SEL = '[data-testid="diff-line-count"],[data-ag-diff-chip="1"],.ag-cs-inline-diff-box';
+    const DIFF_OVER_SEL = DIFF_HIT_SEL + ',[data-testid="conversation-row-sidebar"],[data-hover-card-popup]';
     function resolveDiffBadgeFromTarget(t) {
       if (!t?.closest) return null;
-      const d = cl(t, '[data-testid="diff-line-count"]');
-      if (d && !cl(d, '[data-testid="changed-files-card"]')) return d;
-      const b = qs(cl(t, '[data-ag-diff-chip="1"]'), '[data-testid="diff-line-count"]');
-      if (b && !cl(b, '[data-testid="changed-files-card"]')) return b;
-      return cl(t, '.ag-cs-inline-diff-box')?._agDiffBadge || null;
+      const hit = cl(t, DIFF_HIT_SEL);
+      if (!hit) return null;
+      if (ga(hit, 'data-testid') === 'diff-line-count') {
+        return cl(hit, '[data-testid="changed-files-card"]') ? null : hit;
+      }
+      if (ga(hit, 'data-ag-diff-chip') === '1') {
+        const b = qs(hit, '[data-testid="diff-line-count"]');
+        return b && !cl(b, '[data-testid="changed-files-card"]') ? b : null;
+      }
+      return hit._agDiffBadge || null;
     }
 
     function clearHoverPrefetchTimer() {
@@ -1403,11 +1410,12 @@
       try {
         const t = ev?.target;
         if (isDead() || !t?.closest) return;
-        if (cl(t, '.ag-cs-inline-diff-box')) {
+        const hit = cl(t, DIFF_OVER_SEL);
+        if (!hit || hit.classList?.contains?.('ag-cs-inline-diff-box') || ga(hit, 'data-testid') === 'conversation-row-sidebar' || hit.hasAttribute?.('data-hover-card-popup')) {
           clearHoverPrefetchTimer();
           return;
         }
-        const db = resolveDiffBadgeFromTarget(t);
+        const db = resolveDiffBadgeFromTarget(hit);
         if (!db || ga(db, 'data-ag-inline-diff-open') === '1') {
           clearHoverPrefetchTimer();
           return;

@@ -756,11 +756,15 @@
       try { gW()?.__agPulseExternalBridge?.({ event: 'render', data: snap, host: fbEl, conversationId: it.cid }); } catch {}
     };
 
-    const isHidAnc = (el) =>
-      !el ||
-      el.hidden === true ||
-      el.style?.display === 'none' ||
-      !!(el.closest?.('.agy-home, aside, [data-testid="conversation-list-sidebar"], [data-testid="conversation-row-sidebar"], [hidden], [inert]'));
+    const isHidAnc = (el) => {
+      if (!el || el.hidden === true || el.style?.display === 'none') return true;
+      if (el.closest?.('.agy-home, aside, [data-testid="conversation-list-sidebar"], [data-testid="conversation-row-sidebar"], [data-testid="floating-composer"], [data-testid="floating-composer-pill"], [data-floating-composer], [data-ag-cs-floating-composer="1"], [data-side-panel-body], [hidden], [inert]')) return true;
+      for (let cur = el, d = 0; cur && d < 8; d++, cur = cur.parentElement) {
+        const tid = cur.getAttribute?.('data-testid');
+        if (tid && tid.indexOf('floating-composer') !== -1) return true;
+      }
+      return false;
+    };
     const isTopWrap = (p) => {
       if (!p) return true;
       const c = String(p.className || '').trim();
@@ -1019,7 +1023,7 @@
     const HC_A = 'data-hover-card-popup';
     const SB_SEL = 'aside,[data-testid="sidebar-split"]>div:first-child,[data-testid="conversation-row-sidebar"],[data-testid="project-header"],[data-hover-card-popup]';
     const IGN_STREAM_SEL =
-      '[data-testid="autoscroll-viewport"],[data-testid="planner-response-text"],[data-testid="agent-response"],[data-markdown-root],[data-testid="background-task-command"],[data-testid="running-items-card"],' + SB_SEL + ',[data-op-thought="1"],.ag-prism-thought-overlay,.ag-cs-conv-aura-host,.ag-cs-crab,.ag-cs-prism-rim-cv,.ag-anim-icon,.ag-cs-thinking-spark,[data-agy-hans-ui],#agy-theme-switcher,#agy-theme-menu,#antigravity-quota-widget,#antigravity-translation-audit';
+      '[data-testid="autoscroll-viewport"],[data-testid="planner-response-text"],[data-testid="agent-response"],[data-markdown-root],[data-testid="background-task-command"],[data-testid="running-items-card"],[data-lexical-editor="true"],[contenteditable="true"],[data-testid="conversation-list-sidebar"],[data-testid="subagent-tab-conversation"],[data-side-panel-body],' + SB_SEL + ',[data-op-thought="1"],.ag-prism-thought-overlay,.ag-cs-conv-aura-host,.ag-cs-crab,.ag-cs-prism-rim-cv,.ag-anim-icon,.ag-cs-thinking-spark,[data-agy-hans-ui],#agy-theme-switcher,#agy-theme-menu,#antigravity-quota-widget,#antigravity-translation-audit';
     const isHcPortal = (el) => {
       if (!el || el.tagName === 'BODY' || el.tagName === 'HTML') return false;
       const h = (n, k) => !!n?.hasAttribute?.(k), f = el.firstElementChild;

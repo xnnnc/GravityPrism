@@ -298,11 +298,14 @@ if(!r||typeof r.addEventListener!=='function')return {root:r,unbind(){},trigger:
 if(ROOTS.has(r))return ROOTS.get(r);
 const cd=clamp(+(opts.cooldownMs??150),40,1000);
 const gate=h=>{const now=Date.now();if(now-(CDS.get(h)||0)<cd)return false;CDS.set(h,now);return true;};
+let lastOv=null;
 const onOver=e=>{
 if(!e)return;
 const tier=resolveTier(opts);if(tier==='off'||tier==='subtle')return;
-if(isThoughtExcluded(e.target))return;
-const t=findTarget(e.target);
+const raw=e.target;if(!raw||raw===lastOv)return;lastOv=raw;
+try{if(raw.closest&&raw.closest('[data-testid="conversation-row-sidebar"],[data-hover-card-popup]'))return;}catch(_){}
+if(isThoughtExcluded(raw))return;
+const t=findTarget(raw);
 if(!t||isDis(t.hostEl)||(e.relatedTarget&&t.hostEl.contains&&t.hostEl.contains(e.relatedTarget)))return;
 if(gate(t.hostEl))triggerIcon(t.hostEl,'hover',opts);
 };
